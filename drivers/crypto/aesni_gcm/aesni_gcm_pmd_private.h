@@ -7,28 +7,24 @@
 
 #include "aesni_gcm_ops.h"
 
+/*
+ * IMB_VERSION_NUM macro was introduced in version Multi-buffer 0.50,
+ * so if macro is not defined, it means that the version is 0.49.
+ */
+#if !defined(IMB_VERSION_NUM)
+#define IMB_VERSION(a, b, c) (((a) << 16) + ((b) << 8) + (c))
+#define IMB_VERSION_NUM IMB_VERSION(0, 49, 0)
+#endif
+
 #define CRYPTODEV_NAME_AESNI_GCM_PMD	crypto_aesni_gcm
 /**< AES-NI GCM PMD device name */
 
-#define GCM_LOG_ERR(fmt, args...) \
-	RTE_LOG(ERR, CRYPTODEV, "[%s] %s() line %u: " fmt "\n",  \
-			RTE_STR(CRYPTODEV_NAME_AESNI_GCM_PMD), \
-			__func__, __LINE__, ## args)
-
-#ifdef RTE_LIBRTE_AESNI_MB_DEBUG
-#define GCM_LOG_INFO(fmt, args...) \
-	RTE_LOG(INFO, CRYPTODEV, "[%s] %s() line %u: " fmt "\n", \
-			RTE_STR(CRYPTODEV_NAME_AESNI_GCM_PMD), \
-			__func__, __LINE__, ## args)
-
-#define GCM_LOG_DBG(fmt, args...) \
-	RTE_LOG(DEBUG, CRYPTODEV, "[%s] %s() line %u: " fmt "\n", \
-			RTE_STR(CRYPTODEV_NAME_AESNI_GCM_PMD), \
-			__func__, __LINE__, ## args)
-#else
-#define GCM_LOG_INFO(fmt, args...)
-#define GCM_LOG_DBG(fmt, args...)
-#endif
+/** AES-NI GCM PMD  LOGTYPE DRIVER */
+int aesni_gcm_logtype_driver;
+#define AESNI_GCM_LOG(level, fmt, ...) \
+	rte_log(RTE_LOG_ ## level, aesni_gcm_logtype_driver,	\
+			"%s() line %u: "fmt "\n", __func__, __LINE__,	\
+					## __VA_ARGS__)
 
 /* Maximum length for digest */
 #define DIGEST_LENGTH_MAX 16
@@ -39,13 +35,15 @@ struct aesni_gcm_private {
 	/**< Vector mode */
 	unsigned max_nb_queue_pairs;
 	/**< Max number of queue pairs supported by device */
-	unsigned max_nb_sessions;
-	/**< Max number of sessions supported by device */
+	MB_MGR *mb_mgr;
+	/**< Multi-buffer instance */
+	struct aesni_gcm_ops ops[GCM_KEY_NUM];
+	/**< Function pointer table of the gcm APIs */
 };
 
 struct aesni_gcm_qp {
 	const struct aesni_gcm_ops *ops;
-	/**< Architecture dependent function pointer table of the gcm APIs */
+	/**< Function pointer table of the gcm APIs */
 	struct rte_ring *processed_pkts;
 	/**< Ring for placing process packets */
 	struct gcm_context_data gdata_ctx; /* (16 * 5) + 8 = 88 B */
@@ -54,6 +52,8 @@ struct aesni_gcm_qp {
 	/**< Queue pair statistics */
 	struct rte_mempool *sess_mp;
 	/**< Session Mempool */
+	struct rte_mempool *sess_mp_priv;
+	/**< Session Private Data Mempool */
 	uint16_t id;
 	/**< Queue Pair Identifier */
 	char name[RTE_CRYPTODEV_NAME_MAX_LEN];
@@ -82,8 +82,10 @@ struct aesni_gcm_session {
 	/**< IV parameters */
 	uint16_t aad_length;
 	/**< AAD length */
-	uint16_t digest_length;
-	/**< Digest length */
+	uint16_t req_digest_length;
+	/**< Requested digest length */
+	uint16_t gen_digest_length;
+	/**< Generated digest length */
 	enum aesni_gcm_operation op;
 	/**< GCM operation type */
 	enum aesni_gcm_key key;

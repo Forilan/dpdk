@@ -10,6 +10,7 @@ LIB = librte_pmd_e1000.a
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
+CFLAGS += -DALLOW_EXPERIMENTAL_API
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs
 LDLIBS += -lrte_bus_pci
@@ -62,6 +63,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_82575.c
 SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_i210.c
 SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_api.c
 SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_ich8lan.c
+SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_logs.c
 SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_mac.c
 SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_manage.c
 SRCS-$(CONFIG_RTE_LIBRTE_E1000_PMD) += e1000_mbx.c

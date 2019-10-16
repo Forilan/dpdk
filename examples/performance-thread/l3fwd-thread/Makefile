@@ -5,8 +5,8 @@ ifeq ($(RTE_SDK),)
 $(error "Please define RTE_SDK environment variable")
 endif
 
-# Default target, can be overridden by command line or environment
-RTE_TARGET ?= x86_64-native-linuxapp-gcc
+# Default target, detect a build directory, by looking for a path with a .config
+RTE_TARGET ?= $(notdir $(abspath $(dir $(firstword $(wildcard $(RTE_SDK)/*/.config)))))
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
@@ -18,7 +18,6 @@ SRCS-y := main.c
 
 include $(RTE_SDK)/examples/performance-thread/common/common.mk
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3 -g $(USER_FLAGS) $(INCLUDES) $(WERROR_FLAGS)
 
 # workaround for a gcc bug with noreturn attribute

@@ -1,33 +1,5 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright 2017 Mellanox.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Mellanox. nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright 2017 Mellanox Technologies, Ltd
  */
 
 #include <stdio.h>
@@ -73,10 +45,10 @@ struct rte_flow *flow;
 #include "flow_blocks.c"
 
 static inline void
-print_ether_addr(const char *what, struct ether_addr *eth_addr)
+print_ether_addr(const char *what, struct rte_ether_addr *eth_addr)
 {
-	char buf[ETHER_ADDR_FMT_SIZE];
-	ether_format_addr(buf, ETHER_ADDR_FMT_SIZE, eth_addr);
+	char buf[RTE_ETHER_ADDR_FMT_SIZE];
+	rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, eth_addr);
 	printf("%s%s", what, buf);
 }
 
@@ -84,7 +56,7 @@ static void
 main_loop(void)
 {
 	struct rte_mbuf *mbufs[32];
-	struct ether_hdr *eth_hdr;
+	struct rte_ether_hdr *eth_hdr;
 	struct rte_flow_error error;
 	uint16_t nb_rx;
 	uint16_t i;
@@ -99,7 +71,7 @@ main_loop(void)
 					struct rte_mbuf *m = mbufs[j];
 
 					eth_hdr = rte_pktmbuf_mtod(m,
-							struct ether_hdr *);
+							struct rte_ether_hdr *);
 					print_ether_addr("src=",
 							&eth_hdr->s_addr);
 					print_ether_addr(" - dst=",
@@ -128,15 +100,19 @@ assert_link_status(void)
 {
 	struct rte_eth_link link;
 	uint8_t rep_cnt = MAX_REPEAT_TIMES;
+	int link_get_err = -EINVAL;
 
 	memset(&link, 0, sizeof(link));
 	do {
-		rte_eth_link_get(port_id, &link);
-		if (link.link_status == ETH_LINK_UP)
+		link_get_err = rte_eth_link_get(port_id, &link);
+		if (link_get_err == 0 && link.link_status == ETH_LINK_UP)
 			break;
 		rte_delay_ms(CHECK_INTERVAL);
 	} while (--rep_cnt);
 
+	if (link_get_err < 0)
+		rte_exit(EXIT_FAILURE, ":: error: link get is failing: %s\n",
+			 rte_strerror(-link_get_err));
 	if (link.link_status == ETH_LINK_DOWN)
 		rte_exit(EXIT_FAILURE, ":: error: link is still down\n");
 }
@@ -149,8 +125,6 @@ init_port(void)
 	struct rte_eth_conf port_conf = {
 		.rxmode = {
 			.split_hdr_size = 0,
-			.ignore_offload_bitfield = 1,
-			.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 		},
 		.txmode = {
 			.offloads =
@@ -166,6 +140,13 @@ init_port(void)
 	struct rte_eth_rxconf rxq_conf;
 	struct rte_eth_dev_info dev_info;
 
+	ret = rte_eth_dev_info_get(port_id, &dev_info);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			"Error during getting device (port %u) info: %s\n",
+			port_id, strerror(-ret));
+
+	port_conf.txmode.offloads &= dev_info.tx_offload_capa;
 	printf(":: initializing port: %d\n", port_id);
 	ret = rte_eth_dev_configure(port_id,
 				nr_queues, nr_queues, &port_conf);
@@ -175,10 +156,8 @@ init_port(void)
 			ret, port_id);
 	}
 
-	rte_eth_dev_info_get(port_id, &dev_info);
 	rxq_conf = dev_info.default_rxconf;
 	rxq_conf.offloads = port_conf.rxmode.offloads;
-	/* only set Rx queues: something we care only so far */
 	for (i = 0; i < nr_queues; i++) {
 		ret = rte_eth_rx_queue_setup(port_id, i, 512,
 				     rte_eth_dev_socket_id(port_id),
@@ -205,7 +184,12 @@ init_port(void)
 		}
 	}
 
-	rte_eth_promiscuous_enable(port_id);
+	ret = rte_eth_promiscuous_enable(port_id);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			":: promiscuous mode enable failed: err=%s, port=%u\n",
+			rte_strerror(-ret), port_id);
+
 	ret = rte_eth_dev_start(port_id);
 	if (ret < 0) {
 		rte_exit(EXIT_FAILURE,

@@ -20,7 +20,9 @@ CFLAGS += -I$(RTE_SDK)/drivers/bus/dpaa
 CFLAGS += -I$(RTE_SDK)/drivers/bus/dpaa/include/
 CFLAGS += -I$(RTE_SDK)/drivers/mempool/dpaa
 CFLAGS += -I$(RTE_SDK)/lib/librte_eal/common/include
-CFLAGS += -I$(RTE_SDK)/lib/librte_eal/linuxapp/eal/include
+
+LDLIBS += -lrte_pmd_dpaa_sec
+CFLAGS += -I$(RTE_SDK)/drivers/crypto/dpaa_sec
 
 EXPORT_MAP := rte_pmd_dpaa_event_version.map
 
@@ -34,5 +36,6 @@ LDLIBS += -lrte_mempool_dpaa
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs
 LDLIBS += -lrte_eventdev -lrte_pmd_dpaa -lrte_bus_vdev
+LDLIBS += -lrte_common_dpaax
 
 include $(RTE_SDK)/mk/rte.lib.mk

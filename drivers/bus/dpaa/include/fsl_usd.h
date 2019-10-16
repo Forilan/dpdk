@@ -2,6 +2,7 @@
  *
  * Copyright 2010-2011 Freescale Semiconductor, Inc.
  * All rights reserved.
+ * Copyright 2019 NXP
  *
  */
 
@@ -55,6 +56,10 @@ int qman_free_raw_portal(struct dpaa_raw_portal *portal);
 int bman_allocate_raw_portal(struct dpaa_raw_portal *portal);
 int bman_free_raw_portal(struct dpaa_raw_portal *portal);
 
+/* Obtain thread-local UIO file-descriptors */
+int qman_thread_fd(void);
+int bman_thread_fd(void);
+
 /* Post-process interrupts. NB, the kernel IRQ handler disables the interrupt
  * line before notifying us, and this post-processing re-enables it once
  * processing is complete. As such, it is essential to call this before going
@@ -62,14 +67,18 @@ int bman_free_raw_portal(struct dpaa_raw_portal *portal);
  */
 void qman_thread_irq(void);
 void bman_thread_irq(void);
+void qman_fq_portal_thread_irq(struct qman_portal *qp);
+
+void qman_clear_irq(void);
 
 /* Global setup */
 int qman_global_init(void);
 int bman_global_init(void);
 
 /* Direct portal create and destroy */
-struct qman_portal *fsl_qman_portal_create(void);
-int fsl_qman_portal_destroy(struct qman_portal *qp);
+struct qman_portal *fsl_qman_fq_portal_create(int *fd);
+int fsl_qman_fq_portal_destroy(struct qman_portal *qp);
+int fsl_qman_fq_portal_init(struct qman_portal *qp);
 
 #ifdef __cplusplus
 }

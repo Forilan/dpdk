@@ -28,7 +28,7 @@
 /*
  *... and the PCI ID Table itself ...
  */
-#include "t4_pci_id_tbl.h"
+#include "base/t4_pci_id_tbl.h"
 
 /*
  * Get port statistics.
@@ -36,7 +36,7 @@
 static int cxgbevf_dev_stats_get(struct rte_eth_dev *eth_dev,
 				 struct rte_eth_stats *eth_stats)
 {
-	struct port_info *pi = (struct port_info *)(eth_dev->data->dev_private);
+	struct port_info *pi = eth_dev->data->dev_private;
 	struct adapter *adapter = pi->adapter;
 	struct sge *s = &adapter->sge;
 	struct port_stats ps;
@@ -50,6 +50,7 @@ static int cxgbevf_dev_stats_get(struct rte_eth_dev *eth_dev,
 	/* TX Stats */
 	eth_stats->opackets = ps.tx_bcast_frames + ps.tx_mcast_frames +
 			      ps.tx_ucast_frames;
+	eth_stats->obytes = ps.tx_octets;
 	eth_stats->oerrors  = ps.tx_drop;
 
 	for (i = 0; i < pi->n_rx_qsets; i++) {
@@ -68,7 +69,6 @@ static int cxgbevf_dev_stats_get(struct rte_eth_dev *eth_dev,
 
 		eth_stats->q_opackets[i] = txq->stats.pkts;
 		eth_stats->q_obytes[i] = txq->stats.tx_bytes;
-		eth_stats->q_errors[i] = txq->stats.mapping_err;
 	}
 	return 0;
 }
@@ -85,6 +85,8 @@ static const struct eth_dev_ops cxgbevf_eth_dev_ops = {
 	.dev_infos_get          = cxgbe_dev_info_get,
 	.dev_supported_ptypes_get = cxgbe_dev_supported_ptypes_get,
 	.link_update            = cxgbe_dev_link_update,
+	.dev_set_link_up        = cxgbe_dev_set_link_up,
+	.dev_set_link_down      = cxgbe_dev_set_link_down,
 	.mtu_set                = cxgbe_dev_mtu_set,
 	.tx_queue_setup         = cxgbe_dev_tx_queue_setup,
 	.tx_queue_start         = cxgbe_dev_tx_queue_start,
@@ -104,7 +106,7 @@ static const struct eth_dev_ops cxgbevf_eth_dev_ops = {
  */
 static int eth_cxgbevf_dev_init(struct rte_eth_dev *eth_dev)
 {
-	struct port_info *pi = (struct port_info *)(eth_dev->data->dev_private);
+	struct port_info *pi = eth_dev->data->dev_private;
 	struct rte_pci_device *pci_dev;
 	char name[RTE_ETH_NAME_MAX_LEN];
 	struct adapter *adapter = NULL;
@@ -138,6 +140,7 @@ static int eth_cxgbevf_dev_init(struct rte_eth_dev *eth_dev)
 					eth_dev->rx_pkt_burst;
 				rest_eth_dev->tx_pkt_burst =
 					eth_dev->tx_pkt_burst;
+				rte_eth_dev_probing_finish(rest_eth_dev);
 			}
 		}
 		return 0;
@@ -159,6 +162,9 @@ static int eth_cxgbevf_dev_init(struct rte_eth_dev *eth_dev)
 	adapter->pdev = pci_dev;
 	adapter->eth_dev = eth_dev;
 	pi->adapter = adapter;
+
+	cxgbe_process_devargs(adapter);
+
 	err = cxgbevf_probe(adapter);
 	if (err) {
 		dev_err(adapter, "%s: cxgbevf probe failed with err %d\n",
@@ -173,6 +179,16 @@ out_free_adapter:
 	return err;
 }
 
+static int eth_cxgbevf_dev_uninit(struct rte_eth_dev *eth_dev)
+{
+	struct port_info *pi = eth_dev->data->dev_private;
+	struct adapter *adap = pi->adapter;
+
+	/* Free up other ports and all resources */
+	cxgbe_close(adap);
+	return 0;
+}
+
 static int eth_cxgbevf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 				 struct rte_pci_device *pci_dev)
 {
@@ -182,7 +198,7 @@ static int eth_cxgbevf_pci_probe(struct rte_pci_driver *pci_drv __rte_unused,
 
 static int eth_cxgbevf_pci_remove(struct rte_pci_device *pci_dev)
 {
-	return rte_eth_dev_pci_generic_remove(pci_dev, NULL);
+	return rte_eth_dev_pci_generic_remove(pci_dev, eth_cxgbevf_dev_uninit);
 }
 
 static struct rte_pci_driver rte_cxgbevf_pmd = {
@@ -195,3 +211,7 @@ static struct rte_pci_driver rte_cxgbevf_pmd = {
 RTE_PMD_REGISTER_PCI(net_cxgbevf, rte_cxgbevf_pmd);
 RTE_PMD_REGISTER_PCI_TABLE(net_cxgbevf, cxgb4vf_pci_tbl);
 RTE_PMD_REGISTER_KMOD_DEP(net_cxgbevf, "* igb_uio | vfio-pci");
+RTE_PMD_REGISTER_PARAM_STRING(net_cxgbevf,
+			      CXGBE_DEVARG_CMN_KEEP_OVLAN "=<0|1> "
+			      CXGBE_DEVARG_CMN_TX_MODE_LATENCY "=<0|1> "
+			      CXGBE_DEVARG_VF_FORCE_LINK_UP "=<0|1> ");

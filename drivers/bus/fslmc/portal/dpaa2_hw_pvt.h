@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016 NXP
+ *   Copyright 2016-2018 NXP
  *
  */
 
@@ -9,6 +9,7 @@
 #define _DPAA2_HW_PVT_H_
 
 #include <rte_eventdev.h>
+#include <dpaax_iova_table.h>
 
 #include <mc/fsl_mc_sys.h>
 #include <fsl_qbman_portal.h>
@@ -22,20 +23,41 @@
 #define lower_32_bits(x) ((uint32_t)(x))
 #define upper_32_bits(x) ((uint32_t)(((x) >> 16) >> 16))
 
-#define SVR_LS1080A             0x87030000
-#define SVR_LS2080A             0x87010000
-#define SVR_LS2088A             0x87090000
-#define SVR_LX2160A             0x87360000
-
 #ifndef VLAN_TAG_SIZE
 #define VLAN_TAG_SIZE   4 /** < Vlan Header Length */
 #endif
 
-#define MAX_TX_RING_SLOTS	8
-	/** <Maximum number of slots available in TX ring*/
+/* Maximum number of slots available in TX ring */
+#define MAX_TX_RING_SLOTS			32
+#define MAX_EQ_RESP_ENTRIES			(MAX_TX_RING_SLOTS + 1)
 
-#define DPAA2_DQRR_RING_SIZE	16
-	/** <Maximum number of slots available in RX ring*/
+/* Maximum number of slots available in RX ring */
+#define DPAA2_EQCR_RING_SIZE		8
+/* Maximum number of slots available in RX ring on LX2 */
+#define DPAA2_LX2_EQCR_RING_SIZE	32
+
+/* Maximum number of slots available in RX ring */
+#define DPAA2_DQRR_RING_SIZE		16
+/* Maximum number of slots available in RX ring on LX2 */
+#define DPAA2_LX2_DQRR_RING_SIZE	32
+
+/* EQCR shift to get EQCR size (2 >> 3) = 8 for LS2/LS2 */
+#define DPAA2_EQCR_SHIFT		3
+/* EQCR shift to get EQCR size for LX2 (2 >> 5) = 32 for LX2 */
+#define DPAA2_LX2_EQCR_SHIFT		5
+
+/* Flag to determine an ordered queue mbuf */
+#define DPAA2_ENQUEUE_FLAG_ORP		(1ULL << 30)
+/* ORP ID shift and mask */
+#define DPAA2_EQCR_OPRID_SHIFT		16
+#define DPAA2_EQCR_OPRID_MASK		0x3FFF0000
+/* Sequence number shift and mask */
+#define DPAA2_EQCR_SEQNUM_SHIFT		0
+#define DPAA2_EQCR_SEQNUM_MASK		0x0000FFFF
+
+#define DPAA2_SWP_CENA_REGION		0
+#define DPAA2_SWP_CINH_REGION		1
+#define DPAA2_SWP_CENA_MEM_REGION	2
 
 #define MC_PORTAL_INDEX		0
 #define NUM_DPIO_REGIONS	2
@@ -50,15 +72,18 @@
 #define DPAA2_MBUF_HW_ANNOTATION	64
 #define DPAA2_FD_PTA_SIZE		0
 
-#if (DPAA2_MBUF_HW_ANNOTATION + DPAA2_FD_PTA_SIZE) > RTE_PKTMBUF_HEADROOM
-#error "Annotation requirement is more than RTE_PKTMBUF_HEADROOM"
-#endif
-
 /* we will re-use the HEADROOM for annotation in RX */
 #define DPAA2_HW_BUF_RESERVE	0
 #define DPAA2_PACKET_LAYOUT_ALIGN	64 /*changing from 256 */
 
 #define DPAA2_DPCI_MAX_QUEUES 2
+
+struct dpaa2_queue;
+
+struct eqresp_metadata {
+	struct dpaa2_queue *dpaa2_q;
+	struct rte_mempool *mp;
+};
 
 struct dpaa2_dpio_dev {
 	TAILQ_ENTRY(dpaa2_dpio_dev) next;
@@ -66,6 +91,10 @@ struct dpaa2_dpio_dev {
 	uint16_t index; /**< Index of a instance in the list */
 	rte_atomic16_t ref_count;
 		/**< How many thread contexts are sharing this.*/
+	uint16_t eqresp_ci;
+	uint16_t eqresp_pi;
+	struct qbman_result *eqresp;
+	struct eqresp_metadata *eqresp_meta;
 	struct fsl_mc_io *dpio; /** handle to DPIO portal object */
 	uint16_t token;
 	struct qbman_swp *sw_portal; /** SW portal object */
@@ -108,13 +137,18 @@ typedef void (dpaa2_queue_cb_dqrr_t)(struct qbman_swp *swp,
 		struct dpaa2_queue *rxq,
 		struct rte_event *ev);
 
+typedef void (dpaa2_queue_cb_eqresp_free_t)(uint16_t eqresp_ci);
+
 struct dpaa2_queue {
 	struct rte_mempool *mb_pool; /**< mbuf pool to populate RX ring. */
-	void *dev;
-	int32_t eventfd;	/*!< Event Fd of this queue */
+	union {
+		struct rte_eth_dev_data *eth_data;
+		struct rte_cryptodev_data *crypto_data;
+	};
 	uint32_t fqid;		/*!< Unique ID of this queue */
-	uint8_t tc_index;	/*!< traffic class identifier */
 	uint16_t flow_id;	/*!< To be used by DPAA2 frmework */
+	uint8_t tc_index;	/*!< traffic class identifier */
+	uint8_t cgid;		/*! < Congestion Group id for this queue */
 	uint64_t rx_pkts;
 	uint64_t tx_pkts;
 	uint64_t err_pkts;
@@ -123,7 +157,12 @@ struct dpaa2_queue {
 		struct qbman_result *cscn;
 	};
 	struct rte_event ev;
+	int32_t eventfd;	/*!< Event Fd of this queue */
 	dpaa2_queue_cb_dqrr_t *cb;
+	dpaa2_queue_cb_eqresp_free_t *cb_eqresp_free;
+	struct dpaa2_bp_info *bp_array;
+	/*to store tx_conf_queue corresponding to tx_queue*/
+	struct dpaa2_queue *tx_conf_queue;
 };
 
 struct swp_active_dqs {
@@ -142,7 +181,8 @@ struct dpaa2_dpci_dev {
 	uint16_t token;
 	rte_atomic16_t in_use;
 	uint32_t dpci_id; /*HW ID for DPCI object */
-	struct dpaa2_queue queue[DPAA2_DPCI_MAX_QUEUES];
+	struct dpaa2_queue rx_queue[DPAA2_DPCI_MAX_QUEUES];
+	struct dpaa2_queue tx_queue[DPAA2_DPCI_MAX_QUEUES];
 };
 
 /*! Global MCP list */
@@ -188,17 +228,24 @@ enum qbman_fd_format {
 	((fd)->simple.frc = (0x80000000 | (len)))
 #define DPAA2_GET_FD_FRC_PARSE_SUM(fd)	\
 			((uint16_t)(((fd)->simple.frc & 0xffff0000) >> 16))
-#define DPAA2_SET_FD_FRC(fd, frc)	((fd)->simple.frc = frc)
+#define DPAA2_RESET_FD_FRC(fd)		((fd)->simple.frc = 0)
+#define DPAA2_SET_FD_FRC(fd, _frc)	((fd)->simple.frc = _frc)
 #define DPAA2_RESET_FD_CTRL(fd)	 ((fd)->simple.ctrl = 0)
 
 #define	DPAA2_SET_FD_ASAL(fd, asal)	((fd)->simple.ctrl |= (asal << 16))
+
+#define DPAA2_RESET_FD_FLC(fd)	do {	\
+	(fd)->simple.flc_lo = 0;	\
+	(fd)->simple.flc_hi = 0;	\
+} while (0)
+
 #define DPAA2_SET_FD_FLC(fd, addr)	do { \
 	(fd)->simple.flc_lo = lower_32_bits((size_t)(addr));	\
 	(fd)->simple.flc_hi = upper_32_bits((uint64_t)(addr));	\
 } while (0)
 #define DPAA2_SET_FLE_INTERNAL_JD(fle, len) ((fle)->frc = (0x80000000 | (len)))
 #define DPAA2_GET_FLE_ADDR(fle)					\
-	(uint64_t)((((uint64_t)((fle)->addr_hi)) << 32) + (fle)->addr_lo)
+	(size_t)((((uint64_t)((fle)->addr_hi)) << 32) + (fle)->addr_lo)
 #define DPAA2_SET_FLE_ADDR(fle, addr) do { \
 	(fle)->addr_lo = lower_32_bits((size_t)addr);		\
 	(fle)->addr_hi = upper_32_bits((uint64_t)addr);		\
@@ -211,10 +258,12 @@ enum qbman_fd_format {
 } while (0)
 #define DPAA2_SET_FLE_OFFSET(fle, offset) \
 	((fle)->fin_bpid_offset |= (uint32_t)(offset) << 16)
+#define DPAA2_SET_FLE_LEN(fle, len)    ((fle)->length = len)
 #define DPAA2_SET_FLE_BPID(fle, bpid) ((fle)->fin_bpid_offset |= (size_t)bpid)
 #define DPAA2_GET_FLE_BPID(fle) ((fle)->fin_bpid_offset & 0x000000ff)
 #define DPAA2_SET_FLE_FIN(fle)	((fle)->fin_bpid_offset |= 1 << 31)
 #define DPAA2_SET_FLE_IVP(fle)   (((fle)->fin_bpid_offset |= 0x00004000))
+#define DPAA2_SET_FLE_BMT(fle)   (((fle)->fin_bpid_offset |= 0x00008000))
 #define DPAA2_SET_FD_COMPOUND_FMT(fd)	\
 	((fd)->simple.bpid_offset |= (uint32_t)1 << 28)
 #define DPAA2_GET_FD_ADDR(fd)	\
@@ -224,6 +273,10 @@ enum qbman_fd_format {
 #define DPAA2_GET_FD_BPID(fd)	(((fd)->simple.bpid_offset & 0x00003FFF))
 #define DPAA2_GET_FD_IVP(fd)   (((fd)->simple.bpid_offset & 0x00004000) >> 14)
 #define DPAA2_GET_FD_OFFSET(fd)	(((fd)->simple.bpid_offset & 0x0FFF0000) >> 16)
+#define DPAA2_GET_FD_FRC(fd)   ((fd)->simple.frc)
+#define DPAA2_GET_FD_FLC(fd) \
+	(((uint64_t)((fd)->simple.flc_hi) << 32) + (fd)->simple.flc_lo)
+#define DPAA2_GET_FD_ERR(fd)   ((fd)->simple.bpid_offset & 0x000000FF)
 #define DPAA2_GET_FLE_OFFSET(fle) (((fle)->fin_bpid_offset & 0x0FFF0000) >> 16)
 #define DPAA2_SET_FLE_SG_EXT(fle) ((fle)->fin_bpid_offset |= (uint64_t)1 << 29)
 #define DPAA2_IS_SET_FLE_SG_EXT(fle)	\
@@ -254,19 +307,40 @@ enum qbman_fd_format {
  */
 #define DPAA2_EQ_RESP_ALWAYS		1
 
+/* Various structures representing contiguous memory maps */
+struct dpaa2_memseg {
+	TAILQ_ENTRY(dpaa2_memseg) next;
+	char *vaddr;
+	rte_iova_t iova;
+	size_t len;
+};
+
+TAILQ_HEAD(dpaa2_memseg_list, dpaa2_memseg);
+extern struct dpaa2_memseg_list rte_dpaa2_memsegs;
+
 #ifdef RTE_LIBRTE_DPAA2_USE_PHYS_IOVA
 extern uint8_t dpaa2_virt_mode;
 static void *dpaa2_mem_ptov(phys_addr_t paddr) __attribute__((unused));
-/* todo - this is costly, need to write a fast coversion routine */
+
 static void *dpaa2_mem_ptov(phys_addr_t paddr)
 {
+	void *va;
+
 	if (dpaa2_virt_mode)
 		return (void *)(size_t)paddr;
 
-	return rte_mem_iova2virt(paddr);
+	va = (void *)dpaax_iova_table_get_va(paddr);
+	if (likely(va != NULL))
+		return va;
+
+	/* If not, Fallback to full memseg list searching */
+	va = rte_mem_iova2virt(paddr);
+
+	return va;
 }
 
 static phys_addr_t dpaa2_mem_vtop(uint64_t vaddr) __attribute__((unused));
+
 static phys_addr_t dpaa2_mem_vtop(uint64_t vaddr)
 {
 	const struct rte_memseg *memseg;

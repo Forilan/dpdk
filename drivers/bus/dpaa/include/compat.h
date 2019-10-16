@@ -2,6 +2,7 @@
  *
  * Copyright 2011 Freescale Semiconductor, Inc.
  * All rights reserved.
+ * Copyright 2019 NXP
  *
  */
 
@@ -40,6 +41,7 @@
 #include <rte_common.h>
 #include <rte_debug.h>
 #include <rte_cycles.h>
+#include <rte_malloc.h>
 
 /* The following definitions are primarily to allow the single-source driver
  * interfaces to be included by arbitrary program code. Ie. for interfaces that
@@ -48,11 +50,18 @@
  */
 
 /* Required compiler attributes */
+#ifndef __maybe_unused
 #define __maybe_unused	__rte_unused
+#endif
+#ifndef __always_unused
 #define __always_unused	__rte_unused
+#endif
+#ifndef __packed
 #define __packed	__rte_packed
+#endif
+#ifndef noinline
 #define noinline	__attribute__((noinline))
-
+#endif
 #define L1_CACHE_BYTES 64
 #define ____cacheline_aligned __attribute__((aligned(L1_CACHE_BYTES)))
 #define __stringify_1(x) #x
@@ -69,19 +78,24 @@
 		printf(fmt, ##args); \
 		fflush(stdout); \
 	} while (0)
-
+#ifndef pr_crit
 #define pr_crit(fmt, args...)	 prflush("CRIT:" fmt, ##args)
-#define pr_err(fmt, args...)	 prflush("ERR:" fmt, ##args)
-#define pr_warn(fmt, args...)	 prflush("WARN:" fmt, ##args)
-#define pr_info(fmt, args...)	 prflush(fmt, ##args)
-
-#ifdef RTE_LIBRTE_DPAA_DEBUG_BUS
-#ifdef pr_debug
-#undef pr_debug
 #endif
+#ifndef pr_err
+#define pr_err(fmt, args...)	 prflush("ERR:" fmt, ##args)
+#endif
+#ifndef pr_warn
+#define pr_warn(fmt, args...)	 prflush("WARN:" fmt, ##args)
+#endif
+#ifndef pr_info
+#define pr_info(fmt, args...)	 prflush(fmt, ##args)
+#endif
+#ifndef pr_debug
+#ifdef RTE_LIBRTE_DPAA_DEBUG_BUS
 #define pr_debug(fmt, args...)	printf(fmt, ##args)
 #else
 #define pr_debug(fmt, args...) {}
+#endif
 #endif
 
 #define DPAA_BUG_ON(x) RTE_ASSERT(x)
@@ -96,6 +110,8 @@ typedef cpu_set_t	cpumask_t;
 typedef uint32_t	phandle;
 typedef uint32_t	gfp_t;
 typedef uint32_t	irqreturn_t;
+
+#define ETHER_ADDR_LEN 6
 
 #define IRQ_HANDLED	0
 #define request_irq	qbman_request_irq
@@ -250,7 +266,9 @@ __bswap_24(uint32_t x)
 #define be16_to_cpu(x) rte_be_to_cpu_16(x)
 
 #define cpu_to_be64(x) rte_cpu_to_be_64(x)
+#if !defined(cpu_to_be32)
 #define cpu_to_be32(x) rte_cpu_to_be_32(x)
+#endif
 #define cpu_to_be16(x) rte_cpu_to_be_16(x)
 
 #if RTE_BYTE_ORDER == RTE_LITTLE_ENDIAN
@@ -323,12 +341,12 @@ static inline void copy_bytes(void *dest, const void *src, size_t sz)
 #endif
 
 /* Allocator stuff */
-#define kmalloc(sz, t)	malloc(sz)
-#define vmalloc(sz)	malloc(sz)
-#define kfree(p)	{ if (p) free(p); }
+#define kmalloc(sz, t)	rte_malloc(NULL, sz, 0)
+#define vmalloc(sz)	rte_malloc(NULL, sz, 0)
+#define kfree(p)	{ if (p) rte_free(p); }
 static inline void *kzalloc(size_t sz, gfp_t __foo __rte_unused)
 {
-	void *ptr = malloc(sz);
+	void *ptr = rte_malloc(NULL, sz, 0);
 
 	if (ptr)
 		memset(ptr, 0, sz);

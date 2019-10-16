@@ -10,8 +10,8 @@
 
 static inline unsigned int axgbe_get_max_frame(struct axgbe_port *pdata)
 {
-	return pdata->eth_dev->data->mtu + ETHER_HDR_LEN +
-		ETHER_CRC_LEN + VLAN_HLEN;
+	return pdata->eth_dev->data->mtu + RTE_ETHER_HDR_LEN +
+		RTE_ETHER_CRC_LEN + VLAN_HLEN;
 }
 
 /* query busy bit */
@@ -1019,7 +1019,6 @@ static void axgbe_config_jumbo_enable(struct axgbe_port *pdata)
 	unsigned int val;
 
 	val = (pdata->rx_buf_size > AXGMAC_STD_PACKET_MTU) ? 1 : 0;
-	val = 1;
 
 	AXGMAC_IOWRITE_BITS(pdata, MAC_RCR, JE, val);
 }

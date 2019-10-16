@@ -13,6 +13,8 @@ application trough the eventdev API.
 
     dpaa
     dpaa2
+    dsw
     sw
     octeontx
+    octeontx2
     opdl

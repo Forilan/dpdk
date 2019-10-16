@@ -50,6 +50,8 @@
 
 #define	VMXNET3_TX_OFFLOAD_MASK	( \
 		PKT_TX_VLAN_PKT | \
+		PKT_TX_IPV6 |     \
+		PKT_TX_IPV4 |     \
 		PKT_TX_L4_MASK |  \
 		PKT_TX_TCP_SEG)
 
@@ -359,7 +361,7 @@ vmxnet3_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 		 */
 		if ((ol_flags & PKT_TX_TCP_SEG) == 0 &&
 				m->nb_segs > VMXNET3_MAX_TXD_PER_PKT) {
-			rte_errno = -EINVAL;
+			rte_errno = EINVAL;
 			return i;
 		}
 
@@ -367,20 +369,20 @@ vmxnet3_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 		if ((ol_flags & VMXNET3_TX_OFFLOAD_NOTSUP_MASK) != 0 ||
 				(ol_flags & PKT_TX_L4_MASK) ==
 				PKT_TX_SCTP_CKSUM) {
-			rte_errno = -ENOTSUP;
+			rte_errno = ENOTSUP;
 			return i;
 		}
 
 #ifdef RTE_LIBRTE_ETHDEV_DEBUG
 		ret = rte_validate_tx_offload(m);
 		if (ret != 0) {
-			rte_errno = ret;
+			rte_errno = -ret;
 			return i;
 		}
 #endif
 		ret = rte_net_intel_cksum_prepare(m);
 		if (ret != 0) {
-			rte_errno = ret;
+			rte_errno = -ret;
 			return i;
 		}
 	}
@@ -457,6 +459,14 @@ vmxnet3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 		    rte_pktmbuf_pkt_len(txm) <= txq->txdata_desc_size) {
 			struct Vmxnet3_TxDataDesc *tdd;
 
+			/* Skip empty packets */
+			if (unlikely(rte_pktmbuf_pkt_len(txm) == 0)) {
+				txq->stats.drop_total++;
+				rte_pktmbuf_free(txm);
+				nb_tx++;
+				continue;
+			}
+
 			tdd = (struct Vmxnet3_TxDataDesc *)
 				((uint8 *)txq->data_ring.base +
 				 txq->cmd_ring.next2fill *
@@ -477,6 +487,11 @@ vmxnet3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 			 * maximum size of mbuf segment size.
 			 */
 			gdesc = txq->cmd_ring.base + txq->cmd_ring.next2fill;
+
+			/* Skip empty segments */
+			if (unlikely(m_seg->data_len == 0))
+				continue;
+
 			if (copy_size) {
 				uint64 offset =
 					(uint64)txq->cmd_ring.next2fill *
@@ -526,10 +541,13 @@ vmxnet3_xmit_pkts(void *tx_queue, struct rte_mbuf **tx_pkts,
 
 			switch (txm->ol_flags & PKT_TX_L4_MASK) {
 			case PKT_TX_TCP_CKSUM:
-				gdesc->txd.msscof = gdesc->txd.hlen + offsetof(struct tcp_hdr, cksum);
+				gdesc->txd.msscof = gdesc->txd.hlen +
+					offsetof(struct rte_tcp_hdr, cksum);
 				break;
 			case PKT_TX_UDP_CKSUM:
-				gdesc->txd.msscof = gdesc->txd.hlen + offsetof(struct udp_hdr, dgram_cksum);
+				gdesc->txd.msscof = gdesc->txd.hlen +
+					offsetof(struct rte_udp_hdr,
+						dgram_cksum);
 				break;
 			default:
 				PMD_TX_LOG(WARNING, "requested cksum offload not supported %#llx",
@@ -646,37 +664,154 @@ vmxnet3_post_rx_bufs(vmxnet3_rx_queue_t *rxq, uint8_t ring_id)
 		return i;
 }
 
+/* MSS not provided by vmxnet3, guess one with available information */
+static uint16_t
+vmxnet3_guess_mss(struct vmxnet3_hw *hw, const Vmxnet3_RxCompDesc *rcd,
+		struct rte_mbuf *rxm)
+{
+	uint32_t hlen, slen;
+	struct rte_ipv4_hdr *ipv4_hdr;
+	struct rte_ipv6_hdr *ipv6_hdr;
+	struct rte_tcp_hdr *tcp_hdr;
+	char *ptr;
+
+	RTE_ASSERT(rcd->tcp);
+
+	ptr = rte_pktmbuf_mtod(rxm, char *);
+	slen = rte_pktmbuf_data_len(rxm);
+	hlen = sizeof(struct rte_ether_hdr);
+
+	if (rcd->v4) {
+		if (unlikely(slen < hlen + sizeof(struct rte_ipv4_hdr)))
+			return hw->mtu - sizeof(struct rte_ipv4_hdr)
+					- sizeof(struct rte_tcp_hdr);
+
+		ipv4_hdr = (struct rte_ipv4_hdr *)(ptr + hlen);
+		hlen += (ipv4_hdr->version_ihl & RTE_IPV4_HDR_IHL_MASK) *
+				RTE_IPV4_IHL_MULTIPLIER;
+	} else if (rcd->v6) {
+		if (unlikely(slen < hlen + sizeof(struct rte_ipv6_hdr)))
+			return hw->mtu - sizeof(struct rte_ipv6_hdr) -
+					sizeof(struct rte_tcp_hdr);
+
+		ipv6_hdr = (struct rte_ipv6_hdr *)(ptr + hlen);
+		hlen += sizeof(struct rte_ipv6_hdr);
+		if (unlikely(ipv6_hdr->proto != IPPROTO_TCP)) {
+			int frag;
+
+			rte_net_skip_ip6_ext(ipv6_hdr->proto, rxm,
+					&hlen, &frag);
+		}
+	}
+
+	if (unlikely(slen < hlen + sizeof(struct rte_tcp_hdr)))
+		return hw->mtu - hlen - sizeof(struct rte_tcp_hdr) +
+				sizeof(struct rte_ether_hdr);
+
+	tcp_hdr = (struct rte_tcp_hdr *)(ptr + hlen);
+	hlen += (tcp_hdr->data_off & 0xf0) >> 2;
+
+	if (rxm->udata64 > 1)
+		return (rte_pktmbuf_pkt_len(rxm) - hlen +
+				rxm->udata64 - 1) / rxm->udata64;
+	else
+		return hw->mtu - hlen + sizeof(struct rte_ether_hdr);
+}
 
 /* Receive side checksum and other offloads */
-static void
-vmxnet3_rx_offload(const Vmxnet3_RxCompDesc *rcd, struct rte_mbuf *rxm)
+static inline void
+vmxnet3_rx_offload(struct vmxnet3_hw *hw, const Vmxnet3_RxCompDesc *rcd,
+		struct rte_mbuf *rxm, const uint8_t sop)
 {
-	/* Check for RSS */
-	if (rcd->rssType != VMXNET3_RCD_RSS_TYPE_NONE) {
-		rxm->ol_flags |= PKT_RX_RSS_HASH;
-		rxm->hash.rss = rcd->rssHash;
-	}
+	uint64_t ol_flags = rxm->ol_flags;
+	uint32_t packet_type = rxm->packet_type;
 
-	/* Check packet type, checksum errors, etc. Only support IPv4 for now. */
-	if (rcd->v4) {
-		struct ether_hdr *eth = rte_pktmbuf_mtod(rxm, struct ether_hdr *);
-		struct ipv4_hdr *ip = (struct ipv4_hdr *)(eth + 1);
+	/* Offloads set in sop */
+	if (sop) {
+		/* Set packet type */
+		packet_type |= RTE_PTYPE_L2_ETHER;
 
-		if (((ip->version_ihl & 0xf) << 2) > (int)sizeof(struct ipv4_hdr))
-			rxm->packet_type = RTE_PTYPE_L3_IPV4_EXT;
-		else
-			rxm->packet_type = RTE_PTYPE_L3_IPV4;
+		/* Check large packet receive */
+		if (VMXNET3_VERSION_GE_2(hw) &&
+		    rcd->type == VMXNET3_CDTYPE_RXCOMP_LRO) {
+			const Vmxnet3_RxCompDescExt *rcde =
+					(const Vmxnet3_RxCompDescExt *)rcd;
 
-		if (!rcd->cnc) {
-			if (!rcd->ipc)
-				rxm->ol_flags |= PKT_RX_IP_CKSUM_BAD;
-
-			if ((rcd->tcp || rcd->udp) && !rcd->tuc)
-				rxm->ol_flags |= PKT_RX_L4_CKSUM_BAD;
+			rxm->tso_segsz = rcde->mss;
+			rxm->udata64 = rcde->segCnt;
+			ol_flags |= PKT_RX_LRO;
 		}
-	} else {
-		rxm->packet_type = RTE_PTYPE_UNKNOWN;
+	} else { /* Offloads set in eop */
+		/* Check for RSS */
+		if (rcd->rssType != VMXNET3_RCD_RSS_TYPE_NONE) {
+			ol_flags |= PKT_RX_RSS_HASH;
+			rxm->hash.rss = rcd->rssHash;
+		}
+
+		/* Check for hardware stripped VLAN tag */
+		if (rcd->ts) {
+			ol_flags |= (PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED);
+			rxm->vlan_tci = rte_le_to_cpu_16((uint16_t)rcd->tci);
+		}
+
+		/* Check packet type, checksum errors, etc. */
+		if (rcd->cnc) {
+			ol_flags |= PKT_RX_L4_CKSUM_UNKNOWN;
+		} else {
+			if (rcd->v4) {
+				packet_type |= RTE_PTYPE_L3_IPV4_EXT_UNKNOWN;
+
+				if (rcd->ipc)
+					ol_flags |= PKT_RX_IP_CKSUM_GOOD;
+				else
+					ol_flags |= PKT_RX_IP_CKSUM_BAD;
+
+				if (rcd->tuc) {
+					ol_flags |= PKT_RX_L4_CKSUM_GOOD;
+					if (rcd->tcp)
+						packet_type |= RTE_PTYPE_L4_TCP;
+					else
+						packet_type |= RTE_PTYPE_L4_UDP;
+				} else {
+					if (rcd->tcp) {
+						packet_type |= RTE_PTYPE_L4_TCP;
+						ol_flags |= PKT_RX_L4_CKSUM_BAD;
+					} else if (rcd->udp) {
+						packet_type |= RTE_PTYPE_L4_UDP;
+						ol_flags |= PKT_RX_L4_CKSUM_BAD;
+					}
+				}
+			} else if (rcd->v6) {
+				packet_type |= RTE_PTYPE_L3_IPV6_EXT_UNKNOWN;
+
+				if (rcd->tuc) {
+					ol_flags |= PKT_RX_L4_CKSUM_GOOD;
+					if (rcd->tcp)
+						packet_type |= RTE_PTYPE_L4_TCP;
+					else
+						packet_type |= RTE_PTYPE_L4_UDP;
+				} else {
+					if (rcd->tcp) {
+						packet_type |= RTE_PTYPE_L4_TCP;
+						ol_flags |= PKT_RX_L4_CKSUM_BAD;
+					} else if (rcd->udp) {
+						packet_type |= RTE_PTYPE_L4_UDP;
+						ol_flags |= PKT_RX_L4_CKSUM_BAD;
+					}
+				}
+			} else {
+				packet_type |= RTE_PTYPE_UNKNOWN;
+			}
+
+			/* Old variants of vmxnet3 do not provide MSS */
+			if ((ol_flags & PKT_RX_LRO) && rxm->tso_segsz == 0)
+				rxm->tso_segsz = vmxnet3_guess_mss(hw,
+						rcd, rxm);
+		}
 	}
+
+	rxm->ol_flags = ol_flags;
+	rxm->packet_type = packet_type;
 }
 
 /*
@@ -776,6 +911,7 @@ vmxnet3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 		rxm->data_off = RTE_PKTMBUF_HEADROOM;
 		rxm->ol_flags = 0;
 		rxm->vlan_tci = 0;
+		rxm->packet_type = 0;
 
 		/*
 		 * If this is the first buffer of the received packet,
@@ -807,29 +943,28 @@ vmxnet3_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts, uint16_t nb_pkts)
 			}
 
 			rxq->start_seg = rxm;
-			vmxnet3_rx_offload(rcd, rxm);
+			rxq->last_seg = rxm;
+			vmxnet3_rx_offload(hw, rcd, rxm, 1);
 		} else {
 			struct rte_mbuf *start = rxq->start_seg;
 
 			RTE_ASSERT(rxd->btype == VMXNET3_RXD_BTYPE_BODY);
 
-			start->pkt_len += rxm->data_len;
-			start->nb_segs++;
+			if (rxm->data_len) {
+				start->pkt_len += rxm->data_len;
+				start->nb_segs++;
 
-			rxq->last_seg->next = rxm;
+				rxq->last_seg->next = rxm;
+				rxq->last_seg = rxm;
+			} else {
+				rte_pktmbuf_free_seg(rxm);
+			}
 		}
-		rxq->last_seg = rxm;
 
 		if (rcd->eop) {
 			struct rte_mbuf *start = rxq->start_seg;
 
-			/* Check for hardware stripped VLAN tag */
-			if (rcd->ts) {
-				start->ol_flags |= (PKT_RX_VLAN |
-						PKT_RX_VLAN_STRIPPED);
-				start->vlan_tci = rte_le_to_cpu_16((uint16_t)rcd->tci);
-			}
-
+			vmxnet3_rx_offload(hw, rcd, start, 0);
 			rx_pkts[nb_rx++] = start;
 			rxq->start_seg = NULL;
 		}
@@ -883,7 +1018,7 @@ vmxnet3_dev_tx_queue_setup(struct rte_eth_dev *dev,
 			   uint16_t queue_idx,
 			   uint16_t nb_desc,
 			   unsigned int socket_id,
-			   const struct rte_eth_txconf *tx_conf)
+			   const struct rte_eth_txconf *tx_conf __rte_unused)
 {
 	struct vmxnet3_hw *hw = dev->data->dev_private;
 	const struct rte_memzone *mz;
@@ -894,12 +1029,6 @@ vmxnet3_dev_tx_queue_setup(struct rte_eth_dev *dev,
 	int size;
 
 	PMD_INIT_FUNC_TRACE();
-
-	if ((tx_conf->txq_flags & ETH_TXQ_FLAGS_NOXSUMSCTP) !=
-	    ETH_TXQ_FLAGS_NOXSUMSCTP) {
-		PMD_INIT_LOG(ERR, "SCTP checksum offload not supported");
-		return -EINVAL;
-	}
 
 	txq = rte_zmalloc("ethdev_tx_queue", sizeof(struct vmxnet3_tx_queue),
 			  RTE_CACHE_LINE_SIZE);
@@ -1164,6 +1293,46 @@ static uint8_t rss_intel_key[40] = {
 	0x77, 0xCB, 0x2D, 0xA3, 0x80, 0x30, 0xF2, 0x0C,
 	0x6A, 0x42, 0xB7, 0x3B, 0xBE, 0xAC, 0x01, 0xFA,
 };
+
+/*
+ * Additional RSS configurations based on vmxnet v4+ APIs
+ */
+int
+vmxnet3_v4_rss_configure(struct rte_eth_dev *dev)
+{
+	struct vmxnet3_hw *hw = dev->data->dev_private;
+	Vmxnet3_DriverShared *shared = hw->shared;
+	Vmxnet3_CmdInfo *cmdInfo = &shared->cu.cmdInfo;
+	struct rte_eth_rss_conf *port_rss_conf;
+	uint64_t rss_hf;
+	uint32_t ret;
+
+	PMD_INIT_FUNC_TRACE();
+
+	cmdInfo->setRSSFields = 0;
+	port_rss_conf = &dev->data->dev_conf.rx_adv_conf.rss_conf;
+	rss_hf = port_rss_conf->rss_hf &
+		(VMXNET3_V4_RSS_MASK | VMXNET3_RSS_OFFLOAD_ALL);
+
+	if (rss_hf & ETH_RSS_NONFRAG_IPV4_TCP)
+		cmdInfo->setRSSFields |= VMXNET3_RSS_FIELDS_TCPIP4;
+	if (rss_hf & ETH_RSS_NONFRAG_IPV6_TCP)
+		cmdInfo->setRSSFields |= VMXNET3_RSS_FIELDS_TCPIP6;
+	if (rss_hf & ETH_RSS_NONFRAG_IPV4_UDP)
+		cmdInfo->setRSSFields |= VMXNET3_RSS_FIELDS_UDPIP4;
+	if (rss_hf & ETH_RSS_NONFRAG_IPV6_UDP)
+		cmdInfo->setRSSFields |= VMXNET3_RSS_FIELDS_UDPIP6;
+
+	VMXNET3_WRITE_BAR1_REG(hw, VMXNET3_REG_CMD,
+			       VMXNET3_CMD_SET_RSS_FIELDS);
+	ret = VMXNET3_READ_BAR1_REG(hw, VMXNET3_REG_CMD);
+
+	if (ret != VMXNET3_SUCCESS) {
+		PMD_DRV_LOG(ERR, "Set RSS fields (v4) failed: %d", ret);
+	}
+
+	return ret;
+}
 
 /*
  * Configure RSS feature

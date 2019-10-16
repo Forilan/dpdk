@@ -84,7 +84,7 @@ struct ipv6_l3_l4_tuple {
 	__u16       sport;
 } __attribute__((packed));
 
-static const __u8 def_rss_key[] = {
+static const __u8 def_rss_key[TAP_RSS_HASH_KEY_SIZE] = {
 	0xd1, 0x81, 0xc6, 0x2c,
 	0xf7, 0xf4, 0xdb, 0x5b,
 	0x19, 0x83, 0xa2, 0xfc,
@@ -106,7 +106,7 @@ rte_softrss_be(const __u32 *input_tuple, const uint8_t *rss_key,
 	for (j = 0; j < input_len; j++) {
 #pragma unroll
 		for (i = 0; i < 32; i++) {
-			if (input_tuple[j] & (1 << (31 - i))) {
+			if (input_tuple[j] & (1U << (31 - i))) {
 				hash ^= ((const __u32 *)def_rss_key)[j] << i |
 				(__u32)((uint64_t)
 				(((const __u32 *)def_rss_key)[j + 1])

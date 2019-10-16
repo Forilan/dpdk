@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <sys/types.h>
 #include <errno.h>
-#define __USE_GNU
 #include <sched.h>
 #include <dlfcn.h>
 
@@ -365,7 +364,7 @@ int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex)
 int
 pthread_create(pthread_t *__restrict tid,
 		const pthread_attr_t *__restrict attr,
-		void *(func) (void *),
+		lthread_func_t func,
 	       void *__restrict arg)
 {
 	if (override) {
@@ -390,7 +389,7 @@ pthread_create(pthread_t *__restrict tid,
 			}
 		}
 		return lthread_create((struct lthread **)tid, lcore,
-				      (void (*)(void *))func, arg);
+				      func, arg);
 	}
 	return _sys_pthread_funcs.f_pthread_create(tid, attr, func, arg);
 }
@@ -559,7 +558,7 @@ int pthread_rwlock_wrlock(pthread_rwlock_t *a)
 	return _sys_pthread_funcs.f_pthread_rwlock_wrlock(a);
 }
 
-#ifdef RTE_EXEC_ENV_LINUXAPP
+#ifdef RTE_EXEC_ENV_LINUX
 int
 pthread_yield(void)
 {

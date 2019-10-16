@@ -21,6 +21,7 @@
 #include "sfc_rx.h"
 #include "sfc_tx.h"
 #include "sfc_kvargs.h"
+#include "sfc_tweak.h"
 
 
 int
@@ -147,7 +148,8 @@ sfc_check_conf(struct sfc_adapter *sa)
 		rc = EINVAL;
 	}
 
-	if (conf->intr_conf.rxq != 0) {
+	if (conf->intr_conf.rxq != 0 &&
+	    (sa->priv.dp_rx->features & SFC_DP_RX_FEAT_INTR) == 0) {
 		sfc_err(sa, "Receive queue interrupt not supported");
 		rc = EINVAL;
 	}
@@ -264,6 +266,7 @@ sfc_set_drv_limits(struct sfc_adapter *sa)
 static int
 sfc_set_fw_subvariant(struct sfc_adapter *sa)
 {
+	struct sfc_adapter_shared *sas = sfc_sa2shared(sa);
 	const efx_nic_cfg_t *encp = efx_nic_cfg_get(sa->nic);
 	uint64_t tx_offloads = sa->eth_dev->data->dev_conf.txmode.offloads;
 	unsigned int txq_index;
@@ -276,11 +279,11 @@ sfc_set_fw_subvariant(struct sfc_adapter *sa)
 		return 0;
 	}
 
-	for (txq_index = 0; txq_index < sa->txq_count; ++txq_index) {
-		struct sfc_txq_info *txq_info = &sa->txq_info[txq_index];
+	for (txq_index = 0; txq_index < sas->txq_count; ++txq_index) {
+		struct sfc_txq_info *txq_info = &sas->txq_info[txq_index];
 
-		if (txq_info->txq != NULL)
-			tx_offloads |= txq_info->txq->offloads;
+		if (txq_info->state & SFC_TXQ_INITIALIZED)
+			tx_offloads |= txq_info->offloads;
 	}
 
 	if (tx_offloads & (DEV_TX_OFFLOAD_IPV4_CKSUM |
@@ -340,6 +343,15 @@ sfc_try_start(struct sfc_adapter *sa)
 		goto fail_nic_init;
 
 	encp = efx_nic_cfg_get(sa->nic);
+
+	/*
+	 * Refresh (since it may change on NIC reset/restart) a copy of
+	 * supported tunnel encapsulations in shared memory to be used
+	 * on supported Rx packet type classes get.
+	 */
+	sa->priv.shared->tunnel_encaps =
+		encp->enc_tunnel_encapsulations_supported;
+
 	if (encp->enc_tunnel_encapsulations_supported != 0) {
 		sfc_log_init(sa, "apply tunnel config");
 		rc = efx_tunnel_reconfigure(sa->nic);
@@ -623,7 +635,6 @@ sfc_mem_bar_fini(struct sfc_adapter *sa)
 	memset(ebp, 0, sizeof(*ebp));
 }
 
-#if EFSYS_OPT_RX_SCALE
 /*
  * A fixed RSS key which has a property of being symmetric
  * (symmetrical flows are distributed to the same CPU)
@@ -637,12 +648,11 @@ static const uint8_t default_rss_key[EFX_RSS_KEY_SIZE] = {
 	0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
 	0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
 };
-#endif
 
-#if EFSYS_OPT_RX_SCALE
 static int
-sfc_set_rss_defaults(struct sfc_adapter *sa)
+sfc_rss_attach(struct sfc_adapter *sa)
 {
+	struct sfc_rss *rss = &sfc_sa2shared(sa)->rss;
 	int rc;
 
 	rc = efx_intr_init(sa->nic, sa->intr.type, NULL);
@@ -657,26 +667,31 @@ sfc_set_rss_defaults(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_rx_init;
 
-	rc = efx_rx_scale_default_support_get(sa->nic, &sa->rss_support);
+	rc = efx_rx_scale_default_support_get(sa->nic, &rss->context_type);
 	if (rc != 0)
 		goto fail_scale_support_get;
 
-	rc = efx_rx_hash_default_support_get(sa->nic, &sa->hash_support);
+	rc = efx_rx_hash_default_support_get(sa->nic, &rss->hash_support);
 	if (rc != 0)
 		goto fail_hash_support_get;
+
+	rc = sfc_rx_hash_init(sa);
+	if (rc != 0)
+		goto fail_rx_hash_init;
 
 	efx_rx_fini(sa->nic);
 	efx_ev_fini(sa->nic);
 	efx_intr_fini(sa->nic);
 
-	sa->rss_hash_types = sfc_rte_to_efx_hash_type(SFC_RSS_OFFLOADS);
-
-	rte_memcpy(sa->rss_key, default_rss_key, sizeof(sa->rss_key));
+	rte_memcpy(rss->key, default_rss_key, sizeof(rss->key));
 
 	return 0;
 
+fail_rx_hash_init:
 fail_hash_support_get:
 fail_scale_support_get:
+	efx_rx_fini(sa->nic);
+
 fail_rx_init:
 	efx_ev_fini(sa->nic);
 
@@ -686,13 +701,12 @@ fail_ev_init:
 fail_intr_init:
 	return rc;
 }
-#else
-static int
-sfc_set_rss_defaults(__rte_unused struct sfc_adapter *sa)
+
+static void
+sfc_rss_detach(struct sfc_adapter *sa)
 {
-	return 0;
+	sfc_rx_hash_fini(sa);
 }
-#endif
 
 int
 sfc_attach(struct sfc_adapter *sa)
@@ -724,11 +738,26 @@ sfc_attach(struct sfc_adapter *sa)
 
 	encp = efx_nic_cfg_get(sa->nic);
 
-	if (sa->dp_tx->features & SFC_DP_TX_FEAT_TSO) {
+	/*
+	 * Make a copy of supported tunnel encapsulations in shared
+	 * memory to be used on supported Rx packet type classes get.
+	 */
+	sa->priv.shared->tunnel_encaps =
+		encp->enc_tunnel_encapsulations_supported;
+
+	if (sfc_dp_tx_offload_capa(sa->priv.dp_tx) & DEV_TX_OFFLOAD_TCP_TSO) {
 		sa->tso = encp->enc_fw_assisted_tso_v2_enabled;
 		if (!sa->tso)
-			sfc_warn(sa,
-				 "TSO support isn't available on this adapter");
+			sfc_info(sa, "TSO support isn't available on this adapter");
+	}
+
+	if (sa->tso &&
+	    (sfc_dp_tx_offload_capa(sa->priv.dp_tx) &
+	     (DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
+	      DEV_TX_OFFLOAD_GENEVE_TNL_TSO)) != 0) {
+		sa->tso_encap = encp->enc_fw_assisted_tso_v2_encap_enabled;
+		if (!sa->tso_encap)
+			sfc_info(sa, "Encapsulated TSO support isn't available on this adapter");
 	}
 
 	sfc_log_init(sa, "estimate resource limits");
@@ -736,8 +765,23 @@ sfc_attach(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_estimate_rsrc_limits;
 
+	sa->evq_max_entries = encp->enc_evq_max_nevs;
+	SFC_ASSERT(rte_is_power_of_2(sa->evq_max_entries));
+
+	sa->evq_min_entries = encp->enc_evq_min_nevs;
+	SFC_ASSERT(rte_is_power_of_2(sa->evq_min_entries));
+
+	sa->rxq_max_entries = encp->enc_rxq_max_ndescs;
+	SFC_ASSERT(rte_is_power_of_2(sa->rxq_max_entries));
+
+	sa->rxq_min_entries = encp->enc_rxq_min_ndescs;
+	SFC_ASSERT(rte_is_power_of_2(sa->rxq_min_entries));
+
 	sa->txq_max_entries = encp->enc_txq_max_ndescs;
 	SFC_ASSERT(rte_is_power_of_2(sa->txq_max_entries));
+
+	sa->txq_min_entries = encp->enc_txq_min_ndescs;
+	SFC_ASSERT(rte_is_power_of_2(sa->txq_min_entries));
 
 	rc = sfc_intr_attach(sa);
 	if (rc != 0)
@@ -751,9 +795,9 @@ sfc_attach(struct sfc_adapter *sa)
 	if (rc != 0)
 		goto fail_port_attach;
 
-	rc = sfc_set_rss_defaults(sa);
+	rc = sfc_rss_attach(sa);
 	if (rc != 0)
-		goto fail_set_rss_defaults;
+		goto fail_rss_attach;
 
 	rc = sfc_filter_attach(sa);
 	if (rc != 0)
@@ -770,7 +814,9 @@ sfc_attach(struct sfc_adapter *sa)
 	return 0;
 
 fail_filter_attach:
-fail_set_rss_defaults:
+	sfc_rss_detach(sa);
+
+fail_rss_attach:
 	sfc_port_detach(sa);
 
 fail_port_attach:
@@ -802,6 +848,7 @@ sfc_detach(struct sfc_adapter *sa)
 	sfc_flow_fini(sa);
 
 	sfc_filter_detach(sa);
+	sfc_rss_detach(sa);
 	sfc_port_detach(sa);
 	sfc_ev_detach(sa);
 	sfc_intr_detach(sa);
@@ -824,6 +871,8 @@ sfc_kvarg_fv_variant_handler(__rte_unused const char *key,
 		*value = EFX_FW_VARIANT_LOW_LATENCY;
 	else if (strcasecmp(value_str, SFC_KVARG_FW_VARIANT_PACKED_STREAM) == 0)
 		*value = EFX_FW_VARIANT_PACKED_STREAM;
+	else if (strcasecmp(value_str, SFC_KVARG_FW_VARIANT_DPDK) == 0)
+		*value = EFX_FW_VARIANT_DPDK;
 	else
 		return -EINVAL;
 
@@ -859,6 +908,10 @@ sfc_get_fw_variant(struct sfc_adapter *sa, efx_fw_variant_t *efv)
 		*efv = EFX_FW_VARIANT_PACKED_STREAM;
 		break;
 
+	case EFX_RXDP_DPDK_FW_ID:
+		*efv = EFX_FW_VARIANT_DPDK;
+		break;
+
 	default:
 		/*
 		 * Other firmware variants are not considered, since they are
@@ -881,9 +934,37 @@ sfc_fw_variant2str(efx_fw_variant_t efv)
 		return SFC_KVARG_FW_VARIANT_LOW_LATENCY;
 	case EFX_RXDP_PACKED_STREAM_FW_ID:
 		return SFC_KVARG_FW_VARIANT_PACKED_STREAM;
+	case EFX_RXDP_DPDK_FW_ID:
+		return SFC_KVARG_FW_VARIANT_DPDK;
 	default:
 		return "unknown";
 	}
+}
+
+static int
+sfc_kvarg_rxd_wait_timeout_ns(struct sfc_adapter *sa)
+{
+	int rc;
+	long value;
+
+	value = SFC_RXD_WAIT_TIMEOUT_NS_DEF;
+
+	rc = sfc_kvargs_process(sa, SFC_KVARG_RXD_WAIT_TIMEOUT_NS,
+				sfc_kvarg_long_handler, &value);
+	if (rc != 0)
+		return rc;
+
+	if (value < 0 ||
+	    (unsigned long)value > EFX_RXQ_ES_SUPER_BUFFER_HOL_BLOCK_MAX) {
+		sfc_err(sa, "wrong '" SFC_KVARG_RXD_WAIT_TIMEOUT_NS "' "
+			    "was set (%ld);", value);
+		sfc_err(sa, "it must not be less than 0 or greater than %u",
+			    EFX_RXQ_ES_SUPER_BUFFER_HOL_BLOCK_MAX);
+		return EINVAL;
+	}
+
+	sa->rxd_wait_timeout_ns = value;
+	return 0;
 }
 
 static int
@@ -902,6 +983,10 @@ sfc_nic_probe(struct sfc_adapter *sa)
 		sfc_err(sa, "invalid %s parameter value", SFC_KVARG_FW_VARIANT);
 		return rc;
 	}
+
+	rc = sfc_kvarg_rxd_wait_timeout_ns(sa);
+	if (rc != 0)
+		return rc;
 
 	rc = efx_nic_probe(enp, preferred_efv);
 	if (rc == EACCES) {
@@ -1027,8 +1112,8 @@ sfc_unprobe(struct sfc_adapter *sa)
 }
 
 uint32_t
-sfc_register_logtype(struct sfc_adapter *sa, const char *lt_prefix_str,
-		     uint32_t ll_default)
+sfc_register_logtype(const struct rte_pci_addr *pci_addr,
+		     const char *lt_prefix_str, uint32_t ll_default)
 {
 	size_t lt_prefix_str_size = strlen(lt_prefix_str);
 	size_t lt_str_size_max;
@@ -1039,21 +1124,24 @@ sfc_register_logtype(struct sfc_adapter *sa, const char *lt_prefix_str,
 		++lt_prefix_str_size; /* Reserve space for prefix separator */
 		lt_str_size_max = lt_prefix_str_size + PCI_PRI_STR_SIZE + 1;
 	} else {
-		return RTE_LOGTYPE_PMD;
+		return sfc_logtype_driver;
 	}
 
 	lt_str = rte_zmalloc("logtype_str", lt_str_size_max, 0);
 	if (lt_str == NULL)
-		return RTE_LOGTYPE_PMD;
+		return sfc_logtype_driver;
 
 	strncpy(lt_str, lt_prefix_str, lt_prefix_str_size);
 	lt_str[lt_prefix_str_size - 1] = '.';
-	rte_pci_device_name(&sa->pci_addr, lt_str + lt_prefix_str_size,
+	rte_pci_device_name(pci_addr, lt_str + lt_prefix_str_size,
 			    lt_str_size_max - lt_prefix_str_size);
 	lt_str[lt_str_size_max - 1] = '\0';
 
 	ret = rte_log_register_type_and_pick_level(lt_str, ll_default);
 	rte_free(lt_str);
 
-	return (ret < 0) ? RTE_LOGTYPE_PMD : ret;
+	if (ret < 0)
+		return sfc_logtype_driver;
+
+	return ret;
 }

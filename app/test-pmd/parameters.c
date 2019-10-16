@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <arpa/inet.h>
 
 #include <rte_common.h>
 #include <rte_byteorder.h>
@@ -38,10 +39,6 @@
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 #include <rte_string_fns.h>
-#ifdef RTE_LIBRTE_CMDLINE
-#include <cmdline_parse.h>
-#include <cmdline_parse_etheraddr.h>
-#endif
 #ifdef RTE_LIBRTE_PMD_BOND
 #include <rte_eth_bond.h>
 #endif
@@ -65,12 +62,13 @@ usage(char* progname)
 #ifdef RTE_LIBRTE_CMDLINE
 	       "--eth-peers-configfile= | "
 	       "--eth-peer=X,M:M:M:M:M:M | "
+	       "--tx-ip=SRC,DST | --tx-udp=PORT | "
 #endif
 	       "--pkt-filter-mode= |"
 	       "--rss-ip | --rss-udp | "
 	       "--rxpt= | --rxht= | --rxwt= | --rxfreet= | "
 	       "--txpt= | --txht= | --txwt= | --txfreet= | "
-	       "--txrst= | --tx-offloads ]\n",
+	       "--txrst= | --tx-offloads= | --vxlan-gpe-port= ]\n",
 	       progname);
 #ifdef RTE_LIBRTE_CMDLINE
 	printf("  --interactive: run in interactive mode.\n");
@@ -173,8 +171,10 @@ usage(char* progname)
 	       " Used mainly with PCAP drivers.\n");
 	printf("  --txpkts=X[,Y]*: set TX segment sizes"
 		" or total packet length.\n");
+	printf("  --txonly-multi-flow: generate multiple flows in txonly mode\n");
 	printf("  --disable-link-check: disable check on link status when "
 	       "starting/stopping ports.\n");
+	printf("  --disable-device-start: do not automatically start port\n");
 	printf("  --no-lsc-interrupt: disable link status change interrupt.\n");
 	printf("  --no-rmv-interrupt: disable device removal interrupt.\n");
 	printf("  --bitrate-stats=N: set the logical core N to perform "
@@ -187,6 +187,22 @@ usage(char* progname)
 	       "requests flow API isolated mode on all ports at initialization time.\n");
 	printf("  --tx-offloads=0xXXXXXXXX: hexadecimal bitmask of TX queue offloads\n");
 	printf("  --hot-plug: enable hot plug for device.\n");
+	printf("  --vxlan-gpe-port=N: UPD port of tunnel VXLAN-GPE\n");
+	printf("  --mlockall: lock all memory\n");
+	printf("  --no-mlockall: do not lock all memory\n");
+	printf("  --mp-alloc <native|anon|xmem|xmemhuge>: mempool allocation method.\n"
+	       "    native: use regular DPDK memory to create and populate mempool\n"
+	       "    anon: use regular DPDK memory to create and anonymous memory to populate mempool\n"
+	       "    xmem: use anonymous memory to create and populate mempool\n"
+	       "    xmemhuge: use anonymous hugepage memory to create and populate mempool\n");
+	printf("  --noisy-tx-sw-buffer-size=N: size of FIFO buffer\n");
+	printf("  --noisy-tx-sw-buffer-flushtime=N: flush FIFO after N ms\n");
+	printf("  --noisy-lkup-memory=N: allocate N MB of VNF memory\n");
+	printf("  --noisy-lkup-num-writes=N: do N random writes per packet\n");
+	printf("  --noisy-lkup-num-reads=N: do N random reads per packet\n");
+	printf("  --noisy-lkup-num-writes=N: do N random reads and writes per packet\n");
+	printf("  --no-iova-contig: mempool memory can be IOVA non contiguous. "
+	       "valid only with --mp-alloc=anon\n");
 }
 
 #ifdef RTE_LIBRTE_CMDLINE
@@ -208,8 +224,7 @@ init_peer_eth_addrs(char *config_filename)
 		if (fgets(buf, sizeof(buf), config_file) == NULL)
 			break;
 
-		if (cmdline_parse_etheraddr(NULL, buf, &peer_eth_addrs[i],
-				sizeof(peer_eth_addrs[i])) < 0) {
+		if (rte_ether_unformat_addr(buf, &peer_eth_addrs[i]) < 0) {
 			printf("Bad MAC address format on line %d\n", i+1);
 			fclose(config_file);
 			return -1;
@@ -374,7 +389,6 @@ parse_portnuma_config(const char *q_arg)
 	};
 	unsigned long int_fld[_NUM_FLD];
 	char *str_fld[_NUM_FLD];
-	portid_t pid;
 
 	/* reset from value set at definition */
 	while ((p = strchr(p0,'(')) != NULL) {
@@ -398,16 +412,16 @@ parse_portnuma_config(const char *q_arg)
 		port_id = (portid_t)int_fld[FLD_PORT];
 		if (port_id_is_invalid(port_id, ENABLED_WARN) ||
 			port_id == (portid_t)RTE_PORT_ALL) {
-			printf("Valid port range is [0");
-			RTE_ETH_FOREACH_DEV(pid)
-				printf(", %d", pid);
-			printf("]\n");
+			print_valid_ports();
 			return -1;
 		}
 		socket_id = (uint8_t)int_fld[FLD_SOCKET];
 		if (new_socket_id(socket_id)) {
-			print_invalid_socket_id_error();
-			return -1;
+			if (num_sockets >= RTE_MAX_NUMA_NODES) {
+				print_invalid_socket_id_error();
+				return -1;
+			}
+			socket_ids[num_sockets++] = socket_id;
 		}
 		port_numa[port_id] = socket_id;
 	}
@@ -432,7 +446,6 @@ parse_ringnuma_config(const char *q_arg)
 	};
 	unsigned long int_fld[_NUM_FLD];
 	char *str_fld[_NUM_FLD];
-	portid_t pid;
 	#define RX_RING_ONLY 0x1
 	#define TX_RING_ONLY 0x2
 	#define RXTX_RING    0x3
@@ -459,16 +472,16 @@ parse_ringnuma_config(const char *q_arg)
 		port_id = (portid_t)int_fld[FLD_PORT];
 		if (port_id_is_invalid(port_id, ENABLED_WARN) ||
 			port_id == (portid_t)RTE_PORT_ALL) {
-			printf("Valid port range is [0");
-			RTE_ETH_FOREACH_DEV(pid)
-				printf(", %d", pid);
-			printf("]\n");
+			print_valid_ports();
 			return -1;
 		}
 		socket_id = (uint8_t)int_fld[FLD_SOCKET];
 		if (new_socket_id(socket_id)) {
-			print_invalid_socket_id_error();
-			return -1;
+			if (num_sockets >= RTE_MAX_NUMA_NODES) {
+				print_invalid_socket_id_error();
+				return -1;
+			}
+			socket_ids[num_sockets++] = socket_id;
 		}
 		ring_flag = (uint8_t)int_fld[FLD_FLAG];
 		if ((ring_flag < RX_RING_ONLY) || (ring_flag > RXTX_RING)) {
@@ -549,6 +562,7 @@ launch_args_parse(int argc, char** argv)
 	uint64_t tx_offloads = tx_mode.offloads;
 	struct rte_eth_dev_info dev_info;
 	uint16_t rec_nb_pkts;
+	int ret;
 
 	static struct option lgopts[] = {
 		{ "help",			0, 0, 0 },
@@ -620,13 +634,28 @@ launch_args_parse(int argc, char** argv)
 		{ "no-flush-rx",	0, 0, 0 },
 		{ "flow-isolate-all",	        0, 0, 0 },
 		{ "txpkts",			1, 0, 0 },
+		{ "txonly-multi-flow",		0, 0, 0 },
 		{ "disable-link-check",		0, 0, 0 },
+		{ "disable-device-start",	0, 0, 0 },
 		{ "no-lsc-interrupt",		0, 0, 0 },
 		{ "no-rmv-interrupt",		0, 0, 0 },
 		{ "print-event",		1, 0, 0 },
 		{ "mask-event",			1, 0, 0 },
 		{ "tx-offloads",		1, 0, 0 },
 		{ "hot-plug",			0, 0, 0 },
+		{ "vxlan-gpe-port",		1, 0, 0 },
+		{ "mlockall",			0, 0, 0 },
+		{ "no-mlockall",		0, 0, 0 },
+		{ "mp-alloc",			1, 0, 0 },
+		{ "tx-ip",			1, 0, 0 },
+		{ "tx-udp",			1, 0, 0 },
+		{ "noisy-tx-sw-buffer-size",	1, 0, 0 },
+		{ "noisy-tx-sw-buffer-flushtime", 1, 0, 0 },
+		{ "noisy-lkup-memory",		1, 0, 0 },
+		{ "noisy-lkup-num-writes",	1, 0, 0 },
+		{ "noisy-lkup-num-reads",	1, 0, 0 },
+		{ "noisy-lkup-num-reads-writes", 1, 0, 0 },
+		{ "no-iova-contig",             0, 0, 0 },
 		{ 0, 0, 0, 0 },
 	};
 
@@ -696,7 +725,6 @@ launch_args_parse(int argc, char** argv)
 			}
 			if (!strcmp(lgopts[opt_idx].name, "eth-peer")) {
 				char *port_end;
-				uint8_t c, peer_addr[6];
 
 				errno = 0;
 				n = strtoul(optarg, &port_end, 10);
@@ -708,17 +736,63 @@ launch_args_parse(int argc, char** argv)
 						 "eth-peer: port %d >= RTE_MAX_ETHPORTS(%d)\n",
 						 n, RTE_MAX_ETHPORTS);
 
-				if (cmdline_parse_etheraddr(NULL, port_end,
-						&peer_addr, sizeof(peer_addr)) < 0)
+				if (rte_ether_unformat_addr(port_end,
+						&peer_eth_addrs[n]) < 0)
 					rte_exit(EXIT_FAILURE,
 						 "Invalid ethernet address: %s\n",
 						 port_end);
-				for (c = 0; c < 6; c++)
-					peer_eth_addrs[n].addr_bytes[c] =
-						peer_addr[c];
 				nb_peer_eth_addrs++;
 			}
 #endif
+			if (!strcmp(lgopts[opt_idx].name, "tx-ip")) {
+				struct in_addr in;
+				char *end;
+
+				end = strchr(optarg, ',');
+				if (end == optarg || !end)
+					rte_exit(EXIT_FAILURE,
+						 "Invalid tx-ip: %s", optarg);
+
+				*end++ = 0;
+				if (inet_aton(optarg, &in) == 0)
+					rte_exit(EXIT_FAILURE,
+						 "Invalid source IP address: %s\n",
+						 optarg);
+				tx_ip_src_addr = rte_be_to_cpu_32(in.s_addr);
+
+				if (inet_aton(end, &in) == 0)
+					rte_exit(EXIT_FAILURE,
+						 "Invalid destination IP address: %s\n",
+						 optarg);
+				tx_ip_dst_addr = rte_be_to_cpu_32(in.s_addr);
+			}
+			if (!strcmp(lgopts[opt_idx].name, "tx-udp")) {
+				char *end = NULL;
+
+				errno = 0;
+				n = strtoul(optarg, &end, 10);
+				if (errno != 0 || end == optarg ||
+				    n > UINT16_MAX ||
+				    !(*end == '\0' || *end == ','))
+					rte_exit(EXIT_FAILURE,
+						 "Invalid UDP port: %s\n",
+						 optarg);
+				tx_udp_src_port = n;
+				if (*end == ',') {
+					char *dst = end + 1;
+
+					n = strtoul(dst, &end, 10);
+					if (errno != 0 || end == dst ||
+					    n > UINT16_MAX || *end)
+						rte_exit(EXIT_FAILURE,
+							 "Invalid destination UDP port: %s\n",
+							 dst);
+					tx_udp_dst_port = n;
+				} else {
+					tx_udp_dst_port = n;
+				}
+
+			}
 			if (!strcmp(lgopts[opt_idx].name, "nb-ports")) {
 				n = atoi(optarg);
 				if (n > 0 && n <= nb_ports)
@@ -745,7 +819,22 @@ launch_args_parse(int argc, char** argv)
 			if (!strcmp(lgopts[opt_idx].name, "numa"))
 				numa_support = 1;
 			if (!strcmp(lgopts[opt_idx].name, "mp-anon")) {
-				mp_anon = 1;
+				mp_alloc_type = MP_ALLOC_ANON;
+			}
+			if (!strcmp(lgopts[opt_idx].name, "mp-alloc")) {
+				if (!strcmp(optarg, "native"))
+					mp_alloc_type = MP_ALLOC_NATIVE;
+				else if (!strcmp(optarg, "anon"))
+					mp_alloc_type = MP_ALLOC_ANON;
+				else if (!strcmp(optarg, "xmem"))
+					mp_alloc_type = MP_ALLOC_XMEM;
+				else if (!strcmp(optarg, "xmemhuge"))
+					mp_alloc_type = MP_ALLOC_XMEM_HUGE;
+				else
+					rte_exit(EXIT_FAILURE,
+						"mp-alloc %s invalid - must be: "
+						"native, anon, xmem or xmemhuge\n",
+						 optarg);
 			}
 			if (!strcmp(lgopts[opt_idx].name, "port-numa-config")) {
 				if (parse_portnuma_config(optarg))
@@ -784,15 +873,15 @@ launch_args_parse(int argc, char** argv)
 			}
 			if (!strcmp(lgopts[opt_idx].name, "max-pkt-len")) {
 				n = atoi(optarg);
-				if (n >= ETHER_MIN_LEN) {
+				if (n >= RTE_ETHER_MIN_LEN) {
 					rx_mode.max_rx_pkt_len = (uint32_t) n;
-					if (n > ETHER_MAX_LEN)
+					if (n > RTE_ETHER_MAX_LEN)
 						rx_offloads |=
 							DEV_RX_OFFLOAD_JUMBO_FRAME;
 				} else
 					rte_exit(EXIT_FAILURE,
 						 "Invalid max-pkt-len=%d - should be > %d\n",
-						 n, ETHER_MIN_LEN);
+						 n, RTE_ETHER_MIN_LEN);
 			}
 			if (!strcmp(lgopts[opt_idx].name, "pkt-filter-mode")) {
 				if (!strcmp(optarg, "signature"))
@@ -881,7 +970,7 @@ launch_args_parse(int argc, char** argv)
 			}
 #endif
 			if (!strcmp(lgopts[opt_idx].name, "disable-crc-strip"))
-				rx_offloads &= ~DEV_RX_OFFLOAD_CRC_STRIP;
+				rx_offloads |= DEV_RX_OFFLOAD_KEEP_CRC;
 			if (!strcmp(lgopts[opt_idx].name, "enable-lro"))
 				rx_offloads |= DEV_RX_OFFLOAD_TCP_LRO;
 			if (!strcmp(lgopts[opt_idx].name, "enable-scatter"))
@@ -962,7 +1051,12 @@ launch_args_parse(int argc, char** argv)
 					 * value, on the assumption that all
 					 * ports are of the same NIC model.
 					 */
-					rte_eth_dev_info_get(0, &dev_info);
+					ret = eth_dev_info_get_print_err(
+								0,
+								&dev_info);
+					if (ret != 0)
+						return;
+
 					rec_nb_pkts = dev_info
 						.default_rxportconf.burst_size;
 
@@ -1104,10 +1198,14 @@ launch_args_parse(int argc, char** argv)
 				else
 					rte_exit(EXIT_FAILURE, "bad txpkts\n");
 			}
+			if (!strcmp(lgopts[opt_idx].name, "txonly-multi-flow"))
+				txonly_multi_flow = 1;
 			if (!strcmp(lgopts[opt_idx].name, "no-flush-rx"))
 				no_flush_rx = 1;
 			if (!strcmp(lgopts[opt_idx].name, "disable-link-check"))
 				no_link_check = 1;
+			if (!strcmp(lgopts[opt_idx].name, "disable-device-start"))
+				no_device_start = 1;
 			if (!strcmp(lgopts[opt_idx].name, "no-lsc-interrupt"))
 				lsc_interrupt = 0;
 			if (!strcmp(lgopts[opt_idx].name, "no-rmv-interrupt"))
@@ -1123,6 +1221,14 @@ launch_args_parse(int argc, char** argv)
 					rte_exit(EXIT_FAILURE,
 						 "tx-offloads must be >= 0\n");
 			}
+			if (!strcmp(lgopts[opt_idx].name, "vxlan-gpe-port")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					vxlan_gpe_udp_port = (uint16_t)n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "vxlan-gpe-port must be >= 0\n");
+			}
 			if (!strcmp(lgopts[opt_idx].name, "print-event"))
 				if (parse_event_printing_config(optarg, 1)) {
 					rte_exit(EXIT_FAILURE,
@@ -1135,6 +1241,66 @@ launch_args_parse(int argc, char** argv)
 				}
 			if (!strcmp(lgopts[opt_idx].name, "hot-plug"))
 				hot_plug = 1;
+			if (!strcmp(lgopts[opt_idx].name, "mlockall"))
+				do_mlockall = 1;
+			if (!strcmp(lgopts[opt_idx].name, "no-mlockall"))
+				do_mlockall = 0;
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-tx-sw-buffer-size")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_tx_sw_bufsz = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						"noisy-tx-sw-buffer-size must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-tx-sw-buffer-flushtime")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_tx_sw_buf_flush_time = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "noisy-tx-sw-buffer-flushtime must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-lkup-memory")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_lkup_mem_sz = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "noisy-lkup-memory must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-lkup-num-writes")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_lkup_num_writes = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "noisy-lkup-num-writes must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-lkup-num-reads")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_lkup_num_reads = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "noisy-lkup-num-reads must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name,
+				    "noisy-lkup-num-reads-writes")) {
+				n = atoi(optarg);
+				if (n >= 0)
+					noisy_lkup_num_reads_writes = n;
+				else
+					rte_exit(EXIT_FAILURE,
+						 "noisy-lkup-num-reads-writes must be >= 0\n");
+			}
+			if (!strcmp(lgopts[opt_idx].name, "no-iova-contig"))
+				mempool_flags = MEMPOOL_F_NO_IOVA_CONTIG;
 			break;
 		case 'h':
 			usage(argv[0]);
@@ -1151,4 +1317,12 @@ launch_args_parse(int argc, char** argv)
 	/* Set offload configuration from command line parameters. */
 	rx_mode.offloads = rx_offloads;
 	tx_mode.offloads = tx_offloads;
+
+	if (mempool_flags & MEMPOOL_F_NO_IOVA_CONTIG &&
+	    mp_alloc_type != MP_ALLOC_ANON) {
+		TESTPMD_LOG(WARNING, "cannot use no-iova-contig without "
+				  "mp-alloc=anon. mempool no-iova-contig is "
+				  "ignored\n");
+		mempool_flags = 0;
+	}
 }

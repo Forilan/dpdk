@@ -12,6 +12,7 @@
 #include <sys/types.h>
 
 #include <rte_byteorder.h>
+#include <rte_ethdev_pci.h>
 
 #include "nfp_cpp.h"
 #include "nfp_target.h"
@@ -542,7 +543,7 @@ nfp_xpb_readl(struct nfp_cpp *cpp, uint32_t xpb_addr, uint32_t *value)
 }
 
 static struct nfp_cpp *
-nfp_cpp_alloc(const char *devname)
+nfp_cpp_alloc(struct rte_pci_device *dev, int driver_lock_needed)
 {
 	const struct nfp_cpp_operations *ops;
 	struct nfp_cpp *cpp;
@@ -558,9 +559,10 @@ nfp_cpp_alloc(const char *devname)
 		return NULL;
 
 	cpp->op = ops;
+	cpp->driver_lock_needed = driver_lock_needed;
 
 	if (cpp->op->init) {
-		err = cpp->op->init(cpp, devname);
+		err = cpp->op->init(cpp, dev);
 		if (err < 0) {
 			free(cpp);
 			return NULL;
@@ -603,9 +605,9 @@ nfp_cpp_free(struct nfp_cpp *cpp)
 }
 
 struct nfp_cpp *
-nfp_cpp_from_device_name(const char *devname)
+nfp_cpp_from_device_name(struct rte_pci_device *dev, int driver_lock_needed)
 {
-	return nfp_cpp_alloc(devname);
+	return nfp_cpp_alloc(dev, driver_lock_needed);
 }
 
 /*
@@ -799,7 +801,8 @@ __nfp_cpp_model_autodetect(struct nfp_cpp *cpp)
 	uint32_t arm_id = NFP_CPP_ID(NFP_CPP_TARGET_ARM, 0, 0);
 	uint32_t model = 0;
 
-	nfp_cpp_readl(cpp, arm_id, NFP6000_ARM_GCSR_SOFTMODEL0, &model);
+	if (nfp_cpp_readl(cpp, arm_id, NFP6000_ARM_GCSR_SOFTMODEL0, &model))
+		return 0;
 
 	if (NFP_CPP_MODEL_IS_6000(model)) {
 		uint32_t tmp;
@@ -808,8 +811,10 @@ __nfp_cpp_model_autodetect(struct nfp_cpp *cpp)
 
 		/* The PL's PluDeviceID revision code is authoratative */
 		model &= ~0xff;
-		nfp_xpb_readl(cpp, NFP_XPB_DEVICE(1, 1, 16) +
-				   NFP_PL_DEVICE_ID, &tmp);
+		if (nfp_xpb_readl(cpp, NFP_XPB_DEVICE(1, 1, 16) +
+				   NFP_PL_DEVICE_ID, &tmp))
+			return 0;
+
 		model |= (NFP_PL_DEVICE_ID_MASK & tmp) - 0x10;
 	}
 

@@ -18,18 +18,115 @@
 #include <rte_common.h>
 #include <rte_spinlock.h>
 
+#include "eal_internal_cfg.h"
 #include "eal_memalloc.h"
 #include "malloc_elem.h"
 #include "malloc_heap.h"
 
-#define MIN_DATA_SIZE (RTE_CACHE_LINE_SIZE)
+/*
+ * If debugging is enabled, freed memory is set to poison value
+ * to catch buggy programs. Otherwise, freed memory is set to zero
+ * to avoid having to zero in zmalloc
+ */
+#ifdef RTE_MALLOC_DEBUG
+#define MALLOC_POISON	       0x6b
+#else
+#define MALLOC_POISON	       0
+#endif
+
+size_t
+malloc_elem_find_max_iova_contig(struct malloc_elem *elem, size_t align)
+{
+	void *cur_page, *contig_seg_start, *page_end, *cur_seg_end;
+	void *data_start, *data_end;
+	rte_iova_t expected_iova;
+	struct rte_memseg *ms;
+	size_t page_sz, cur, max;
+
+	page_sz = (size_t)elem->msl->page_sz;
+	data_start = RTE_PTR_ADD(elem, MALLOC_ELEM_HEADER_LEN);
+	data_end = RTE_PTR_ADD(elem, elem->size - MALLOC_ELEM_TRAILER_LEN);
+	/* segment must start after header and with specified alignment */
+	contig_seg_start = RTE_PTR_ALIGN_CEIL(data_start, align);
+
+	/* return if aligned address is already out of malloc element */
+	if (contig_seg_start > data_end)
+		return 0;
+
+	/* if we're in IOVA as VA mode, or if we're in legacy mode with
+	 * hugepages, all elements are IOVA-contiguous. however, we can only
+	 * make these assumptions about internal memory - externally allocated
+	 * segments have to be checked.
+	 */
+	if (!elem->msl->external &&
+			(rte_eal_iova_mode() == RTE_IOVA_VA ||
+				(internal_config.legacy_mem &&
+					rte_eal_has_hugepages())))
+		return RTE_PTR_DIFF(data_end, contig_seg_start);
+
+	cur_page = RTE_PTR_ALIGN_FLOOR(contig_seg_start, page_sz);
+	ms = rte_mem_virt2memseg(cur_page, elem->msl);
+
+	/* do first iteration outside the loop */
+	page_end = RTE_PTR_ADD(cur_page, page_sz);
+	cur_seg_end = RTE_MIN(page_end, data_end);
+	cur = RTE_PTR_DIFF(cur_seg_end, contig_seg_start) -
+			MALLOC_ELEM_TRAILER_LEN;
+	max = cur;
+	expected_iova = ms->iova + page_sz;
+	/* memsegs are contiguous in memory */
+	ms++;
+
+	cur_page = RTE_PTR_ADD(cur_page, page_sz);
+
+	while (cur_page < data_end) {
+		page_end = RTE_PTR_ADD(cur_page, page_sz);
+		cur_seg_end = RTE_MIN(page_end, data_end);
+
+		/* reset start of contiguous segment if unexpected iova */
+		if (ms->iova != expected_iova) {
+			/* next contiguous segment must start at specified
+			 * alignment.
+			 */
+			contig_seg_start = RTE_PTR_ALIGN(cur_page, align);
+			/* new segment start may be on a different page, so find
+			 * the page and skip to next iteration to make sure
+			 * we're not blowing past data end.
+			 */
+			ms = rte_mem_virt2memseg(contig_seg_start, elem->msl);
+			cur_page = ms->addr;
+			/* don't trigger another recalculation */
+			expected_iova = ms->iova;
+			continue;
+		}
+		/* cur_seg_end ends on a page boundary or on data end. if we're
+		 * looking at data end, then malloc trailer is already included
+		 * in the calculations. if we're looking at page end, then we
+		 * know there's more data past this page and thus there's space
+		 * for malloc element trailer, so don't count it here.
+		 */
+		cur = RTE_PTR_DIFF(cur_seg_end, contig_seg_start);
+		/* update max if cur value is bigger */
+		if (cur > max)
+			max = cur;
+
+		/* move to next page */
+		cur_page = page_end;
+		expected_iova = ms->iova + page_sz;
+		/* memsegs are contiguous in memory */
+		ms++;
+	}
+
+	return max;
+}
 
 /*
  * Initialize a general malloc_elem header structure
  */
 void
 malloc_elem_init(struct malloc_elem *elem, struct malloc_heap *heap,
-		struct rte_memseg_list *msl, size_t size)
+		struct rte_memseg_list *msl, size_t size,
+		struct malloc_elem *orig_elem, size_t orig_size)
 {
 	elem->heap = heap;
 	elem->msl = msl;
@@ -39,6 +136,8 @@ malloc_elem_init(struct malloc_elem *elem, struct malloc_heap *heap,
 	elem->state = ELEM_FREE;
 	elem->size = size;
 	elem->pad = 0;
+	elem->orig_elem = orig_elem;
+	elem->orig_size = orig_size;
 	set_header(elem);
 	set_trailer(elem);
 }
@@ -48,6 +147,12 @@ malloc_elem_insert(struct malloc_elem *elem)
 {
 	struct malloc_elem *prev_elem, *next_elem;
 	struct malloc_heap *heap = elem->heap;
+
+	/* first and last elements must be both NULL or both non-NULL */
+	if ((heap->first == NULL) != (heap->last == NULL)) {
+		RTE_LOG(ERR, EAL, "Heap is probably corrupt\n");
+		return;
+	}
 
 	if (heap->first == NULL && heap->last == NULL) {
 		/* if empty heap */
@@ -191,7 +296,8 @@ split_elem(struct malloc_elem *elem, struct malloc_elem *split_pt)
 	const size_t old_elem_size = (uintptr_t)split_pt - (uintptr_t)elem;
 	const size_t new_elem_size = elem->size - old_elem_size;
 
-	malloc_elem_init(split_pt, elem->heap, elem->msl, new_elem_size);
+	malloc_elem_init(split_pt, elem->heap, elem->msl, new_elem_size,
+			 elem->orig_elem, elem->orig_size);
 	split_pt->prev = elem;
 	split_pt->next = next_elem;
 	if (next_elem)
@@ -229,13 +335,19 @@ remove_elem(struct malloc_elem *elem)
 static int
 next_elem_is_adjacent(struct malloc_elem *elem)
 {
-	return elem->next == RTE_PTR_ADD(elem, elem->size);
+	return elem->next == RTE_PTR_ADD(elem, elem->size) &&
+			elem->next->msl == elem->msl &&
+			(!internal_config.match_allocations ||
+			 elem->orig_elem == elem->next->orig_elem);
 }
 
 static int
 prev_elem_is_adjacent(struct malloc_elem *elem)
 {
-	return elem == RTE_PTR_ADD(elem->prev, elem->prev->size);
+	return elem == RTE_PTR_ADD(elem->prev, elem->prev->size) &&
+			elem->prev->msl == elem->msl &&
+			(!internal_config.match_allocations ||
+			 elem->orig_elem == elem->prev->orig_elem);
 }
 
 /*
@@ -382,16 +494,18 @@ malloc_elem_join_adjacent_free(struct malloc_elem *elem)
 	if (elem->next != NULL && elem->next->state == ELEM_FREE &&
 			next_elem_is_adjacent(elem)) {
 		void *erase;
+		size_t erase_len;
 
 		/* we will want to erase the trailer and header */
 		erase = RTE_PTR_SUB(elem->next, MALLOC_ELEM_TRAILER_LEN);
+		erase_len = MALLOC_ELEM_OVERHEAD + elem->next->pad;
 
 		/* remove from free list, join to this one */
 		malloc_elem_free_list_remove(elem->next);
 		join_elem(elem, elem->next);
 
-		/* erase header and trailer */
-		memset(erase, 0, MALLOC_ELEM_OVERHEAD);
+		/* erase header, trailer and pad */
+		memset(erase, MALLOC_POISON, erase_len);
 	}
 
 	/*
@@ -402,9 +516,11 @@ malloc_elem_join_adjacent_free(struct malloc_elem *elem)
 			prev_elem_is_adjacent(elem)) {
 		struct malloc_elem *new_elem;
 		void *erase;
+		size_t erase_len;
 
 		/* we will want to erase trailer and header */
 		erase = RTE_PTR_SUB(elem, MALLOC_ELEM_TRAILER_LEN);
+		erase_len = MALLOC_ELEM_OVERHEAD + elem->pad;
 
 		/* remove from free list, join to this one */
 		malloc_elem_free_list_remove(elem->prev);
@@ -412,8 +528,8 @@ malloc_elem_join_adjacent_free(struct malloc_elem *elem)
 		new_elem = elem->prev;
 		join_elem(new_elem, elem);
 
-		/* erase header and trailer */
-		memset(erase, 0, MALLOC_ELEM_OVERHEAD);
+		/* erase header, trailer and pad */
+		memset(erase, MALLOC_POISON, erase_len);
 
 		elem = new_elem;
 	}
@@ -432,17 +548,20 @@ malloc_elem_free(struct malloc_elem *elem)
 	void *ptr;
 	size_t data_len;
 
-	ptr = RTE_PTR_ADD(elem, sizeof(*elem));
+	ptr = RTE_PTR_ADD(elem, MALLOC_ELEM_HEADER_LEN);
 	data_len = elem->size - MALLOC_ELEM_OVERHEAD;
 
 	elem = malloc_elem_join_adjacent_free(elem);
 
 	malloc_elem_free_list_insert(elem);
 
+	elem->pad = 0;
+
 	/* decrease heap's count of allocated elements */
 	elem->heap->alloc_count--;
 
-	memset(ptr, 0, data_len);
+	/* poison memory */
+	memset(ptr, MALLOC_POISON, data_len);
 
 	return elem;
 }
@@ -468,27 +587,6 @@ malloc_elem_hide_region(struct malloc_elem *elem, void *start, size_t len)
 			split_elem(elem, hide_end);
 
 			malloc_elem_free_list_insert(hide_end);
-		} else if (len_after >= MALLOC_ELEM_HEADER_LEN) {
-			/* shrink current element */
-			elem->size -= len_after;
-			memset(hide_end, 0, sizeof(*hide_end));
-
-			/* copy next element's data to our pad */
-			memcpy(hide_end, next, sizeof(*hide_end));
-
-			/* pad next element */
-			next->state = ELEM_PAD;
-			next->pad = len_after;
-			next->size -= len_after;
-
-			/* next element busy, would've been merged otherwise */
-			hide_end->pad = len_after;
-			hide_end->size += len_after;
-
-			/* adjust pointers to point to our new pad */
-			if (next->next)
-				next->next->prev = hide_end;
-			elem->next = hide_end;
 		} else if (len_after > 0) {
 			RTE_LOG(ERR, EAL, "Unaligned element, heap is probably corrupt\n");
 			return;
@@ -507,32 +605,8 @@ malloc_elem_hide_region(struct malloc_elem *elem, void *start, size_t len)
 
 			malloc_elem_free_list_insert(prev);
 		} else if (len_before > 0) {
-			/*
-			 * unlike with elements after current, here we don't
-			 * need to pad elements, but rather just increase the
-			 * size of previous element, copy the old header and set
-			 * up trailer.
-			 */
-			void *trailer = RTE_PTR_ADD(prev,
-					prev->size - MALLOC_ELEM_TRAILER_LEN);
-
-			memcpy(hide_start, elem, sizeof(*elem));
-			hide_start->size = len;
-
-			prev->size += len_before;
-			set_trailer(prev);
-
-			/* update pointers */
-			prev->next = hide_start;
-			if (next)
-				next->prev = hide_start;
-
-			/* erase old trailer */
-			memset(trailer, 0, MALLOC_ELEM_TRAILER_LEN);
-			/* erase old header */
-			memset(elem, 0, sizeof(*elem));
-
-			elem = hide_start;
+			RTE_LOG(ERR, EAL, "Unaligned element, heap is probably corrupt\n");
+			return;
 		}
 	}
 

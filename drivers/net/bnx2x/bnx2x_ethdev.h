@@ -1,11 +1,8 @@
-/*
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (c) 2013-2015 Brocade Communications Systems, Inc.
- *
- * Copyright (c) 2015 QLogic Corporation.
+ * Copyright (c) 2015-2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
- *
- * See LICENSE.bnx2x_pmd for copyright and licensing details.
+ * www.cavium.com
  */
 
 #ifndef PMD_BNX2X_ETHDEV_H
@@ -50,6 +47,7 @@
 #define FALSE               0
 #define TRUE                1
 
+typedef int bool;
 #define false               0
 #define true                1
 #define min(a,b)        RTE_MIN(a,b)
@@ -57,7 +55,6 @@
 #define mb()    rte_mb()
 #define wmb()   rte_wmb()
 #define rmb()   rte_rmb()
-
 
 #define MAX_QUEUES sysconf(_SC_NPROCESSORS_CONF)
 
@@ -72,11 +69,14 @@
 /* Maximum number of Rx packets to process at a time */
 #define BNX2X_RX_BUDGET 0xffffffff
 
+#define BNX2X_SP_TIMER_PERIOD US_PER_S /* 1 second */
+
 #endif
 
 /* MAC address operations */
 struct bnx2x_mac_ops {
-	void (*mac_addr_add)(struct rte_eth_dev *dev, struct ether_addr *addr,
+	void (*mac_addr_add)(struct rte_eth_dev *dev,
+			struct rte_ether_addr *addr,
 			uint16_t index, uint32_t pool);                           /* not implemented yet */
 	void (*mac_addr_remove)(struct rte_eth_dev *dev, uint16_t index); /* not implemented yet */
 };

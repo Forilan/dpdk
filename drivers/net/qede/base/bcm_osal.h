@@ -1,9 +1,7 @@
-/*
- * Copyright (c) 2016 QLogic Corporation.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
- *
- * See LICENSE.qede_pmd for copyright and licensing details.
+ * www.cavium.com
  */
 
 #ifndef __BCM_OSAL_H
@@ -334,7 +332,9 @@ u32 qede_find_first_zero_bit(unsigned long *, u32);
 	qede_find_first_zero_bit(bitmap, length)
 
 #define OSAL_BUILD_BUG_ON(cond)		nothing
-#define ETH_ALEN			ETHER_ADDR_LEN
+#define ETH_ALEN			RTE_ETHER_ADDR_LEN
+#define ETHER_TYPE_VLAN			RTE_ETHER_TYPE_VLAN
+#define ETHER_TYPE_QINQ			RTE_ETHER_TYPE_QINQ
 
 #define OSAL_BITMAP_WEIGHT(bitmap, count) 0
 
@@ -449,10 +449,13 @@ u32 qede_crc32(u32 crc, u8 *ptr, u32 length);
 #define OSAL_CRC8(table, pdata, nbytes, crc) 0
 #define OSAL_MFW_TLV_REQ(p_hwfn) nothing
 #define OSAL_MFW_FILL_TLV_DATA(type, buf, data) (0)
+#define OSAL_HW_INFO_CHANGE(p_hwfn, change) nothing
 #define OSAL_MFW_CMD_PREEMPT(p_hwfn) nothing
 #define OSAL_PF_VALIDATE_MODIFY_TUNN_CONFIG(p_hwfn, mask, b_update, tunn) 0
 
 #define OSAL_DIV_S64(a, b)	((a) / (b))
 #define OSAL_LLDP_RX_TLVS(p_hwfn, tlv_buf, tlv_size) nothing
+#define OSAL_DBG_ALLOC_USER_DATA(p_hwfn, user_data_ptr) (0)
+#define OSAL_DB_REC_OCCURRED(p_hwfn) nothing
 
 #endif /* __BCM_OSAL_H */

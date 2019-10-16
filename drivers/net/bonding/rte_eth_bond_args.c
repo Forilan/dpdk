@@ -7,9 +7,6 @@
 #include <rte_bus_pci.h>
 #include <rte_kvargs.h>
 
-#include <cmdline_parse.h>
-#include <cmdline_parse_etheraddr.h>
-
 #include "rte_eth_bond.h"
 #include "rte_eth_bond_private.h"
 
@@ -84,7 +81,7 @@ parse_port_id(const char *port_str)
 
 	pci_bus = rte_bus_find_by_name("pci");
 	if (pci_bus == NULL) {
-		RTE_LOG(ERR, PMD, "unable to find PCI bus\n");
+		RTE_BOND_LOG(ERR, "unable to find PCI bus\n");
 		return -1;
 	}
 
@@ -92,7 +89,7 @@ parse_port_id(const char *port_str)
 	if (pci_bus->parse(port_str, &dev_addr) == 0) {
 		dev = pci_bus->find_device(NULL, bond_pci_addr_cmp, &dev_addr);
 		if (dev == NULL) {
-			RTE_LOG(ERR, PMD, "unable to find PCI device\n");
+			RTE_BOND_LOG(ERR, "unable to find PCI device");
 			return -1;
 		}
 		port_id = find_port_id_by_pci_addr(&dev_addr);
@@ -134,7 +131,8 @@ bond_ethdev_parse_slave_port_kvarg(const char *key,
 	if (strcmp(key, PMD_BOND_SLAVE_PORT_KVARG) == 0) {
 		int port_id = parse_port_id(value);
 		if (port_id < 0) {
-			RTE_BOND_LOG(ERR, "Invalid slave port value (%s) specified", value);
+			RTE_BOND_LOG(ERR, "Invalid slave port value (%s) specified",
+				     value);
 			return -1;
 		} else
 			slave_ports->slaves[slave_ports->slave_count++] =
@@ -280,8 +278,7 @@ bond_ethdev_parse_bond_mac_addr_kvarg(const char *key __rte_unused,
 		return -1;
 
 	/* Parse MAC */
-	return cmdline_parse_etheraddr(NULL, value, extra_args,
-		sizeof(struct ether_addr));
+	return rte_ether_unformat_addr(value, extra_args);
 }
 
 int

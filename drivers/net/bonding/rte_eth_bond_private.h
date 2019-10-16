@@ -5,9 +5,14 @@
 #ifndef _RTE_ETH_BOND_PRIVATE_H_
 #define _RTE_ETH_BOND_PRIVATE_H_
 
+#include <stdint.h>
+#include <sys/queue.h>
+
 #include <rte_ethdev_driver.h>
+#include <rte_flow.h>
 #include <rte_spinlock.h>
 #include <rte_bitmap.h>
+#include <rte_flow_driver.h>
 
 #include "rte_eth_bond.h"
 #include "rte_eth_bond_8023ad_private.h"
@@ -28,14 +33,19 @@
 #define PMD_BOND_XMIT_POLICY_LAYER23_KVARG	("l23")
 #define PMD_BOND_XMIT_POLICY_LAYER34_KVARG	("l34")
 
+extern int bond_logtype;
+
 #define RTE_BOND_LOG(lvl, msg, ...)		\
-	RTE_LOG(lvl, PMD, "%s(%d) - " msg "\n", __func__, __LINE__, ##__VA_ARGS__)
+	rte_log(RTE_LOG_ ## lvl, bond_logtype, \
+		"%s(%d) - " msg "\n", __func__, __LINE__, ##__VA_ARGS__)
 
 #define BONDING_MODE_INVALID 0xFF
 
 extern const char *pmd_bond_init_valid_arguments[];
 
 extern struct rte_vdev_driver pmd_bond_drv;
+
+extern const struct rte_flow_ops bond_flow_ops;
 
 /** Port Queue Mapping Structure */
 struct bond_rx_queue {
@@ -75,13 +85,22 @@ struct bond_slave_details {
 	uint8_t link_status_wait_to_complete;
 	uint8_t last_link_status;
 	/**< Port Id of slave eth_dev */
-	struct ether_addr persisted_mac_addr;
+	struct rte_ether_addr persisted_mac_addr;
 
 	uint16_t reta_size;
 };
 
+struct rte_flow {
+	TAILQ_ENTRY(rte_flow) next;
+	/* Slaves flows */
+	struct rte_flow *flows[RTE_MAX_ETHPORTS];
+	/* Flow description for synchronization */
+	struct rte_flow_conv_rule rule;
+	uint8_t rule_data[];
+};
+
 typedef void (*burst_xmit_hash_t)(struct rte_mbuf **buf, uint16_t nb_pkts,
-		uint8_t slave_count, uint16_t *slaves);
+		uint16_t slave_count, uint16_t *slaves);
 
 /** Link Bonding PMD device private configuration Structure */
 struct bond_dev_private {
@@ -89,6 +108,7 @@ struct bond_dev_private {
 	uint8_t mode;						/**< Link Bonding Mode */
 
 	rte_spinlock_t lock;
+	rte_spinlock_t lsc_lock;
 
 	uint16_t primary_port;			/**< Primary Slave Port */
 	uint16_t current_primary_port;		/**< Primary Slave Port */
@@ -102,9 +122,6 @@ struct bond_dev_private {
 
 	uint8_t user_defined_mac;
 	/**< Flag for whether MAC address is user defined or not */
-	uint8_t promiscuous_en;
-	/**< Enabled/disable promiscuous mode on bonding device */
-
 
 	uint8_t link_status_polling_enabled;
 	uint32_t link_status_polling_interval_ms;
@@ -133,8 +150,20 @@ struct bond_dev_private {
 	uint64_t rx_queue_offload_capa; /** per queue Rx offload capability */
 	uint64_t tx_queue_offload_capa; /** per queue Tx offload capability */
 
+	/**< List of the configured flows */
+	TAILQ_HEAD(sub_flows, rte_flow) flow_list;
+
+	/**< Flow isolation state */
+	int flow_isolated;
+	int flow_isolated_valid;
+
 	/** Bit mask of RSS offloads, the bit offset also means flow type */
 	uint64_t flow_type_rss_offloads;
+
+	struct rte_eth_rxconf default_rxconf;	/**< Default RxQ conf. */
+	struct rte_eth_txconf default_txconf;	/**< Default TxQ conf. */
+	struct rte_eth_desc_lim rx_desc_lim;	/**< Rx descriptor limits */
+	struct rte_eth_desc_lim tx_desc_lim;	/**< Tx descriptor limits */
 
 	uint16_t reta_size;
 	struct rte_eth_rss_reta_entry64 reta_conf[ETH_RSS_RETA_SIZE_512 /
@@ -190,21 +219,24 @@ deactivate_slave(struct rte_eth_dev *eth_dev, uint16_t port_id);
 void
 activate_slave(struct rte_eth_dev *eth_dev, uint16_t port_id);
 
-void
-link_properties_set(struct rte_eth_dev *bonded_eth_dev,
-		struct rte_eth_link *slave_dev_link);
 int
-link_properties_valid(struct rte_eth_dev *bonded_eth_dev,
-		struct rte_eth_link *slave_dev_link);
+mac_address_set(struct rte_eth_dev *eth_dev,
+		struct rte_ether_addr *new_mac_addr);
 
 int
-mac_address_set(struct rte_eth_dev *eth_dev, struct ether_addr *new_mac_addr);
-
-int
-mac_address_get(struct rte_eth_dev *eth_dev, struct ether_addr *dst_mac_addr);
+mac_address_get(struct rte_eth_dev *eth_dev,
+		struct rte_ether_addr *dst_mac_addr);
 
 int
 mac_address_slaves_update(struct rte_eth_dev *bonded_eth_dev);
+
+int
+slave_add_mac_addresses(struct rte_eth_dev *bonded_eth_dev,
+		uint16_t slave_port_id);
+
+int
+slave_remove_mac_addresses(struct rte_eth_dev *bonded_eth_dev,
+		uint16_t slave_port_id);
 
 int
 bond_ethdev_mode_set(struct rte_eth_dev *eth_dev, int mode);
@@ -223,15 +255,15 @@ slave_add(struct bond_dev_private *internals,
 
 void
 burst_xmit_l2_hash(struct rte_mbuf **buf, uint16_t nb_pkts,
-		uint8_t slave_count, uint16_t *slaves);
+		uint16_t slave_count, uint16_t *slaves);
 
 void
 burst_xmit_l23_hash(struct rte_mbuf **buf, uint16_t nb_pkts,
-		uint8_t slave_count, uint16_t *slaves);
+		uint16_t slave_count, uint16_t *slaves);
 
 void
 burst_xmit_l34_hash(struct rte_mbuf **buf, uint16_t nb_pkts,
-		uint8_t slave_count, uint16_t *slaves);
+		uint16_t slave_count, uint16_t *slaves);
 
 
 void

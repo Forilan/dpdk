@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2017 Intel Corporation
+ * Copyright(c) 2018 Intel Corporation
  */
 
 #include <unistd.h>
@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <math.h>
 
+#include <rte_string_fns.h>
 #include <rte_mbuf.h>
 #include <rte_log.h>
 #include <rte_cycles.h>
@@ -125,8 +126,11 @@ add_time_stamps(uint16_t pid __rte_unused,
 	for (i = 0; i < nb_pkts; i++) {
 		diff_tsc = now - prev_tsc;
 		timer_tsc += diff_tsc;
-		if (timer_tsc >= samp_intvl) {
+
+		if ((pkts[i]->ol_flags & PKT_RX_TIMESTAMP) == 0
+				&& (timer_tsc >= samp_intvl)) {
 			pkts[i]->timestamp = now;
+			pkts[i]->ol_flags |= PKT_RX_TIMESTAMP;
 			timer_tsc = 0;
 		}
 		prev_tsc = now;
@@ -156,7 +160,7 @@ calc_latency(uint16_t pid __rte_unused,
 
 	now = rte_rdtsc();
 	for (i = 0; i < nb_pkts; i++) {
-		if (pkts[i]->timestamp)
+		if (pkts[i]->ol_flags & PKT_RX_TIMESTAMP)
 			latency[cnt++] = now - pkts[i]->timestamp;
 	}
 
@@ -204,6 +208,7 @@ rte_latencystats_init(uint64_t app_samp_intvl,
 	const char *ptr_strings[NUM_LATENCY_STATS] = {0};
 	const struct rte_memzone *mz = NULL;
 	const unsigned int flags = 0;
+	int ret;
 
 	if (rte_memzone_lookup(MZ_RTE_LATENCY_STATS))
 		return -EEXIST;
@@ -235,7 +240,16 @@ rte_latencystats_init(uint64_t app_samp_intvl,
 	/** Register Rx/Tx callbacks */
 	RTE_ETH_FOREACH_DEV(pid) {
 		struct rte_eth_dev_info dev_info;
-		rte_eth_dev_info_get(pid, &dev_info);
+
+		ret = rte_eth_dev_info_get(pid, &dev_info);
+		if (ret != 0) {
+			RTE_LOG(INFO, LATENCY_STATS,
+				"Error during getting device (port %u) info: %s\n",
+				pid, strerror(-ret));
+
+			continue;
+		}
+
 		for (qid = 0; qid < dev_info.nb_rx_queues; qid++) {
 			cbs = &rx_cbs[pid][qid];
 			cbs->cb = rte_eth_add_first_rx_callback(pid, qid,
@@ -265,11 +279,21 @@ rte_latencystats_uninit(void)
 	uint16_t qid;
 	int ret = 0;
 	struct rxtx_cbs *cbs = NULL;
+	const struct rte_memzone *mz = NULL;
 
 	/** De register Rx/Tx callbacks */
 	RTE_ETH_FOREACH_DEV(pid) {
 		struct rte_eth_dev_info dev_info;
-		rte_eth_dev_info_get(pid, &dev_info);
+
+		ret = rte_eth_dev_info_get(pid, &dev_info);
+		if (ret != 0) {
+			RTE_LOG(INFO, LATENCY_STATS,
+				"Error during getting device (port %u) info: %s\n",
+				pid, strerror(-ret));
+
+			continue;
+		}
+
 		for (qid = 0; qid < dev_info.nb_rx_queues; qid++) {
 			cbs = &rx_cbs[pid][qid];
 			ret = rte_eth_remove_rx_callback(pid, qid, cbs->cb);
@@ -288,6 +312,11 @@ rte_latencystats_uninit(void)
 		}
 	}
 
+	/* free up the memzone */
+	mz = rte_memzone_lookup(MZ_RTE_LATENCY_STATS);
+	if (mz)
+		rte_memzone_free(mz);
+
 	return 0;
 }
 
@@ -300,8 +329,8 @@ rte_latencystats_get_names(struct rte_metric_name *names, uint16_t size)
 		return NUM_LATENCY_STATS;
 
 	for (i = 0; i < NUM_LATENCY_STATS; i++)
-		snprintf(names[i].name, sizeof(names[i].name),
-				"%s", lat_stats_strings[i].name);
+		strlcpy(names[i].name, lat_stats_strings[i].name,
+			sizeof(names[i].name));
 
 	return NUM_LATENCY_STATS;
 }

@@ -16,10 +16,10 @@
 #include <sys/io.h>
 #endif
 
+#include <rte_string_fns.h>
 #include <rte_log.h>
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
-#include <rte_eal_memconfig.h>
 #include <rte_common.h>
 #include <rte_malloc.h>
 
@@ -268,7 +268,7 @@ pci_uio_alloc_resource(struct rte_pci_device *dev,
 		goto error;
 	}
 
-	snprintf((*uio_res)->path, sizeof((*uio_res)->path), "%s", devname);
+	strlcpy((*uio_res)->path, devname, sizeof((*uio_res)->path));
 	memcpy(&(*uio_res)->pci_addr, &dev->addr, sizeof((*uio_res)->pci_addr));
 
 	return 0;
@@ -282,24 +282,21 @@ int
 pci_uio_map_resource_by_index(struct rte_pci_device *dev, int res_idx,
 		struct mapped_pci_resource *uio_res, int map_idx)
 {
-	int fd;
+	int fd = -1;
 	char devname[PATH_MAX];
 	void *mapaddr;
 	struct rte_pci_addr *loc;
 	struct pci_map *maps;
+	int wc_activate = 0;
+
+	if (dev->driver != NULL)
+		wc_activate = dev->driver->drv_flags & RTE_PCI_DRV_WC_ACTIVATE;
 
 	loc = &dev->addr;
 	maps = uio_res->maps;
 
-	/* update devname for mmap  */
-	snprintf(devname, sizeof(devname),
-			"%s/" PCI_PRI_FMT "/resource%d",
-			rte_pci_get_sysfs_path(),
-			loc->domain, loc->bus, loc->devid,
-			loc->function, res_idx);
-
 	/* allocate memory to keep path */
-	maps[map_idx].path = rte_malloc(NULL, strlen(devname) + 1, 0);
+	maps[map_idx].path = rte_malloc(NULL, sizeof(devname), 0);
 	if (maps[map_idx].path == NULL) {
 		RTE_LOG(ERR, EAL, "Cannot allocate memory for path: %s\n",
 				strerror(errno));
@@ -309,11 +306,36 @@ pci_uio_map_resource_by_index(struct rte_pci_device *dev, int res_idx,
 	/*
 	 * open resource file, to mmap it
 	 */
-	fd = open(devname, O_RDWR);
-	if (fd < 0) {
-		RTE_LOG(ERR, EAL, "Cannot open %s: %s\n",
+	if (wc_activate) {
+		/* update devname for mmap  */
+		snprintf(devname, sizeof(devname),
+			"%s/" PCI_PRI_FMT "/resource%d_wc",
+			rte_pci_get_sysfs_path(),
+			loc->domain, loc->bus, loc->devid,
+			loc->function, res_idx);
+
+		fd = open(devname, O_RDWR);
+		if (fd < 0 && errno != ENOENT) {
+			RTE_LOG(INFO, EAL, "%s cannot be mapped. "
+				"Fall-back to non prefetchable mode.\n",
+				devname);
+		}
+	}
+
+	if (!wc_activate || fd < 0) {
+		snprintf(devname, sizeof(devname),
+			"%s/" PCI_PRI_FMT "/resource%d",
+			rte_pci_get_sysfs_path(),
+			loc->domain, loc->bus, loc->devid,
+			loc->function, res_idx);
+
+		/* then try to map resource file */
+		fd = open(devname, O_RDWR);
+		if (fd < 0) {
+			RTE_LOG(ERR, EAL, "Cannot open %s: %s\n",
 				devname, strerror(errno));
-		goto error;
+			goto error;
+		}
 	}
 
 	/* try mapping somewhere close to the end of hugepages */

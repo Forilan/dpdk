@@ -30,7 +30,7 @@ extern "C" {
 #endif
 
 /** Maximum number of multi-core worker cores */
-#define RTE_CRYPTODEV_SCHEDULER_MAX_NB_WORKER_CORES	(64)
+#define RTE_CRYPTODEV_SCHEDULER_MAX_NB_WORKER_CORES	(RTE_MAX_LCORE - 1)
 
 /** Round-robin scheduling mode string */
 #define SCHEDULER_MODE_NAME_ROUND_ROBIN		round-robin
@@ -76,6 +76,7 @@ enum rte_cryptodev_schedule_option_type {
 /**
  * Threshold option structure
  */
+#define RTE_CRYPTODEV_SCHEDULER_PARAM_THRES	"threshold"
 struct rte_cryptodev_scheduler_threshold_option {
 	uint32_t threshold;	/**< Threshold for packet-size mode */
 };
@@ -269,13 +270,13 @@ struct rte_cryptodev_scheduler {
 };
 
 /** Round-robin mode scheduler */
-extern struct rte_cryptodev_scheduler *roundrobin_scheduler;
+extern struct rte_cryptodev_scheduler *crypto_scheduler_roundrobin;
 /** Packet-size based distribution mode scheduler */
-extern struct rte_cryptodev_scheduler *pkt_size_based_distr_scheduler;
+extern struct rte_cryptodev_scheduler *crypto_scheduler_pkt_size_based_distr;
 /** Fail-over mode scheduler */
-extern struct rte_cryptodev_scheduler *failover_scheduler;
+extern struct rte_cryptodev_scheduler *crypto_scheduler_failover;
 /** multi-core mode scheduler */
-extern struct rte_cryptodev_scheduler *multicore_scheduler;
+extern struct rte_cryptodev_scheduler *crypto_scheduler_multicore;
 
 #ifdef __cplusplus
 }

@@ -12,13 +12,11 @@ extern "C" {
 #include <stdint.h>
 #include <stdbool.h>
 
-/* Maximum number of channels per VM */
-#define CHANNEL_CMDS_MAX_VM_CHANNELS 64
-
 /* Valid Commands */
 #define CPU_POWER               1
 #define CPU_POWER_CONNECT       2
 #define PKT_POLICY              3
+#define PKT_POLICY_REMOVE       4
 
 /* CPU Power Command Scaling */
 #define CPU_POWER_SCALE_UP      1
@@ -48,7 +46,8 @@ enum workload {HIGH, MEDIUM, LOW};
 enum policy_to_use {
 	TRAFFIC,
 	TIME,
-	WORKLOAD
+	WORKLOAD,
+	BRANCH_RATIO
 };
 
 struct traffic {
@@ -56,6 +55,9 @@ struct traffic {
 	uint32_t avg_max_packet_thresh;
 	uint32_t max_max_packet_thresh;
 };
+
+#define CORE_TYPE_VIRTUAL 0
+#define CORE_TYPE_PHYSICAL 1
 
 struct channel_packet {
 	uint64_t resource_id; /**< core_num, device */
@@ -69,6 +71,7 @@ struct channel_packet {
 	uint8_t vcpu_to_control[MAX_VCPU_PER_VM];
 	uint8_t num_vcpu;
 	struct timer_profile timer_policy;
+	bool core_type;
 	enum workload workload;
 	enum policy_to_use policy_to_use;
 	struct t_boost_status t_boost_status;

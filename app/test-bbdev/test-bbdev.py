@@ -23,7 +23,7 @@ else:
 if "RTE_TARGET" in os.environ:
     dpdk_target = os.environ["RTE_TARGET"]
 else:
-    dpdk_target = "x86_64-native-linuxapp-gcc"
+    dpdk_target = "x86_64-native-linux-gcc"
 
 parser = argparse.ArgumentParser(
                     description='BBdev Unit Test Application',
@@ -33,7 +33,7 @@ parser.add_argument("-p", "--testapp-path",
                     default=dpdk_path + "/" + dpdk_target + "/app/testbbdev")
 parser.add_argument("-e", "--eal-params",
                     help="EAL arguments which are passed to the test app",
-                    default="--vdev=bbdev_null0")
+                    default="--vdev=baseband_null0")
 parser.add_argument("-t", "--timeout",
                     type=int,
                     help="Timeout in seconds",
@@ -45,7 +45,7 @@ parser.add_argument("-v", "--test-vector",
                     nargs="+",
                     help="Specifies paths to the test vector files.",
                     default=[dpdk_path +
-                    "/app/test-bbdev/test_vectors/bbdev_vector_null.data"])
+                    "/app/test-bbdev/test_vectors/bbdev_null.data"])
 parser.add_argument("-n", "--num-ops",
                     type=int,
                     help="Number of operations to process on device.",
@@ -59,6 +59,9 @@ parser.add_argument("-l", "--num-lcores",
                     type=int,
                     help="Number of lcores to run.",
                     default=16)
+parser.add_argument("-i", "--init-device",
+                    action='store_true',
+                    help="Initialise PF device with default values.")
 
 args = parser.parse_args()
 
@@ -81,6 +84,10 @@ if args.num_lcores:
 if args.test_cases:
     params.extend(["-c"])
     params.extend([",".join(args.test_cases)])
+
+if args.init_device:
+    params.extend(["-i"])
+
 
 exit_status = 0
 for vector in args.test_vector:

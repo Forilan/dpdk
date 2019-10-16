@@ -7,10 +7,12 @@
 #include <rte_ethdev_pci.h>
 #include <rte_malloc.h>
 
-#include "common.h"
-#include "t4_regs.h"
-#include "t4_msg.h"
+#include "base/common.h"
+#include "base/t4_regs.h"
+#include "base/t4_msg.h"
 #include "cxgbe.h"
+#include "cxgbe_pfvf.h"
+#include "mps_tcam.h"
 
 /*
  * Figure out how many Ports and Queue Sets we can support.  This depends on
@@ -20,7 +22,7 @@
 static void size_nports_qsets(struct adapter *adapter)
 {
 	struct vf_resources *vfres = &adapter->params.vfres;
-	unsigned int ethqsets, pmask_nports;
+	unsigned int pmask_nports;
 
 	/*
 	 * The number of "ports" which we support is equal to the number of
@@ -49,23 +51,7 @@ static void size_nports_qsets(struct adapter *adapter)
 		adapter->params.nports = pmask_nports;
 	}
 
-	/*
-	 * We need to reserve an Ingress Queue for the Asynchronous Firmware
-	 * Event Queue.
-	 *
-	 * For each Queue Set, we'll need the ability to allocate two Egress
-	 * Contexts -- one for the Ingress Queue Free List and one for the TX
-	 * Ethernet Queue.
-	 */
-	ethqsets = vfres->niqflint - 1;
-	if (vfres->nethctrl != ethqsets)
-		ethqsets = min(vfres->nethctrl, ethqsets);
-	if (vfres->neq < ethqsets * 2)
-		ethqsets = vfres->neq / 2;
-	if (ethqsets > MAX_ETH_QSETS)
-		ethqsets = MAX_ETH_QSETS;
-	adapter->sge.max_ethqsets = ethqsets;
-
+	cxgbe_configure_max_ethqsets(adapter);
 	if (adapter->sge.max_ethqsets < adapter->params.nports) {
 		dev_warn(adapter->pdev_dev, "only using %d of %d available"
 			 " virtual interfaces (too few Queue Sets)\n",
@@ -137,10 +123,17 @@ static int adap_init0vf(struct adapter *adapter)
 	 * firmware won't understand this and we'll just get
 	 * unencapsulated messages ...
 	 */
-	param = V_FW_PARAMS_MNEM(FW_PARAMS_MNEM_PFVF) |
-		V_FW_PARAMS_PARAM_X(FW_PARAMS_PARAM_PFVF_CPLFW4MSG_ENCAP);
+	param = CXGBE_FW_PARAM_PFVF(CPLFW4MSG_ENCAP);
 	val = 1;
 	t4vf_set_params(adapter, 1, &param, &val);
+
+	/* Query for max number of packets that can be coalesced for Tx */
+	param = CXGBE_FW_PARAM_PFVF(MAX_PKTS_PER_ETH_TX_PKTS_WR);
+	err = t4vf_query_params(adapter, 1, &param, &val);
+	if (!err && val > 0)
+		adapter->params.max_tx_coalesce_num = val;
+	else
+		adapter->params.max_tx_coalesce_num = ETH_COALESCE_VF_PKT_NUM;
 
 	/*
 	 * Grab our Virtual Interface resource allocation, extract the
@@ -245,7 +238,7 @@ int cxgbevf_probe(struct adapter *adapter)
 			goto out_free;
 
 allocate_mac:
-		pi = (struct port_info *)eth_dev->data->dev_private;
+		pi = eth_dev->data->dev_private;
 		adapter->port[i] = pi;
 		pi->eth_dev = eth_dev;
 		pi->adapter = adapter;
@@ -260,12 +253,17 @@ allocate_mac:
 
 		rte_eth_copy_pci_info(pi->eth_dev, adapter->pdev);
 		pi->eth_dev->data->mac_addrs = rte_zmalloc(name,
-							   ETHER_ADDR_LEN, 0);
+							RTE_ETHER_ADDR_LEN, 0);
 		if (!pi->eth_dev->data->mac_addrs) {
 			dev_err(adapter, "%s: Mem allocation failed for storing mac addr, aborting\n",
 				__func__);
 			err = -ENOMEM;
 			goto out_free;
+		}
+
+		if (i > 0) {
+			/* First port will be notified by upper layer */
+			rte_eth_dev_probing_finish(eth_dev);
 		}
 	}
 
@@ -278,11 +276,16 @@ allocate_mac:
 		}
 	}
 
-	cfg_queues(adapter->eth_dev);
-	print_adapter_info(adapter);
-	print_port_info(adapter);
+	cxgbe_cfg_queues(adapter->eth_dev);
+	cxgbe_print_adapter_info(adapter);
+	cxgbe_print_port_info(adapter);
 
-	err = init_rss(adapter);
+	adapter->mpstcam = t4_init_mpstcam(adapter);
+	if (!adapter->mpstcam)
+		dev_warn(adapter,
+			 "VF could not allocate mps tcam table. Continuing\n");
+
+	err = cxgbe_init_rss(adapter);
 	if (err)
 		goto out_free;
 	return 0;
@@ -293,14 +296,7 @@ out_free:
 		if (pi->viid != 0)
 			t4_free_vi(adapter, adapter->mbox, adapter->pf,
 				   0, pi->viid);
-		/* Skip first port since it'll be de-allocated by DPDK */
-		if (i == 0)
-			continue;
-		if (pi->eth_dev) {
-			if (pi->eth_dev->data->dev_private)
-				rte_free(pi->eth_dev->data->dev_private);
-			rte_eth_dev_release_port(pi->eth_dev);
-		}
+		rte_eth_dev_release_port(pi->eth_dev);
 	}
 	return -err;
 }

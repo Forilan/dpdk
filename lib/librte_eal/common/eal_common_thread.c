@@ -16,6 +16,7 @@
 #include <rte_memory.h>
 #include <rte_log.h>
 
+#include "eal_internal_cfg.h"
 #include "eal_private.h"
 #include "eal_thread.h"
 
@@ -34,13 +35,11 @@ rte_lcore_has_role(unsigned int lcore_id, enum rte_lcore_role_t role)
 	if (lcore_id >= RTE_MAX_LCORE)
 		return -EINVAL;
 
-	if (cfg->lcore_role[lcore_id] == role)
-		return 0;
-
-	return -EINVAL;
+	return cfg->lcore_role[lcore_id] == role;
 }
 
-int eal_cpuset_socket_id(rte_cpuset_t *cpusetp)
+static int
+eal_cpuset_socket_id(rte_cpuset_t *cpusetp)
 {
 	unsigned cpu = 0;
 	int socket_id = SOCKET_ID_ANY;
@@ -152,63 +151,70 @@ struct rte_thread_ctrl_params {
 
 static void *rte_thread_init(void *arg)
 {
+	int ret;
 	struct rte_thread_ctrl_params *params = arg;
 	void *(*start_routine)(void *) = params->start_routine;
 	void *routine_arg = params->arg;
 
-	pthread_barrier_wait(&params->configured);
+	ret = pthread_barrier_wait(&params->configured);
+	if (ret == PTHREAD_BARRIER_SERIAL_THREAD) {
+		pthread_barrier_destroy(&params->configured);
+		free(params);
+	}
 
 	return start_routine(routine_arg);
 }
 
-__rte_experimental int
+int
 rte_ctrl_thread_create(pthread_t *thread, const char *name,
 		const pthread_attr_t *attr,
 		void *(*start_routine)(void *), void *arg)
 {
-	struct rte_thread_ctrl_params params = {
-		.start_routine = start_routine,
-		.arg = arg,
-	};
-	unsigned int lcore_id;
-	rte_cpuset_t cpuset;
-	int cpu_found, ret;
+	rte_cpuset_t *cpuset = &internal_config.ctrl_cpuset;
+	struct rte_thread_ctrl_params *params;
+	int ret;
 
-	pthread_barrier_init(&params.configured, NULL, 2);
+	params = malloc(sizeof(*params));
+	if (!params)
+		return -ENOMEM;
 
-	ret = pthread_create(thread, attr, rte_thread_init, (void *)&params);
-	if (ret != 0)
-		return ret;
+	params->start_routine = start_routine;
+	params->arg = arg;
+
+	pthread_barrier_init(&params->configured, NULL, 2);
+
+	ret = pthread_create(thread, attr, rte_thread_init, (void *)params);
+	if (ret != 0) {
+		free(params);
+		return -ret;
+	}
 
 	if (name != NULL) {
 		ret = rte_thread_setname(*thread, name);
 		if (ret < 0)
-			goto fail;
+			RTE_LOG(DEBUG, EAL,
+				"Cannot set name for ctrl thread\n");
 	}
 
-	cpu_found = 0;
-	CPU_ZERO(&cpuset);
-	for (lcore_id = 0; lcore_id < RTE_MAX_LCORE; lcore_id++) {
-		if (eal_cpu_detected(lcore_id) &&
-				rte_lcore_has_role(lcore_id, ROLE_OFF)) {
-			CPU_SET(lcore_id, &cpuset);
-			cpu_found = 1;
-		}
-	}
-	/* if no detected cpu is off, use master core */
-	if (!cpu_found)
-		CPU_SET(rte_get_master_lcore(), &cpuset);
-
-	ret = pthread_setaffinity_np(*thread, sizeof(cpuset), &cpuset);
-	if (ret < 0)
+	ret = pthread_setaffinity_np(*thread, sizeof(*cpuset), cpuset);
+	if (ret)
 		goto fail;
 
-	pthread_barrier_wait(&params.configured);
+	ret = pthread_barrier_wait(&params->configured);
+	if (ret == PTHREAD_BARRIER_SERIAL_THREAD) {
+		pthread_barrier_destroy(&params->configured);
+		free(params);
+	}
 
 	return 0;
 
 fail:
+	if (PTHREAD_BARRIER_SERIAL_THREAD ==
+	    pthread_barrier_wait(&params->configured)) {
+		pthread_barrier_destroy(&params->configured);
+		free(params);
+	}
 	pthread_cancel(*thread);
 	pthread_join(*thread, NULL);
-	return ret;
+	return -ret;
 }

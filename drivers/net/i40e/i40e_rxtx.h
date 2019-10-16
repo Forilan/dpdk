@@ -30,6 +30,8 @@
 #define I40E_TX_MAX_SEG     UINT8_MAX
 #define I40E_TX_MAX_MTU_SEG 8
 
+#define I40E_TX_MIN_PKT_LEN 17
+
 #undef container_of
 #define container_of(ptr, type, member) ({ \
 		typeof(((type *)0)->member)(*__mptr) = (ptr); \
@@ -142,7 +144,6 @@ struct i40e_tx_queue {
 	uint16_t port_id; /**< Device port identifier. */
 	uint16_t queue_id; /**< TX queue index. */
 	uint16_t reg_idx;
-	uint32_t txq_flags;
 	struct i40e_vsi *vsi; /**< the VSI this queue belongs to */
 	uint16_t tx_next_dd;
 	uint16_t tx_next_rs;

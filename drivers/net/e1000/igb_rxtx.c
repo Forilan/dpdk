@@ -50,6 +50,10 @@
 #endif
 /* Bit Mask to indicate what bits required for building TX context */
 #define IGB_TX_OFFLOAD_MASK (			 \
+		PKT_TX_OUTER_IPV6 |	 \
+		PKT_TX_OUTER_IPV4 |	 \
+		PKT_TX_IPV6 |		 \
+		PKT_TX_IPV4 |		 \
 		PKT_TX_VLAN_PKT |		 \
 		PKT_TX_IP_CKSUM |		 \
 		PKT_TX_L4_MASK |		 \
@@ -285,17 +289,20 @@ igbe_set_xmit_ctx(struct igb_tx_queue* txq,
 		case PKT_TX_UDP_CKSUM:
 			type_tucmd_mlhl |= E1000_ADVTXD_TUCMD_L4T_UDP |
 				E1000_ADVTXD_DTYP_CTXT | E1000_ADVTXD_DCMD_DEXT;
-			mss_l4len_idx |= sizeof(struct udp_hdr) << E1000_ADVTXD_L4LEN_SHIFT;
+			mss_l4len_idx |= sizeof(struct rte_udp_hdr)
+				<< E1000_ADVTXD_L4LEN_SHIFT;
 			break;
 		case PKT_TX_TCP_CKSUM:
 			type_tucmd_mlhl |= E1000_ADVTXD_TUCMD_L4T_TCP |
 				E1000_ADVTXD_DTYP_CTXT | E1000_ADVTXD_DCMD_DEXT;
-			mss_l4len_idx |= sizeof(struct tcp_hdr) << E1000_ADVTXD_L4LEN_SHIFT;
+			mss_l4len_idx |= sizeof(struct rte_tcp_hdr)
+				<< E1000_ADVTXD_L4LEN_SHIFT;
 			break;
 		case PKT_TX_SCTP_CKSUM:
 			type_tucmd_mlhl |= E1000_ADVTXD_TUCMD_L4T_SCTP |
 				E1000_ADVTXD_DTYP_CTXT | E1000_ADVTXD_DCMD_DEXT;
-			mss_l4len_idx |= sizeof(struct sctp_hdr) << E1000_ADVTXD_L4LEN_SHIFT;
+			mss_l4len_idx |= sizeof(struct rte_sctp_hdr)
+				<< E1000_ADVTXD_L4LEN_SHIFT;
 			break;
 		default:
 			type_tucmd_mlhl |= E1000_ADVTXD_TUCMD_L4T_RSV |
@@ -625,25 +632,25 @@ eth_igb_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 			if ((m->tso_segsz > IGB_TSO_MAX_MSS) ||
 					(m->l2_len + m->l3_len + m->l4_len >
 					IGB_TSO_MAX_HDRLEN)) {
-				rte_errno = -EINVAL;
+				rte_errno = EINVAL;
 				return i;
 			}
 
 		if (m->ol_flags & IGB_TX_OFFLOAD_NOTSUP_MASK) {
-			rte_errno = -ENOTSUP;
+			rte_errno = ENOTSUP;
 			return i;
 		}
 
 #ifdef RTE_LIBRTE_ETHDEV_DEBUG
 		ret = rte_validate_tx_offload(m);
 		if (ret != 0) {
-			rte_errno = ret;
+			rte_errno = -ret;
 			return i;
 		}
 #endif
 		ret = rte_net_intel_cksum_prepare(m);
 		if (ret != 0) {
-			rte_errno = ret;
+			rte_errno = -ret;
 			return i;
 		}
 	}
@@ -1143,17 +1150,17 @@ eth_igb_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		 */
 		rxm->next = NULL;
 		if (unlikely(rxq->crc_len > 0)) {
-			first_seg->pkt_len -= ETHER_CRC_LEN;
-			if (data_len <= ETHER_CRC_LEN) {
+			first_seg->pkt_len -= RTE_ETHER_CRC_LEN;
+			if (data_len <= RTE_ETHER_CRC_LEN) {
 				rte_pktmbuf_free_seg(rxm);
 				first_seg->nb_segs--;
 				last_seg->data_len = (uint16_t)
 					(last_seg->data_len -
-					 (ETHER_CRC_LEN - data_len));
+					 (RTE_ETHER_CRC_LEN - data_len));
 				last_seg->next = NULL;
 			} else
-				rxm->data_len =
-					(uint16_t) (data_len - ETHER_CRC_LEN);
+				rxm->data_len = (uint16_t)
+					(data_len - RTE_ETHER_CRC_LEN);
 		}
 
 		/*
@@ -1452,43 +1459,28 @@ igb_reset_tx_queue(struct igb_tx_queue *txq, struct rte_eth_dev *dev)
 uint64_t
 igb_get_tx_port_offloads_capa(struct rte_eth_dev *dev)
 {
-	uint64_t rx_offload_capa;
+	uint64_t tx_offload_capa;
 
 	RTE_SET_USED(dev);
-	rx_offload_capa = DEV_TX_OFFLOAD_VLAN_INSERT |
+	tx_offload_capa = DEV_TX_OFFLOAD_VLAN_INSERT |
 			  DEV_TX_OFFLOAD_IPV4_CKSUM  |
 			  DEV_TX_OFFLOAD_UDP_CKSUM   |
 			  DEV_TX_OFFLOAD_TCP_CKSUM   |
 			  DEV_TX_OFFLOAD_SCTP_CKSUM  |
-			  DEV_TX_OFFLOAD_TCP_TSO;
+			  DEV_TX_OFFLOAD_TCP_TSO     |
+			  DEV_TX_OFFLOAD_MULTI_SEGS;
 
-	return rx_offload_capa;
+	return tx_offload_capa;
 }
 
 uint64_t
 igb_get_tx_queue_offloads_capa(struct rte_eth_dev *dev)
 {
-	uint64_t rx_queue_offload_capa;
+	uint64_t tx_queue_offload_capa;
 
-	rx_queue_offload_capa = igb_get_tx_port_offloads_capa(dev);
+	tx_queue_offload_capa = igb_get_tx_port_offloads_capa(dev);
 
-	return rx_queue_offload_capa;
-}
-
-static int
-igb_check_tx_queue_offloads(struct rte_eth_dev *dev, uint64_t requested)
-{
-	uint64_t port_offloads = dev->data->dev_conf.txmode.offloads;
-	uint64_t queue_supported = igb_get_tx_queue_offloads_capa(dev);
-	uint64_t port_supported = igb_get_tx_port_offloads_capa(dev);
-
-	if ((requested & (queue_supported | port_supported)) != requested)
-		return 0;
-
-	if ((port_offloads ^ requested) & port_supported)
-		return 0;
-
-	return 1;
+	return tx_queue_offload_capa;
 }
 
 int
@@ -1502,19 +1494,9 @@ eth_igb_tx_queue_setup(struct rte_eth_dev *dev,
 	struct igb_tx_queue *txq;
 	struct e1000_hw     *hw;
 	uint32_t size;
+	uint64_t offloads;
 
-	if (!igb_check_tx_queue_offloads(dev, tx_conf->offloads)) {
-		PMD_INIT_LOG(ERR, "%p: Tx queue offloads 0x%" PRIx64
-			" don't match port offloads 0x%" PRIx64
-			" or supported port offloads 0x%" PRIx64
-			" or supported queue offloads 0x%" PRIx64,
-			(void *)dev,
-			tx_conf->offloads,
-			dev->data->dev_conf.txmode.offloads,
-			igb_get_tx_port_offloads_capa(dev),
-			igb_get_tx_queue_offloads_capa(dev));
-		return -ENOTSUP;
-	}
+	offloads = tx_conf->offloads | dev->data->dev_conf.txmode.offloads;
 
 	hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
@@ -1599,7 +1581,7 @@ eth_igb_tx_queue_setup(struct rte_eth_dev *dev,
 	dev->tx_pkt_burst = eth_igb_xmit_pkts;
 	dev->tx_pkt_prepare = &eth_igb_prep_pkts;
 	dev->data->tx_queues[queue_idx] = txq;
-	txq->offloads = tx_conf->offloads;
+	txq->offloads = offloads;
 
 	return 0;
 }
@@ -1663,7 +1645,7 @@ igb_get_rx_port_offloads_capa(struct rte_eth_dev *dev)
 			  DEV_RX_OFFLOAD_UDP_CKSUM   |
 			  DEV_RX_OFFLOAD_TCP_CKSUM   |
 			  DEV_RX_OFFLOAD_JUMBO_FRAME |
-			  DEV_RX_OFFLOAD_CRC_STRIP   |
+			  DEV_RX_OFFLOAD_KEEP_CRC    |
 			  DEV_RX_OFFLOAD_SCATTER;
 
 	return rx_offload_capa;
@@ -1690,22 +1672,6 @@ igb_get_rx_queue_offloads_capa(struct rte_eth_dev *dev)
 	return rx_queue_offload_capa;
 }
 
-static int
-igb_check_rx_queue_offloads(struct rte_eth_dev *dev, uint64_t requested)
-{
-	uint64_t port_offloads = dev->data->dev_conf.rxmode.offloads;
-	uint64_t queue_supported = igb_get_rx_queue_offloads_capa(dev);
-	uint64_t port_supported = igb_get_rx_port_offloads_capa(dev);
-
-	if ((requested & (queue_supported | port_supported)) != requested)
-		return 0;
-
-	if ((port_offloads ^ requested) & port_supported)
-		return 0;
-
-	return 1;
-}
-
 int
 eth_igb_rx_queue_setup(struct rte_eth_dev *dev,
 			 uint16_t queue_idx,
@@ -1718,19 +1684,9 @@ eth_igb_rx_queue_setup(struct rte_eth_dev *dev,
 	struct igb_rx_queue *rxq;
 	struct e1000_hw     *hw;
 	unsigned int size;
+	uint64_t offloads;
 
-	if (!igb_check_rx_queue_offloads(dev, rx_conf->offloads)) {
-		PMD_INIT_LOG(ERR, "%p: Rx queue offloads 0x%" PRIx64
-			" don't match port offloads 0x%" PRIx64
-			" or supported port offloads 0x%" PRIx64
-			" or supported queue offloads 0x%" PRIx64,
-			(void *)dev,
-			rx_conf->offloads,
-			dev->data->dev_conf.rxmode.offloads,
-			igb_get_rx_port_offloads_capa(dev),
-			igb_get_rx_queue_offloads_capa(dev));
-		return -ENOTSUP;
-	}
+	offloads = rx_conf->offloads | dev->data->dev_conf.rxmode.offloads;
 
 	hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
@@ -1756,7 +1712,7 @@ eth_igb_rx_queue_setup(struct rte_eth_dev *dev,
 			  RTE_CACHE_LINE_SIZE);
 	if (rxq == NULL)
 		return -ENOMEM;
-	rxq->offloads = rx_conf->offloads;
+	rxq->offloads = offloads;
 	rxq->mb_pool = mp;
 	rxq->nb_rx_desc = nb_desc;
 	rxq->pthresh = rx_conf->rx_thresh.pthresh;
@@ -1771,8 +1727,10 @@ eth_igb_rx_queue_setup(struct rte_eth_dev *dev,
 	rxq->reg_idx = (uint16_t)((RTE_ETH_DEV_SRIOV(dev).active == 0) ?
 		queue_idx : RTE_ETH_DEV_SRIOV(dev).def_pool_q_idx + queue_idx);
 	rxq->port_id = dev->data->port_id;
-	rxq->crc_len = (uint8_t)((dev->data->dev_conf.rxmode.offloads &
-			DEV_RX_OFFLOAD_CRC_STRIP) ? 0 : ETHER_CRC_LEN);
+	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC)
+		rxq->crc_len = RTE_ETHER_CRC_LEN;
+	else
+		rxq->crc_len = 0;
 
 	/*
 	 *  Allocate RX ring hardware descriptors. A memzone large enough to
@@ -2422,8 +2380,10 @@ eth_igb_rx_init(struct rte_eth_dev *dev)
 		 * Reset crc_len in case it was changed after queue setup by a
 		 *  call to configure
 		 */
-		rxq->crc_len = (uint8_t)(dev->data->dev_conf.rxmode.offloads &
-				DEV_RX_OFFLOAD_CRC_STRIP ? 0 : ETHER_CRC_LEN);
+		if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC)
+			rxq->crc_len = RTE_ETHER_CRC_LEN;
+		else
+			rxq->crc_len = 0;
 
 		bus_addr = rxq->rx_ring_phys_addr;
 		E1000_WRITE_REG(hw, E1000_RDLEN(rxq->reg_idx),
@@ -2552,23 +2512,7 @@ eth_igb_rx_init(struct rte_eth_dev *dev)
 	E1000_WRITE_REG(hw, E1000_RXCSUM, rxcsum);
 
 	/* Setup the Receive Control Register. */
-	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_CRC_STRIP) {
-		rctl |= E1000_RCTL_SECRC; /* Strip Ethernet CRC. */
-
-		/* set STRCRC bit in all queues */
-		if (hw->mac.type == e1000_i350 ||
-		    hw->mac.type == e1000_i210 ||
-		    hw->mac.type == e1000_i211 ||
-		    hw->mac.type == e1000_i354) {
-			for (i = 0; i < dev->data->nb_rx_queues; i++) {
-				rxq = dev->data->rx_queues[i];
-				uint32_t dvmolr = E1000_READ_REG(hw,
-					E1000_DVMOLR(rxq->reg_idx));
-				dvmolr |= E1000_DVMOLR_STRCRC;
-				E1000_WRITE_REG(hw, E1000_DVMOLR(rxq->reg_idx), dvmolr);
-			}
-		}
-	} else {
+	if (dev->data->dev_conf.rxmode.offloads & DEV_RX_OFFLOAD_KEEP_CRC) {
 		rctl &= ~E1000_RCTL_SECRC; /* Do not Strip Ethernet CRC. */
 
 		/* clear STRCRC bit in all queues */
@@ -2581,6 +2525,22 @@ eth_igb_rx_init(struct rte_eth_dev *dev)
 				uint32_t dvmolr = E1000_READ_REG(hw,
 					E1000_DVMOLR(rxq->reg_idx));
 				dvmolr &= ~E1000_DVMOLR_STRCRC;
+				E1000_WRITE_REG(hw, E1000_DVMOLR(rxq->reg_idx), dvmolr);
+			}
+		}
+	} else {
+		rctl |= E1000_RCTL_SECRC; /* Strip Ethernet CRC. */
+
+		/* set STRCRC bit in all queues */
+		if (hw->mac.type == e1000_i350 ||
+		    hw->mac.type == e1000_i210 ||
+		    hw->mac.type == e1000_i211 ||
+		    hw->mac.type == e1000_i354) {
+			for (i = 0; i < dev->data->nb_rx_queues; i++) {
+				rxq = dev->data->rx_queues[i];
+				uint32_t dvmolr = E1000_READ_REG(hw,
+					E1000_DVMOLR(rxq->reg_idx));
+				dvmolr |= E1000_DVMOLR_STRCRC;
 				E1000_WRITE_REG(hw, E1000_DVMOLR(rxq->reg_idx), dvmolr);
 			}
 		}
@@ -2898,12 +2858,57 @@ igb_txq_info_get(struct rte_eth_dev *dev, uint16_t queue_id,
 }
 
 int
+igb_rss_conf_init(struct rte_eth_dev *dev,
+		  struct igb_rte_flow_rss_conf *out,
+		  const struct rte_flow_action_rss *in)
+{
+	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+
+	if (in->key_len > RTE_DIM(out->key) ||
+	    ((hw->mac.type == e1000_82576) &&
+	     (in->queue_num > IGB_MAX_RX_QUEUE_NUM_82576)) ||
+	    ((hw->mac.type != e1000_82576) &&
+	     (in->queue_num > IGB_MAX_RX_QUEUE_NUM)))
+		return -EINVAL;
+	out->conf = (struct rte_flow_action_rss){
+		.func = in->func,
+		.level = in->level,
+		.types = in->types,
+		.key_len = in->key_len,
+		.queue_num = in->queue_num,
+		.key = memcpy(out->key, in->key, in->key_len),
+		.queue = memcpy(out->queue, in->queue,
+				sizeof(*in->queue) * in->queue_num),
+	};
+	return 0;
+}
+
+int
+igb_action_rss_same(const struct rte_flow_action_rss *comp,
+		    const struct rte_flow_action_rss *with)
+{
+	return (comp->func == with->func &&
+		comp->level == with->level &&
+		comp->types == with->types &&
+		comp->key_len == with->key_len &&
+		comp->queue_num == with->queue_num &&
+		!memcmp(comp->key, with->key, with->key_len) &&
+		!memcmp(comp->queue, with->queue,
+			sizeof(*with->queue) * with->queue_num));
+}
+
+int
 igb_config_rss_filter(struct rte_eth_dev *dev,
 		struct igb_rte_flow_rss_conf *conf, bool add)
 {
 	uint32_t shift;
 	uint16_t i, j;
-	struct rte_eth_rss_conf rss_conf = conf->rss_conf;
+	struct rte_eth_rss_conf rss_conf = {
+		.rss_key = conf->conf.key_len ?
+			(void *)(uintptr_t)conf->conf.key : NULL,
+		.rss_key_len = conf->conf.key_len,
+		.rss_hf = conf->conf.types,
+	};
 	struct e1000_filter_info *filter_info =
 		E1000_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
 	struct e1000_hw *hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -2911,8 +2916,8 @@ igb_config_rss_filter(struct rte_eth_dev *dev,
 	hw = E1000_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 
 	if (!add) {
-		if (memcmp(conf, &filter_info->rss_info,
-			sizeof(struct igb_rte_flow_rss_conf)) == 0) {
+		if (igb_action_rss_same(&filter_info->rss_info.conf,
+					&conf->conf)) {
 			igb_rss_disable(dev);
 			memset(&filter_info->rss_info, 0,
 				sizeof(struct igb_rte_flow_rss_conf));
@@ -2921,7 +2926,7 @@ igb_config_rss_filter(struct rte_eth_dev *dev,
 		return -EINVAL;
 	}
 
-	if (filter_info->rss_info.num)
+	if (filter_info->rss_info.conf.queue_num)
 		return -EINVAL;
 
 	/* Fill in redirection table. */
@@ -2933,9 +2938,9 @@ igb_config_rss_filter(struct rte_eth_dev *dev,
 		} reta;
 		uint8_t q_idx;
 
-		if (j == conf->num)
+		if (j == conf->conf.queue_num)
 			j = 0;
-		q_idx = conf->queue[j];
+		q_idx = conf->conf.queue[j];
 		reta.bytes[i & 3] = (uint8_t)(q_idx << shift);
 		if ((i & 3) == 3)
 			E1000_WRITE_REG(hw, E1000_RETA(i >> 2), reta.dword);
@@ -2952,8 +2957,8 @@ igb_config_rss_filter(struct rte_eth_dev *dev,
 		rss_conf.rss_key = rss_intel_key; /* Default hash key */
 	igb_hw_rss_hash_set(hw, &rss_conf);
 
-	rte_memcpy(&filter_info->rss_info,
-		conf, sizeof(struct igb_rte_flow_rss_conf));
+	if (igb_rss_conf_init(dev, &filter_info->rss_info, &conf->conf))
+		return -EINVAL;
 
 	return 0;
 }

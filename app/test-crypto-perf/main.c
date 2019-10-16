@@ -21,8 +21,10 @@
 #include "cperf_test_verify.h"
 #include "cperf_test_pmd_cyclecount.h"
 
-#define NUM_SESSIONS 2048
-#define SESS_MEMPOOL_CACHE_SIZE 64
+static struct {
+	struct rte_mempool *sess_mp;
+	struct rte_mempool *priv_mp;
+} session_pool_socket[RTE_MAX_NUMA_NODES];
 
 const char *cperf_test_type_strs[] = {
 	[CPERF_TEST_TYPE_THROUGHPUT] = "throughput",
@@ -63,10 +65,61 @@ const struct cperf_test cperf_testmap[] = {
 };
 
 static int
-cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs,
-			struct rte_mempool *session_pool_socket[])
+fill_session_pool_socket(int32_t socket_id, uint32_t session_priv_size,
+		uint32_t nb_sessions)
+{
+	char mp_name[RTE_MEMPOOL_NAMESIZE];
+	struct rte_mempool *sess_mp;
+
+	if (session_pool_socket[socket_id].priv_mp == NULL) {
+		snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
+			"priv_sess_mp_%u", socket_id);
+
+		sess_mp = rte_mempool_create(mp_name,
+					nb_sessions,
+					session_priv_size,
+					0, 0, NULL, NULL, NULL,
+					NULL, socket_id,
+					0);
+
+		if (sess_mp == NULL) {
+			printf("Cannot create pool \"%s\" on socket %d\n",
+				mp_name, socket_id);
+			return -ENOMEM;
+		}
+
+		printf("Allocated pool \"%s\" on socket %d\n",
+			mp_name, socket_id);
+		session_pool_socket[socket_id].priv_mp = sess_mp;
+	}
+
+	if (session_pool_socket[socket_id].sess_mp == NULL) {
+
+		snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
+			"sess_mp_%u", socket_id);
+
+		sess_mp = rte_cryptodev_sym_session_pool_create(mp_name,
+					nb_sessions, 0, 0, 0, socket_id);
+
+		if (sess_mp == NULL) {
+			printf("Cannot create pool \"%s\" on socket %d\n",
+				mp_name, socket_id);
+			return -ENOMEM;
+		}
+
+		printf("Allocated pool \"%s\" on socket %d\n",
+			mp_name, socket_id);
+		session_pool_socket[socket_id].sess_mp = sess_mp;
+	}
+
+	return 0;
+}
+
+static int
+cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs)
 {
 	uint8_t enabled_cdev_count = 0, nb_lcores, cdev_id;
+	uint32_t sessions_needed = 0;
 	unsigned int i, j;
 	int ret;
 
@@ -80,6 +133,12 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs,
 
 	nb_lcores = rte_lcore_count() - 1;
 
+	if (nb_lcores < 1) {
+		RTE_LOG(ERR, USER1,
+			"Number of enabled cores need to be higher than 1\n");
+		return -EINVAL;
+	}
+
 	/*
 	 * Use less number of devices,
 	 * if there are more available than cores.
@@ -91,7 +150,7 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs,
 	uint32_t max_sess_size = 0, sess_size;
 
 	for (cdev_id = 0; cdev_id < rte_cryptodev_count(); cdev_id++) {
-		sess_size = rte_cryptodev_get_private_session_size(cdev_id);
+		sess_size = rte_cryptodev_sym_get_private_session_size(cdev_id);
 		if (sess_size > max_sess_size)
 			max_sess_size = sess_size;
 	}
@@ -124,6 +183,11 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs,
 
 		struct rte_cryptodev_info cdev_info;
 		uint8_t socket_id = rte_cryptodev_socket_id(cdev_id);
+		/* range check the socket_id - negative values become big
+		 * positive ones due to use of unsigned value
+		 */
+		if (socket_id >= RTE_MAX_NUMA_NODES)
+			socket_id = 0;
 
 		rte_cryptodev_info_get(cdev_id, &cdev_info);
 		if (opts->nb_qps > cdev_info.max_nb_queue_pairs) {
@@ -136,37 +200,70 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs,
 		}
 		struct rte_cryptodev_config conf = {
 			.nb_queue_pairs = opts->nb_qps,
-			.socket_id = socket_id
+			.socket_id = socket_id,
+			.ff_disable = RTE_CRYPTODEV_FF_SECURITY |
+				      RTE_CRYPTODEV_FF_ASYMMETRIC_CRYPTO,
 		};
 
 		struct rte_cryptodev_qp_conf qp_conf = {
 			.nb_descriptors = opts->nb_descriptors
 		};
 
-		if (session_pool_socket[socket_id] == NULL) {
-			char mp_name[RTE_MEMPOOL_NAMESIZE];
-			struct rte_mempool *sess_mp;
-
-			snprintf(mp_name, RTE_MEMPOOL_NAMESIZE,
-				"sess_mp_%u", socket_id);
-
-			sess_mp = rte_mempool_create(mp_name,
-						NUM_SESSIONS,
-						max_sess_size,
-						SESS_MEMPOOL_CACHE_SIZE,
-						0, NULL, NULL, NULL,
-						NULL, socket_id,
-						0);
-
-			if (sess_mp == NULL) {
-				printf("Cannot create session pool on socket %d\n",
-					socket_id);
-				return -ENOMEM;
-			}
-
-			printf("Allocated session pool on socket %d\n", socket_id);
-			session_pool_socket[socket_id] = sess_mp;
+		/**
+		 * Device info specifies the min headroom and tailroom
+		 * requirement for the crypto PMD. This need to be honoured
+		 * by the application, while creating mbuf.
+		 */
+		if (opts->headroom_sz < cdev_info.min_mbuf_headroom_req) {
+			/* Update headroom */
+			opts->headroom_sz = cdev_info.min_mbuf_headroom_req;
 		}
+		if (opts->tailroom_sz < cdev_info.min_mbuf_tailroom_req) {
+			/* Update tailroom */
+			opts->tailroom_sz = cdev_info.min_mbuf_tailroom_req;
+		}
+
+		/* Update segment size to include headroom & tailroom */
+		opts->segment_sz += (opts->headroom_sz + opts->tailroom_sz);
+
+		uint32_t dev_max_nb_sess = cdev_info.sym.max_nb_sessions;
+		/*
+		 * Two sessions objects are required for each session
+		 * (one for the header, one for the private data)
+		 */
+		if (!strcmp((const char *)opts->device_type,
+					"crypto_scheduler")) {
+#ifdef RTE_LIBRTE_PMD_CRYPTO_SCHEDULER
+			uint32_t nb_slaves =
+				rte_cryptodev_scheduler_slaves_get(cdev_id,
+								NULL);
+
+			sessions_needed = enabled_cdev_count *
+				opts->nb_qps * nb_slaves;
+#endif
+		} else
+			sessions_needed = enabled_cdev_count *
+						opts->nb_qps;
+
+		/*
+		 * A single session is required per queue pair
+		 * in each device
+		 */
+		if (dev_max_nb_sess != 0 && dev_max_nb_sess < opts->nb_qps) {
+			RTE_LOG(ERR, USER1,
+				"Device does not support at least "
+				"%u sessions\n", opts->nb_qps);
+			return -ENOTSUP;
+		}
+
+		ret = fill_session_pool_socket(socket_id, max_sess_size,
+				sessions_needed);
+		if (ret < 0)
+			return ret;
+
+		qp_conf.mp_session = session_pool_socket[socket_id].sess_mp;
+		qp_conf.mp_session_private =
+				session_pool_socket[socket_id].priv_mp;
 
 		ret = rte_cryptodev_configure(cdev_id, &conf);
 		if (ret < 0) {
@@ -176,8 +273,7 @@ cperf_initialize_cryptodev(struct cperf_options *opts, uint8_t *enabled_cdevs,
 
 		for (j = 0; j < opts->nb_qps; j++) {
 			ret = rte_cryptodev_queue_pair_setup(cdev_id, j,
-				&qp_conf, socket_id,
-				session_pool_socket[socket_id]);
+				&qp_conf, socket_id);
 			if (ret < 0) {
 				printf("Failed to setup queue pair %u on "
 					"cryptodev %u",	j, cdev_id);
@@ -292,7 +388,9 @@ cperf_check_test_vector(struct cperf_options *opts,
 				return -1;
 			if (test_vec->ciphertext.length < opts->max_buffer_size)
 				return -1;
-			if (test_vec->cipher_iv.data == NULL)
+			/* Cipher IV is only required for some algorithms */
+			if (opts->cipher_iv_sz &&
+					test_vec->cipher_iv.data == NULL)
 				return -1;
 			if (test_vec->cipher_iv.length != opts->cipher_iv_sz)
 				return -1;
@@ -307,7 +405,9 @@ cperf_check_test_vector(struct cperf_options *opts,
 				return -1;
 			if (test_vec->plaintext.length < opts->max_buffer_size)
 				return -1;
-			if (test_vec->auth_key.data == NULL)
+			/* Auth key is only required for some algorithms */
+			if (opts->auth_key_sz &&
+					test_vec->auth_key.data == NULL)
 				return -1;
 			if (test_vec->auth_key.length != opts->auth_key_sz)
 				return -1;
@@ -371,6 +471,10 @@ cperf_check_test_vector(struct cperf_options *opts,
 			return -1;
 		if (test_vec->ciphertext.length < opts->max_buffer_size)
 			return -1;
+		if (test_vec->aead_key.data == NULL)
+			return -1;
+		if (test_vec->aead_key.length != opts->aead_key_sz)
+			return -1;
 		if (test_vec->aead_iv.data == NULL)
 			return -1;
 		if (test_vec->aead_iv.length != opts->aead_iv_sz)
@@ -393,10 +497,7 @@ main(int argc, char **argv)
 	struct cperf_options opts = {0};
 	struct cperf_test_vector *t_vec = NULL;
 	struct cperf_op_fns op_fns;
-
 	void *ctx[RTE_MAX_LCORE] = { };
-	struct rte_mempool *session_pool_socket[RTE_MAX_NUMA_NODES] = { 0 };
-
 	int nb_cryptodevs = 0;
 	uint16_t total_nb_qps = 0;
 	uint8_t cdev_id, i;
@@ -429,8 +530,7 @@ main(int argc, char **argv)
 		goto err;
 	}
 
-	nb_cryptodevs = cperf_initialize_cryptodev(&opts, enabled_cdevs,
-			session_pool_socket);
+	nb_cryptodevs = cperf_initialize_cryptodev(&opts, enabled_cdevs);
 
 	if (!opts.silent)
 		cperf_options_dump(&opts);
@@ -498,7 +598,9 @@ main(int argc, char **argv)
 		uint8_t socket_id = rte_cryptodev_socket_id(cdev_id);
 
 		ctx[i] = cperf_testmap[opts.test].constructor(
-				session_pool_socket[socket_id], cdev_id, qp_id,
+				session_pool_socket[socket_id].sess_mp,
+				session_pool_socket[socket_id].priv_mp,
+				cdev_id, qp_id,
 				&opts, t_vec, &op_fns);
 		if (ctx[i] == NULL) {
 			RTE_LOG(ERR, USER1, "Test run constructor failed\n");
@@ -564,9 +666,12 @@ main(int argc, char **argv)
 
 			if (i == total_nb_qps)
 				break;
-			rte_eal_wait_lcore(lcore_id);
+			ret |= rte_eal_wait_lcore(lcore_id);
 			i++;
 		}
+
+		if (ret != EXIT_SUCCESS)
+			goto err;
 	} else {
 
 		/* Get next size from range or list */
@@ -591,9 +696,12 @@ main(int argc, char **argv)
 
 				if (i == total_nb_qps)
 					break;
-				rte_eal_wait_lcore(lcore_id);
+				ret |= rte_eal_wait_lcore(lcore_id);
 				i++;
 			}
+
+			if (ret != EXIT_SUCCESS)
+				goto err;
 
 			/* Get next size from range or list */
 			if (opts.inc_buffer_size != 0)

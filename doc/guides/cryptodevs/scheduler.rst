@@ -71,6 +71,11 @@ two calls:
   mode parameter values are specified in the "Cryptodev Scheduler Modes
   Overview" section.
 
+* mode_param: Specify the mode-specific parameter. Some scheduling modes
+  may be initialized with specific parameters other than the default ones,
+  such as the **threshold** packet size of **packet-size-distr** mode. This
+  parameter fulfills the purpose.
+
 * ordering: Specify the status of the crypto operations ordering feature.
   The value of this parameter can be "enable" or "disable". This feature
   is disabled by default.
@@ -132,7 +137,12 @@ operation:
    **option_type** must be **CDEV_SCHED_OPTION_THRESHOLD** and **option** should
    point to a rte_cryptodev_scheduler_threshold_option structure filled with
    appropriate threshold value. Please NOTE this threshold has be a power-of-2
-   unsigned integer.
+   unsigned integer. It is possible to use **mode_param** initialization
+   parameter to achieve the same purpose. For example:
+
+   ... --vdev "crypto_scheduler,mode=packet-size-distr,mode_param=threshold:512" ...
+
+   The above parameter will overwrite the threshold value to 512.
 
 *   **CDEV_SCHED_MODE_FAILOVER:**
 
@@ -155,7 +165,7 @@ operation:
    For pure small packet size (64 bytes) traffic however the multi-core mode is not
    an optimal solution, as it doesn't give significant per-core performance improvement.
    For mixed traffic (IMIX) the optimal number of worker cores is around 2-3.
-   For large packets (1.5 Kbytes) scheduler shows linear scaling in performance
+   For large packets (1.5 kbytes) scheduler shows linear scaling in performance
    up to eight cores.
    Each worker uses its own slave cryptodev. Only software cryptodevs
    are supported. Only the same type of cryptodevs should be used concurrently.

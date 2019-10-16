@@ -46,9 +46,7 @@ int otx_net_logtype_mbox;
 int otx_net_logtype_init;
 int otx_net_logtype_driver;
 
-RTE_INIT(otx_net_init_log);
-static void
-otx_net_init_log(void)
+RTE_INIT(otx_net_init_log)
 {
 	otx_net_logtype_mbox = rte_log_register("pmd.net.octeontx.mbox");
 	if (otx_net_logtype_mbox >= 0)
@@ -144,7 +142,8 @@ octeontx_port_open(struct octeontx_nic *nic)
 	nic->mcast_mode = bgx_port_conf.mcast_mode;
 	nic->speed	= bgx_port_conf.mode;
 
-	memcpy(&nic->mac_addr[0], &bgx_port_conf.macaddr[0], ETHER_ADDR_LEN);
+	memcpy(&nic->mac_addr[0], &bgx_port_conf.macaddr[0],
+		RTE_ETHER_ADDR_LEN);
 
 	octeontx_log_dbg("port opened %d", nic->port_id);
 	return res;
@@ -175,7 +174,7 @@ octeontx_port_stop(struct octeontx_nic *nic)
 	return octeontx_bgx_port_stop(nic->port_id);
 }
 
-static void
+static int
 octeontx_port_promisc_set(struct octeontx_nic *nic, int en)
 {
 	struct rte_eth_dev *dev;
@@ -186,15 +185,19 @@ octeontx_port_promisc_set(struct octeontx_nic *nic, int en)
 	dev = nic->dev;
 
 	res = octeontx_bgx_port_promisc_set(nic->port_id, en);
-	if (res < 0)
+	if (res < 0) {
 		octeontx_log_err("failed to set promiscuous mode %d",
 				nic->port_id);
+		return res;
+	}
 
 	/* Set proper flag for the mode */
 	dev->data->promiscuous = (en != 0) ? 1 : 0;
 
 	octeontx_log_dbg("port %d : promiscuous mode %s",
 			nic->port_id, en ? "set" : "unset");
+
+	return 0;
 }
 
 static int
@@ -225,12 +228,12 @@ octeontx_port_stats(struct octeontx_nic *nic, struct rte_eth_stats *stats)
 	return 0;
 }
 
-static void
+static int
 octeontx_port_stats_clr(struct octeontx_nic *nic)
 {
 	PMD_INIT_FUNC_TRACE();
 
-	octeontx_bgx_port_stats_clr(nic->port_id);
+	return octeontx_bgx_port_stats_clr(nic->port_id);
 }
 
 static inline void
@@ -262,8 +265,6 @@ octeontx_dev_configure(struct rte_eth_dev *dev)
 	struct rte_eth_rxmode *rxmode = &conf->rxmode;
 	struct rte_eth_txmode *txmode = &conf->txmode;
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
-	uint64_t configured_offloads;
-	uint64_t unsupported_offloads;
 	int ret;
 
 	PMD_INIT_FUNC_TRACE();
@@ -285,38 +286,9 @@ octeontx_dev_configure(struct rte_eth_dev *dev)
 		return -EINVAL;
 	}
 
-	configured_offloads = rxmode->offloads;
-
-	if (!(configured_offloads & DEV_RX_OFFLOAD_CRC_STRIP)) {
-		PMD_INIT_LOG(NOTICE, "can't disable hw crc strip");
-		configured_offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
-	}
-
-	unsupported_offloads = configured_offloads & ~OCTEONTX_RX_OFFLOADS;
-
-	if (unsupported_offloads) {
-		PMD_INIT_LOG(ERR, "Rx offloads 0x%" PRIx64 " are not supported. "
-		      "Requested 0x%" PRIx64 " supported 0x%" PRIx64 "\n",
-		      unsupported_offloads, configured_offloads,
-		      (uint64_t)OCTEONTX_RX_OFFLOADS);
-		return -ENOTSUP;
-	}
-
-	configured_offloads = txmode->offloads;
-
-	if (!(configured_offloads & DEV_TX_OFFLOAD_MT_LOCKFREE)) {
+	if (!(txmode->offloads & DEV_TX_OFFLOAD_MT_LOCKFREE)) {
 		PMD_INIT_LOG(NOTICE, "cant disable lockfree tx");
-		configured_offloads |= DEV_TX_OFFLOAD_MT_LOCKFREE;
-	}
-
-	unsupported_offloads = configured_offloads & ~OCTEONTX_TX_OFFLOADS;
-
-	if (unsupported_offloads) {
-		PMD_INIT_LOG(ERR, "Tx offloads 0x%" PRIx64 " are not supported."
-		      "Requested 0x%" PRIx64 " supported 0x%" PRIx64 ".\n",
-		      unsupported_offloads, configured_offloads,
-		      (uint64_t)OCTEONTX_TX_OFFLOADS);
-		return -ENOTSUP;
+		txmode->offloads |= DEV_TX_OFFLOAD_MT_LOCKFREE;
 	}
 
 	if (conf->link_speeds & ETH_LINK_SPEED_FIXED) {
@@ -378,6 +350,9 @@ octeontx_dev_close(struct rte_eth_dev *dev)
 
 		rte_free(txq);
 	}
+
+	dev->tx_pkt_burst = NULL;
+	dev->rx_pkt_burst = NULL;
 }
 
 static int
@@ -471,27 +446,24 @@ octeontx_dev_stop(struct rte_eth_dev *dev)
 			     ret);
 		return;
 	}
-
-	dev->tx_pkt_burst = NULL;
-	dev->rx_pkt_burst = NULL;
 }
 
-static void
+static int
 octeontx_dev_promisc_enable(struct rte_eth_dev *dev)
 {
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
 
 	PMD_INIT_FUNC_TRACE();
-	octeontx_port_promisc_set(nic, 1);
+	return octeontx_port_promisc_set(nic, 1);
 }
 
-static void
+static int
 octeontx_dev_promisc_disable(struct rte_eth_dev *dev)
 {
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
 
 	PMD_INIT_FUNC_TRACE();
-	octeontx_port_promisc_set(nic, 0);
+	return octeontx_port_promisc_set(nic, 0);
 }
 
 static int
@@ -577,18 +549,18 @@ octeontx_dev_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 	return octeontx_port_stats(nic, stats);
 }
 
-static void
+static int
 octeontx_dev_stats_reset(struct rte_eth_dev *dev)
 {
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
 
 	PMD_INIT_FUNC_TRACE();
-	octeontx_port_stats_clr(nic);
+	return octeontx_port_stats_clr(nic);
 }
 
 static int
 octeontx_dev_default_mac_addr_set(struct rte_eth_dev *dev,
-					struct ether_addr *addr)
+					struct rte_ether_addr *addr)
 {
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
 	int ret;
@@ -601,7 +573,7 @@ octeontx_dev_default_mac_addr_set(struct rte_eth_dev *dev,
 	return ret;
 }
 
-static void
+static int
 octeontx_dev_info(struct rte_eth_dev *dev,
 		struct rte_eth_dev_info *dev_info)
 {
@@ -627,14 +599,13 @@ octeontx_dev_info(struct rte_eth_dev *dev,
 
 	dev_info->default_txconf = (struct rte_eth_txconf) {
 		.tx_free_thresh = 0,
-		.txq_flags =
-			ETH_TXQ_FLAGS_NOMULTSEGS |
-			ETH_TXQ_FLAGS_NOOFFLOADS |
-			ETH_TXQ_FLAGS_NOXSUMS,
+		.offloads = OCTEONTX_TX_OFFLOADS,
 	};
 
 	dev_info->rx_offload_capa = OCTEONTX_RX_OFFLOADS;
 	dev_info->tx_offload_capa = OCTEONTX_TX_OFFLOADS;
+
+	return 0;
 }
 
 static void
@@ -738,14 +709,12 @@ octeontx_dev_tx_queue_release(void *tx_queue)
 static int
 octeontx_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t qidx,
 			    uint16_t nb_desc, unsigned int socket_id,
-			    const struct rte_eth_txconf *tx_conf)
+			    const struct rte_eth_txconf *tx_conf __rte_unused)
 {
 	struct octeontx_nic *nic = octeontx_pmd_priv(dev);
 	struct octeontx_txq *txq = NULL;
 	uint16_t dq_num;
 	int res = 0;
-	uint64_t configured_offloads;
-	uint64_t unsupported_offloads;
 
 	RTE_SET_USED(nb_desc);
 	RTE_SET_USED(socket_id);
@@ -764,22 +733,6 @@ octeontx_dev_tx_queue_setup(struct rte_eth_dev *dev, uint16_t qidx,
 				qidx);
 		octeontx_dev_tx_queue_release(dev->data->tx_queues[qidx]);
 		dev->data->tx_queues[qidx] = NULL;
-	}
-
-	configured_offloads = tx_conf->offloads;
-
-	if (!(configured_offloads & DEV_TX_OFFLOAD_MT_LOCKFREE)) {
-		PMD_INIT_LOG(NOTICE, "cant disable lockfree tx");
-		configured_offloads |= DEV_TX_OFFLOAD_MT_LOCKFREE;
-	}
-
-	unsupported_offloads = configured_offloads & ~OCTEONTX_TX_OFFLOADS;
-	if (unsupported_offloads) {
-		PMD_INIT_LOG(ERR, "Tx offloads 0x%" PRIx64 " are not supported."
-		      "Requested 0x%" PRIx64 " supported 0x%" PRIx64 ".\n",
-		      unsupported_offloads, configured_offloads,
-		      (uint64_t)OCTEONTX_TX_OFFLOADS);
-		return -ENOTSUP;
 	}
 
 	/* Allocating tx queue data structure */
@@ -834,11 +787,9 @@ octeontx_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t qidx,
 	pki_qos_cfg_t pki_qos;
 	uintptr_t pool;
 	int ret, port;
-	uint8_t gaura;
+	uint16_t gaura;
 	unsigned int ev_queues = (nic->ev_queues * nic->port_id) + qidx;
 	unsigned int ev_ports = (nic->ev_ports * nic->port_id) + qidx;
-	uint64_t configured_offloads;
-	uint64_t unsupported_offloads;
 
 	RTE_SET_USED(nb_desc);
 
@@ -861,22 +812,6 @@ octeontx_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t qidx,
 
 	port = nic->port_id;
 
-	configured_offloads = rx_conf->offloads;
-
-	if (!(configured_offloads & DEV_RX_OFFLOAD_CRC_STRIP)) {
-		PMD_INIT_LOG(NOTICE, "can't disable hw crc strip");
-		configured_offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
-	}
-
-	unsupported_offloads = configured_offloads & ~OCTEONTX_RX_OFFLOADS;
-
-	if (unsupported_offloads) {
-		PMD_INIT_LOG(ERR, "Rx offloads 0x%" PRIx64 " are not supported. "
-		      "Requested 0x%" PRIx64 " supported 0x%" PRIx64 "\n",
-		      unsupported_offloads, configured_offloads,
-		      (uint64_t)OCTEONTX_RX_OFFLOADS);
-		return -ENOTSUP;
-	}
 	/* Rx deferred start is not supported */
 	if (rx_conf->rx_deferred_start) {
 		octeontx_log_err("rx deferred start not supported");
@@ -916,10 +851,11 @@ octeontx_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t qidx,
 		pktbuf_conf.mmask.f_cache_mode = 1;
 
 		pktbuf_conf.wqe_skip = OCTTX_PACKET_WQE_SKIP;
-		pktbuf_conf.first_skip = OCTTX_PACKET_FIRST_SKIP;
+		pktbuf_conf.first_skip = OCTTX_PACKET_FIRST_SKIP(mb_pool);
 		pktbuf_conf.later_skip = OCTTX_PACKET_LATER_SKIP;
 		pktbuf_conf.mbuff_size = (mb_pool->elt_size -
 					RTE_PKTMBUF_HEADROOM -
+					rte_pktmbuf_priv_size(mb_pool) -
 					sizeof(struct rte_mbuf));
 
 		pktbuf_conf.cache_mode = PKI_OPC_MODE_STF2_STT;
@@ -963,8 +899,8 @@ octeontx_dev_rx_queue_setup(struct rte_eth_dev *dev, uint16_t qidx,
 
 		pool = (uintptr_t)mb_pool->pool_id;
 
-		/* Get the gpool Id */
-		gaura = octeontx_fpa_bufpool_gpool(pool);
+		/* Get the gaura Id */
+		gaura = octeontx_fpa_bufpool_gaura(pool);
 
 		pki_qos.qpg_qos = PKI_QPG_QOS_NONE;
 		pki_qos.num_entry = 1;
@@ -1079,10 +1015,22 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 		if (eth_dev == NULL)
 			return -ENODEV;
 
+		eth_dev->dev_ops = &octeontx_dev_ops;
+		eth_dev->device = &dev->device;
 		eth_dev->tx_pkt_burst = octeontx_xmit_pkts;
 		eth_dev->rx_pkt_burst = octeontx_recv_pkts;
+		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}
+
+	/* Reserve an ethdev entry */
+	eth_dev = rte_eth_dev_allocate(octtx_name);
+	if (eth_dev == NULL) {
+		octeontx_log_err("failed to allocate rte_eth_dev");
+		res = -ENOMEM;
+		goto err;
+	}
+	data = eth_dev->data;
 
 	nic = rte_zmalloc_socket(octtx_name, sizeof(*nic), 0, socket_id);
 	if (nic == NULL) {
@@ -1090,6 +1038,7 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 		res = -ENOMEM;
 		goto err;
 	}
+	data->dev_private = nic;
 
 	nic->port_id = port;
 	nic->evdev = evdev;
@@ -1106,21 +1055,11 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 		goto err;
 	}
 
-	/* Reserve an ethdev entry */
-	eth_dev = rte_eth_dev_allocate(octtx_name);
-	if (eth_dev == NULL) {
-		octeontx_log_err("failed to allocate rte_eth_dev");
-		res = -ENOMEM;
-		goto err;
-	}
-
 	eth_dev->device = &dev->device;
 	eth_dev->intr_handle = NULL;
 	eth_dev->data->kdrv = RTE_KDRV_NONE;
 	eth_dev->data->numa_node = dev->device.numa_node;
 
-	data = eth_dev->data;
-	data->dev_private = nic;
 	data->port_id = eth_dev->data->port_id;
 
 	nic->ev_queues = 1;
@@ -1132,7 +1071,7 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 	data->all_multicast = 0;
 	data->scattered_rx = 0;
 
-	data->mac_addrs = rte_zmalloc_socket(octtx_name, ETHER_ADDR_LEN, 0,
+	data->mac_addrs = rte_zmalloc_socket(octtx_name, RTE_ETHER_ADDR_LEN, 0,
 							socket_id);
 	if (data->mac_addrs == NULL) {
 		octeontx_log_err("failed to allocate memory for mac_addrs");
@@ -1153,7 +1092,7 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 	}
 
 	/* Update port_id mac to eth_dev */
-	memcpy(data->mac_addrs, nic->mac_addr, ETHER_ADDR_LEN);
+	memcpy(data->mac_addrs, nic->mac_addr, RTE_ETHER_ADDR_LEN);
 
 	PMD_INIT_LOG(DEBUG, "ethdev info: ");
 	PMD_INIT_LOG(DEBUG, "port %d, port_ena %d ochan %d num_ochan %d tx_q %d",
@@ -1165,18 +1104,14 @@ octeontx_create(struct rte_vdev_device *dev, int port, uint8_t evdev,
 	rte_octeontx_pchan_map[(nic->base_ochan >> 8) & 0x7]
 		[(nic->base_ochan >> 4) & 0xF] = data->port_id;
 
+	rte_eth_dev_probing_finish(eth_dev);
 	return data->port_id;
 
 err:
 	if (nic)
 		octeontx_port_close(nic);
 
-	if (eth_dev != NULL) {
-		rte_free(eth_dev->data->mac_addrs);
-		rte_free(data);
-		rte_free(nic);
-		rte_eth_dev_release_port(eth_dev);
-	}
+	rte_eth_dev_release_port(eth_dev);
 
 	return res;
 }
@@ -1201,15 +1136,21 @@ octeontx_remove(struct rte_vdev_device *dev)
 		if (eth_dev == NULL)
 			return -ENODEV;
 
+		if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
+			rte_eth_dev_release_port(eth_dev);
+			continue;
+		}
+
 		nic = octeontx_pmd_priv(eth_dev);
 		rte_event_dev_stop(nic->evdev);
 		PMD_INIT_LOG(INFO, "Closing octeontx device %s", octtx_name);
 
-		rte_free(eth_dev->data->mac_addrs);
-		rte_free(eth_dev->data->dev_private);
 		rte_eth_dev_release_port(eth_dev);
 		rte_event_dev_close(nic->evdev);
 	}
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return 0;
 
 	/* Free FC resource */
 	octeontx_pko_fc_free();
@@ -1240,11 +1181,13 @@ octeontx_probe(struct rte_vdev_device *dev)
 	    strlen(rte_vdev_device_args(dev)) == 0) {
 		eth_dev = rte_eth_dev_attach_secondary(dev_name);
 		if (!eth_dev) {
-			RTE_LOG(ERR, PMD, "Failed to probe %s\n", dev_name);
+			PMD_INIT_LOG(ERR, "Failed to probe %s", dev_name);
 			return -1;
 		}
 		/* TODO: request info from primary to set up Rx and Tx */
 		eth_dev->dev_ops = &octeontx_dev_ops;
+		eth_dev->device = &dev->device;
+		rte_eth_dev_probing_finish(eth_dev);
 		return 0;
 	}
 
@@ -1302,15 +1245,8 @@ octeontx_probe(struct rte_vdev_device *dev)
 		res = -EINVAL;
 		goto parse_error;
 	}
-	if (pnum > qnum) {
-		/*
-		 * We don't poll on event ports
-		 * that do not have any queues assigned.
-		 */
-		pnum = qnum;
-		PMD_INIT_LOG(INFO,
-			"reducing number of active event ports to %d", pnum);
-	}
+
+	/* Enable all queues available */
 	for (i = 0; i < qnum; i++) {
 		res = rte_event_queue_setup(evdev, i, NULL);
 		if (res < 0) {
@@ -1320,6 +1256,7 @@ octeontx_probe(struct rte_vdev_device *dev)
 		}
 	}
 
+	/* Enable all ports available */
 	for (i = 0; i < pnum; i++) {
 		res = rte_event_port_setup(evdev, i, NULL);
 		if (res < 0) {
@@ -1328,6 +1265,14 @@ octeontx_probe(struct rte_vdev_device *dev)
 						i, res);
 			goto parse_error;
 		}
+	}
+
+	/*
+	 * Do 1:1 links for ports & queues. All queues would be mapped to
+	 * one port. If there are more ports than queues, then some ports
+	 * won't be linked to any queue.
+	 */
+	for (i = 0; i < qnum; i++) {
 		/* Link one queue to one event port */
 		qlist = i;
 		res = rte_event_port_link(evdev, i, &qlist, NULL, 1);

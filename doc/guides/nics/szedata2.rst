@@ -5,9 +5,9 @@ SZEDATA2 poll mode driver library
 =================================
 
 The SZEDATA2 poll mode driver library implements support for the Netcope
-FPGA Boards (**NFB-***), FPGA-based programmable NICs.
-The SZEDATA2 PMD uses interface provided by the libsze2 library to communicate
-with the NFB cards over the sze2 layer.
+FPGA Boards (**NFB-40G2, NFB-100G2, NFB-200G2QL**) and Silicom **FB2CGG3** card,
+FPGA-based programmable NICs. The SZEDATA2 PMD uses interface provided by the libsze2
+library to communicate with the NFB cards over the sze2 layer.
 
 More information about the
 `NFB cards <http://www.netcope.com/en/products/fpga-boards>`_
@@ -54,6 +54,15 @@ separately:
 Information about getting the dependencies can be found `here
 <http://www.netcope.com/en/company/community-support/dpdk-libsze2>`_.
 
+Versions of the packages
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The minimum version of the provided packages:
+
+* for DPDK from 18.05: **4.4.1**
+
+* for DPDK up to 18.02 (including): **3.0.5**
+
 Configuration
 -------------
 
@@ -80,7 +89,7 @@ The NFB cards are multi-port multi-queue cards, where (generally) data from any
 Ethernet port may be sent to any queue.
 They were historically represented in DPDK as a single port.
 
-However, the new NFB-200G2QL card employs an addon cable which allows to connect
+However, the new NFB-200G2QL card employs an add-on cable which allows to connect
 it to two physical PCI-E slots at the same time (see the diagram below).
 This is done to allow 200 Gbps of traffic to be transferred through the PCI-E
 bus (note that a single PCI-E 3.0 x16 slot provides only 125 Gbps theoretical
@@ -91,7 +100,7 @@ NUMA node, the card is represented as two ports in DPDK (each with half of the
 queues), which allows DPDK to work with data from the individual queues on the
 right NUMA node.
 
-.. figure:: img/szedata2_nfb200g_architecture.svg
+.. figure:: img/szedata2_nfb200g_architecture.*
     :align: center
 
     NFB-200G2QL high-level diagram

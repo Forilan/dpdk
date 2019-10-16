@@ -47,6 +47,18 @@ void eal_log_set_default(FILE *default_log);
 int rte_eal_cpu_init(void);
 
 /**
+ * Create memseg lists
+ *
+ * This function is private to EAL.
+ *
+ * Preallocate virtual memory.
+ *
+ * @return
+ *   0 on success, negative on error
+ */
+int rte_eal_memseg_init(void);
+
+/**
  * Map memory
  *
  * This function is private to EAL.
@@ -81,6 +93,12 @@ int rte_eal_timer_init(void);
  *   0 on success, negative on error
  */
 int rte_eal_log_init(const char *id, int facility);
+
+/**
+ * Save the log regexp for later
+ */
+int rte_log_save_regexp(const char *type, int priority);
+int rte_log_save_pattern(const char *pattern, int priority);
 
 /**
  * Init tail queues for non-EAL library structures. This is to allow
@@ -237,19 +255,130 @@ struct rte_bus *rte_bus_find_by_device_name(const char *str);
  *   0 on success;
  *   (<0) on failure.
  */
-
 int rte_mp_channel_init(void);
 
 /**
- * Internal Executes all the user application registered callbacks for
- * the specific device. It is for DPDK internal user only. User
- * application should not call it directly.
- *
- * @param device_name
- *  The device name.
- * @param event
- *  the device event type.
+ * Primary/secondary communication cleanup.
  */
-void dev_callback_process(char *device_name, enum rte_dev_event_type event);
+void rte_mp_channel_cleanup(void);
+
+/**
+ * @internal
+ * Parse a device string and store its information in an
+ * rte_devargs structure.
+ *
+ * A device description is split by layers of abstraction of the device:
+ * bus, class and driver. Each layer will offer a set of properties that
+ * can be applied either to configure or recognize a device.
+ *
+ * This function will parse those properties and prepare the rte_devargs
+ * to be given to each layers for processing.
+ *
+ * Note: if the "data" field of the devargs points to devstr,
+ * then no dynamic allocation is performed and the rte_devargs
+ * can be safely discarded.
+ *
+ * Otherwise ``data`` will hold a workable copy of devstr, that will be
+ * used by layers descriptors within rte_devargs. In this case,
+ * any rte_devargs should be cleaned-up before being freed.
+ *
+ * @param da
+ *   rte_devargs structure to fill.
+ *
+ * @param devstr
+ *   Device string.
+ *
+ * @return
+ *   0 on success.
+ *   Negative errno values on error (rte_errno is set).
+ */
+int
+rte_devargs_layers_parse(struct rte_devargs *devargs,
+			 const char *devstr);
+
+/*
+ * probe a device at local process.
+ *
+ * @param devargs
+ *   Device arguments including bus, class and driver properties.
+ * @param new_dev
+ *   new device be probed as output.
+ * @return
+ *   0 on success, negative on error.
+ */
+int local_dev_probe(const char *devargs, struct rte_device **new_dev);
+
+/**
+ * Hotplug remove a given device from a specific bus at local process.
+ *
+ * @param dev
+ *   Data structure of the device to remove.
+ * @return
+ *   0 on success, negative on error.
+ */
+int local_dev_remove(struct rte_device *dev);
+
+/**
+ * Iterate over all buses to find the corresponding bus to handle the sigbus
+ * error.
+ * @param failure_addr
+ *	Pointer of the fault address of the sigbus error.
+ *
+ * @return
+ *	 0 success to handle the sigbus.
+ *	-1 failed to handle the sigbus
+ *	 1 no bus can handler the sigbus
+ */
+int rte_bus_sigbus_handler(const void *failure_addr);
+
+/**
+ * @internal
+ * Register the sigbus handler.
+ *
+ * @return
+ *   - On success, zero.
+ *   - On failure, a negative value.
+ */
+int
+dev_sigbus_handler_register(void);
+
+/**
+ * @internal
+ * Unregister the sigbus handler.
+ *
+ * @return
+ *   - On success, zero.
+ *   - On failure, a negative value.
+ */
+int
+dev_sigbus_handler_unregister(void);
+
+/**
+ * Check if the option is registered.
+ *
+ * @param option
+ *  The option to be parsed.
+ *
+ * @return
+ *  0 on success
+ * @return
+ *  -1 on fail
+ */
+int
+rte_option_parse(const char *opt);
+
+/**
+ * Iterate through the registered options and execute the associated
+ * callback if enabled.
+ */
+void
+rte_option_init(void);
+
+/**
+ * Iterate through the registered options and show the associated
+ * usage string.
+ */
+void
+rte_option_usage(void);
 
 #endif /* _EAL_PRIVATE_H_ */

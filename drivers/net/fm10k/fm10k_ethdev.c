@@ -43,11 +43,21 @@
 int fm10k_logtype_init;
 int fm10k_logtype_driver;
 
+#ifdef RTE_LIBRTE_FM10K_DEBUG_RX
+int fm10k_logtype_rx;
+#endif
+#ifdef RTE_LIBRTE_FM10K_DEBUG_TX
+int fm10k_logtype_tx;
+#endif
+#ifdef RTE_LIBRTE_FM10K_DEBUG_TX_FREE
+int fm10k_logtype_tx_free;
+#endif
+
 static void fm10k_close_mbx_service(struct fm10k_hw *hw);
-static void fm10k_dev_promiscuous_enable(struct rte_eth_dev *dev);
-static void fm10k_dev_promiscuous_disable(struct rte_eth_dev *dev);
-static void fm10k_dev_allmulticast_enable(struct rte_eth_dev *dev);
-static void fm10k_dev_allmulticast_disable(struct rte_eth_dev *dev);
+static int fm10k_dev_promiscuous_enable(struct rte_eth_dev *dev);
+static int fm10k_dev_promiscuous_disable(struct rte_eth_dev *dev);
+static int fm10k_dev_allmulticast_enable(struct rte_eth_dev *dev);
+static int fm10k_dev_allmulticast_disable(struct rte_eth_dev *dev);
 static inline int fm10k_glort_valid(struct fm10k_hw *hw);
 static int
 fm10k_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on);
@@ -60,8 +70,8 @@ static void fm10k_set_tx_function(struct rte_eth_dev *dev);
 static int fm10k_check_ftag(struct rte_devargs *devargs);
 static int fm10k_link_update(struct rte_eth_dev *dev, int wait_to_complete);
 
-static void fm10k_dev_infos_get(struct rte_eth_dev *dev,
-				struct rte_eth_dev_info *dev_info);
+static int fm10k_dev_infos_get(struct rte_eth_dev *dev,
+			       struct rte_eth_dev_info *dev_info);
 static uint64_t fm10k_get_rx_queue_offloads_capa(struct rte_eth_dev *dev);
 static uint64_t fm10k_get_rx_port_offloads_capa(struct rte_eth_dev *dev);
 static uint64_t fm10k_get_tx_queue_offloads_capa(struct rte_eth_dev *dev);
@@ -72,7 +82,7 @@ struct fm10k_xstats_name_off {
 	unsigned offset;
 };
 
-struct fm10k_xstats_name_off fm10k_hw_stats_strings[] = {
+static const struct fm10k_xstats_name_off fm10k_hw_stats_strings[] = {
 	{"completion_timeout_count", offsetof(struct fm10k_hw_stats, timeout)},
 	{"unsupported_requests_count", offsetof(struct fm10k_hw_stats, ur)},
 	{"completer_abort_count", offsetof(struct fm10k_hw_stats, ca)},
@@ -87,7 +97,7 @@ struct fm10k_xstats_name_off fm10k_hw_stats_strings[] = {
 #define FM10K_NB_HW_XSTATS (sizeof(fm10k_hw_stats_strings) / \
 		sizeof(fm10k_hw_stats_strings[0]))
 
-struct fm10k_xstats_name_off fm10k_hw_stats_rx_q_strings[] = {
+static const struct fm10k_xstats_name_off fm10k_hw_stats_rx_q_strings[] = {
 	{"packets", offsetof(struct fm10k_hw_stats_q, rx_packets)},
 	{"bytes", offsetof(struct fm10k_hw_stats_q, rx_bytes)},
 	{"dropped", offsetof(struct fm10k_hw_stats_q, rx_drops)},
@@ -96,7 +106,7 @@ struct fm10k_xstats_name_off fm10k_hw_stats_rx_q_strings[] = {
 #define FM10K_NB_RX_Q_XSTATS (sizeof(fm10k_hw_stats_rx_q_strings) / \
 		sizeof(fm10k_hw_stats_rx_q_strings[0]))
 
-struct fm10k_xstats_name_off fm10k_hw_stats_tx_q_strings[] = {
+static const struct fm10k_xstats_name_off fm10k_hw_stats_tx_q_strings[] = {
 	{"packets", offsetof(struct fm10k_hw_stats_q, tx_packets)},
 	{"bytes", offsetof(struct fm10k_hw_stats_q, tx_bytes)},
 };
@@ -129,13 +139,13 @@ fm10k_mbx_unlock(struct fm10k_hw *hw)
 }
 
 /* Stubs needed for linkage when vPMD is disabled */
-int __attribute__((weak))
+__rte_weak int
 fm10k_rx_vec_condition_check(__rte_unused struct rte_eth_dev *dev)
 {
 	return -1;
 }
 
-uint16_t __attribute__((weak))
+__rte_weak uint16_t
 fm10k_recv_pkts_vec(
 	__rte_unused void *rx_queue,
 	__rte_unused struct rte_mbuf **rx_pkts,
@@ -144,7 +154,7 @@ fm10k_recv_pkts_vec(
 	return 0;
 }
 
-uint16_t __attribute__((weak))
+__rte_weak uint16_t
 fm10k_recv_scattered_pkts_vec(
 		__rte_unused void *rx_queue,
 		__rte_unused struct rte_mbuf **rx_pkts,
@@ -153,33 +163,33 @@ fm10k_recv_scattered_pkts_vec(
 	return 0;
 }
 
-int __attribute__((weak))
+__rte_weak int
 fm10k_rxq_vec_setup(__rte_unused struct fm10k_rx_queue *rxq)
 
 {
 	return -1;
 }
 
-void __attribute__((weak))
+__rte_weak void
 fm10k_rx_queue_release_mbufs_vec(
 		__rte_unused struct fm10k_rx_queue *rxq)
 {
 	return;
 }
 
-void __attribute__((weak))
+__rte_weak void
 fm10k_txq_vec_setup(__rte_unused struct fm10k_tx_queue *txq)
 {
 	return;
 }
 
-int __attribute__((weak))
+__rte_weak int
 fm10k_tx_vec_condition_check(__rte_unused struct fm10k_tx_queue *txq)
 {
 	return -1;
 }
 
-uint16_t __attribute__((weak))
+__rte_weak uint16_t
 fm10k_xmit_fixed_burst_vec(__rte_unused void *tx_queue,
 			   __rte_unused struct rte_mbuf **tx_pkts,
 			   __rte_unused uint16_t nb_pkts)
@@ -448,28 +458,8 @@ static int
 fm10k_dev_configure(struct rte_eth_dev *dev)
 {
 	int ret;
-	struct rte_eth_dev_info dev_info;
-	uint64_t rx_offloads = dev->data->dev_conf.rxmode.offloads;
-	uint64_t tx_offloads = dev->data->dev_conf.txmode.offloads;
 
 	PMD_INIT_FUNC_TRACE();
-
-	if ((rx_offloads & DEV_RX_OFFLOAD_CRC_STRIP) == 0)
-		PMD_INIT_LOG(WARNING, "fm10k always strip CRC");
-
-	fm10k_dev_infos_get(dev, &dev_info);
-	if ((rx_offloads & dev_info.rx_offload_capa) != rx_offloads) {
-		PMD_DRV_LOG(ERR, "Some Rx offloads are not supported "
-			    "requested 0x%" PRIx64 " supported 0x%" PRIx64,
-			    rx_offloads, dev_info.rx_offload_capa);
-		return -ENOTSUP;
-	}
-	if ((tx_offloads & dev_info.tx_offload_capa) != tx_offloads) {
-		PMD_DRV_LOG(ERR, "Some Tx offloads are not supported "
-			    "requested 0x%" PRIx64 " supported 0x%" PRIx64,
-			    tx_offloads, dev_info.tx_offload_capa);
-		return -ENOTSUP;
-	}
 
 	/* multipe queue mode checking */
 	ret  = fm10k_check_mq_mode(dev);
@@ -483,11 +473,6 @@ fm10k_dev_configure(struct rte_eth_dev *dev)
 
 	return 0;
 }
-
-/* fls = find last set bit = 32 minus the number of leading zeros */
-#ifndef fls
-#define fls(x) (((x) == 0) ? 0 : (32 - __builtin_clz((x))))
-#endif
 
 static void
 fm10k_dev_vmdq_rx_configure(struct rte_eth_dev *dev)
@@ -638,8 +623,8 @@ fm10k_dev_mq_rx_configure(struct rte_eth_dev *dev)
 
 	/* reset MAC/VLAN as it's based on VMDQ or PF main VSI */
 	memset(dev->data->mac_addrs, 0,
-		ETHER_ADDR_LEN * FM10K_MAX_MACADDR_NUM);
-	ether_addr_copy((const struct ether_addr *)hw->mac.addr,
+		RTE_ETHER_ADDR_LEN * FM10K_MAX_MACADDR_NUM);
+	rte_ether_addr_copy((const struct rte_ether_addr *)hw->mac.addr,
 		&dev->data->mac_addrs[0]);
 	memset(macvlan, 0, sizeof(*macvlan));
 	macvlan->nb_queue_pools = nb_queue_pools;
@@ -824,52 +809,50 @@ static int
 fm10k_dev_rx_queue_start(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	int err = -1;
+	int err;
 	uint32_t reg;
 	struct fm10k_rx_queue *rxq;
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (rx_queue_id < dev->data->nb_rx_queues) {
-		rxq = dev->data->rx_queues[rx_queue_id];
-		err = rx_queue_reset(rxq);
-		if (err == -ENOMEM) {
-			PMD_INIT_LOG(ERR, "Failed to alloc memory : %d", err);
-			return err;
-		} else if (err == -EINVAL) {
-			PMD_INIT_LOG(ERR, "Invalid buffer address alignment :"
-				" %d", err);
-			return err;
-		}
-
-		/* Setup the HW Rx Head and Tail Descriptor Pointers
-		 * Note: this must be done AFTER the queue is enabled on real
-		 * hardware, but BEFORE the queue is enabled when using the
-		 * emulation platform. Do it in both places for now and remove
-		 * this comment and the following two register writes when the
-		 * emulation platform is no longer being used.
-		 */
-		FM10K_WRITE_REG(hw, FM10K_RDH(rx_queue_id), 0);
-		FM10K_WRITE_REG(hw, FM10K_RDT(rx_queue_id), rxq->nb_desc - 1);
-
-		/* Set PF ownership flag for PF devices */
-		reg = FM10K_READ_REG(hw, FM10K_RXQCTL(rx_queue_id));
-		if (hw->mac.type == fm10k_mac_pf)
-			reg |= FM10K_RXQCTL_PF;
-		reg |= FM10K_RXQCTL_ENABLE;
-		/* enable RX queue */
-		FM10K_WRITE_REG(hw, FM10K_RXQCTL(rx_queue_id), reg);
-		FM10K_WRITE_FLUSH(hw);
-
-		/* Setup the HW Rx Head and Tail Descriptor Pointers
-		 * Note: this must be done AFTER the queue is enabled
-		 */
-		FM10K_WRITE_REG(hw, FM10K_RDH(rx_queue_id), 0);
-		FM10K_WRITE_REG(hw, FM10K_RDT(rx_queue_id), rxq->nb_desc - 1);
-		dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+	rxq = dev->data->rx_queues[rx_queue_id];
+	err = rx_queue_reset(rxq);
+	if (err == -ENOMEM) {
+		PMD_INIT_LOG(ERR, "Failed to alloc memory : %d", err);
+		return err;
+	} else if (err == -EINVAL) {
+		PMD_INIT_LOG(ERR, "Invalid buffer address alignment :"
+			" %d", err);
+		return err;
 	}
 
-	return err;
+	/* Setup the HW Rx Head and Tail Descriptor Pointers
+	 * Note: this must be done AFTER the queue is enabled on real
+	 * hardware, but BEFORE the queue is enabled when using the
+	 * emulation platform. Do it in both places for now and remove
+	 * this comment and the following two register writes when the
+	 * emulation platform is no longer being used.
+	 */
+	FM10K_WRITE_REG(hw, FM10K_RDH(rx_queue_id), 0);
+	FM10K_WRITE_REG(hw, FM10K_RDT(rx_queue_id), rxq->nb_desc - 1);
+
+	/* Set PF ownership flag for PF devices */
+	reg = FM10K_READ_REG(hw, FM10K_RXQCTL(rx_queue_id));
+	if (hw->mac.type == fm10k_mac_pf)
+		reg |= FM10K_RXQCTL_PF;
+	reg |= FM10K_RXQCTL_ENABLE;
+	/* enable RX queue */
+	FM10K_WRITE_REG(hw, FM10K_RXQCTL(rx_queue_id), reg);
+	FM10K_WRITE_FLUSH(hw);
+
+	/* Setup the HW Rx Head and Tail Descriptor Pointers
+	 * Note: this must be done AFTER the queue is enabled
+	 */
+	FM10K_WRITE_REG(hw, FM10K_RDH(rx_queue_id), 0);
+	FM10K_WRITE_REG(hw, FM10K_RDT(rx_queue_id), rxq->nb_desc - 1);
+	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
+
+	return 0;
 }
 
 static int
@@ -879,14 +862,12 @@ fm10k_dev_rx_queue_stop(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (rx_queue_id < dev->data->nb_rx_queues) {
-		/* Disable RX queue */
-		rx_queue_disable(hw, rx_queue_id);
+	/* Disable RX queue */
+	rx_queue_disable(hw, rx_queue_id);
 
-		/* Free mbuf and clean HW ring */
-		rx_queue_clean(dev->data->rx_queues[rx_queue_id]);
-		dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
-	}
+	/* Free mbuf and clean HW ring */
+	rx_queue_clean(dev->data->rx_queues[rx_queue_id]);
+	dev->data->rx_queue_state[rx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
 
 	return 0;
 }
@@ -898,28 +879,23 @@ fm10k_dev_tx_queue_start(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 	/** @todo - this should be defined in the shared code */
 #define FM10K_TXDCTL_WRITE_BACK_MIN_DELAY	0x00010000
 	uint32_t txdctl = FM10K_TXDCTL_WRITE_BACK_MIN_DELAY;
-	int err = 0;
+	struct fm10k_tx_queue *q = dev->data->tx_queues[tx_queue_id];
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (tx_queue_id < dev->data->nb_tx_queues) {
-		struct fm10k_tx_queue *q = dev->data->tx_queues[tx_queue_id];
+	q->ops->reset(q);
 
-		q->ops->reset(q);
+	/* reset head and tail pointers */
+	FM10K_WRITE_REG(hw, FM10K_TDH(tx_queue_id), 0);
+	FM10K_WRITE_REG(hw, FM10K_TDT(tx_queue_id), 0);
 
-		/* reset head and tail pointers */
-		FM10K_WRITE_REG(hw, FM10K_TDH(tx_queue_id), 0);
-		FM10K_WRITE_REG(hw, FM10K_TDT(tx_queue_id), 0);
+	/* enable TX queue */
+	FM10K_WRITE_REG(hw, FM10K_TXDCTL(tx_queue_id),
+				FM10K_TXDCTL_ENABLE | txdctl);
+	FM10K_WRITE_FLUSH(hw);
+	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
 
-		/* enable TX queue */
-		FM10K_WRITE_REG(hw, FM10K_TXDCTL(tx_queue_id),
-					FM10K_TXDCTL_ENABLE | txdctl);
-		FM10K_WRITE_FLUSH(hw);
-		dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STARTED;
-	} else
-		err = -1;
-
-	return err;
+	return 0;
 }
 
 static int
@@ -929,11 +905,9 @@ fm10k_dev_tx_queue_stop(struct rte_eth_dev *dev, uint16_t tx_queue_id)
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (tx_queue_id < dev->data->nb_tx_queues) {
-		tx_queue_disable(hw, tx_queue_id);
-		tx_queue_clean(dev->data->tx_queues[tx_queue_id]);
-		dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
-	}
+	tx_queue_disable(hw, tx_queue_id);
+	tx_queue_clean(dev->data->tx_queues[tx_queue_id]);
+	dev->data->tx_queue_state[tx_queue_id] = RTE_ETH_QUEUE_STATE_STOPPED;
 
 	return 0;
 }
@@ -944,7 +918,7 @@ static inline int fm10k_glort_valid(struct fm10k_hw *hw)
 		!= FM10K_DGLORTMAP_NONE);
 }
 
-static void
+static int
 fm10k_dev_promiscuous_enable(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -954,18 +928,22 @@ fm10k_dev_promiscuous_enable(struct rte_eth_dev *dev)
 
 	/* Return if it didn't acquire valid glort range */
 	if ((hw->mac.type == fm10k_mac_pf) && !fm10k_glort_valid(hw))
-		return;
+		return 0;
 
 	fm10k_mbx_lock(hw);
 	status = hw->mac.ops.update_xcast_mode(hw, hw->mac.dglort_map,
 				FM10K_XCAST_MODE_PROMISC);
 	fm10k_mbx_unlock(hw);
 
-	if (status != FM10K_SUCCESS)
+	if (status != FM10K_SUCCESS) {
 		PMD_INIT_LOG(ERR, "Failed to enable promiscuous mode");
+		return -EAGAIN;
+	}
+
+	return 0;
 }
 
-static void
+static int
 fm10k_dev_promiscuous_disable(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -976,7 +954,7 @@ fm10k_dev_promiscuous_disable(struct rte_eth_dev *dev)
 
 	/* Return if it didn't acquire valid glort range */
 	if ((hw->mac.type == fm10k_mac_pf) && !fm10k_glort_valid(hw))
-		return;
+		return 0;
 
 	if (dev->data->all_multicast == 1)
 		mode = FM10K_XCAST_MODE_ALLMULTI;
@@ -988,11 +966,15 @@ fm10k_dev_promiscuous_disable(struct rte_eth_dev *dev)
 				mode);
 	fm10k_mbx_unlock(hw);
 
-	if (status != FM10K_SUCCESS)
+	if (status != FM10K_SUCCESS) {
 		PMD_INIT_LOG(ERR, "Failed to disable promiscuous mode");
+		return -EAGAIN;
+	}
+
+	return 0;
 }
 
-static void
+static int
 fm10k_dev_allmulticast_enable(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1002,7 +984,7 @@ fm10k_dev_allmulticast_enable(struct rte_eth_dev *dev)
 
 	/* Return if it didn't acquire valid glort range */
 	if ((hw->mac.type == fm10k_mac_pf) && !fm10k_glort_valid(hw))
-		return;
+		return 0;
 
 	/* If promiscuous mode is enabled, it doesn't make sense to enable
 	 * allmulticast and disable promiscuous since fm10k only can select
@@ -1011,7 +993,7 @@ fm10k_dev_allmulticast_enable(struct rte_eth_dev *dev)
 	if (dev->data->promiscuous) {
 		PMD_INIT_LOG(INFO, "Promiscuous mode is enabled, "\
 			"needn't enable allmulticast");
-		return;
+		return 0;
 	}
 
 	fm10k_mbx_lock(hw);
@@ -1019,11 +1001,15 @@ fm10k_dev_allmulticast_enable(struct rte_eth_dev *dev)
 				FM10K_XCAST_MODE_ALLMULTI);
 	fm10k_mbx_unlock(hw);
 
-	if (status != FM10K_SUCCESS)
+	if (status != FM10K_SUCCESS) {
 		PMD_INIT_LOG(ERR, "Failed to enable allmulticast mode");
+		return -EAGAIN;
+	}
+
+	return 0;
 }
 
-static void
+static int
 fm10k_dev_allmulticast_disable(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1033,12 +1019,12 @@ fm10k_dev_allmulticast_disable(struct rte_eth_dev *dev)
 
 	/* Return if it didn't acquire valid glort range */
 	if ((hw->mac.type == fm10k_mac_pf) && !fm10k_glort_valid(hw))
-		return;
+		return 0;
 
 	if (dev->data->promiscuous) {
 		PMD_INIT_LOG(ERR, "Failed to disable allmulticast mode "\
 			"since promisc mode is enabled");
-		return;
+		return -EINVAL;
 	}
 
 	fm10k_mbx_lock(hw);
@@ -1047,8 +1033,12 @@ fm10k_dev_allmulticast_disable(struct rte_eth_dev *dev)
 				FM10K_XCAST_MODE_NONE);
 	fm10k_mbx_unlock(hw);
 
-	if (status != FM10K_SUCCESS)
+	if (status != FM10K_SUCCESS) {
 		PMD_INIT_LOG(ERR, "Failed to disable allmulticast mode");
+		return -EAGAIN;
+	}
+
+	return 0;
 }
 
 static void
@@ -1061,8 +1051,8 @@ fm10k_dev_dglort_map_configure(struct rte_eth_dev *dev)
 
 	macvlan = FM10K_DEV_PRIVATE_TO_MACVLAN(dev->data->dev_private);
 	nb_queue_pools = macvlan->nb_queue_pools;
-	pool_len = nb_queue_pools ? fls(nb_queue_pools - 1) : 0;
-	rss_len = fls(dev->data->nb_rx_queues - 1) - pool_len;
+	pool_len = nb_queue_pools ? rte_fls_u32(nb_queue_pools - 1) : 0;
+	rss_len = rte_fls_u32(dev->data->nb_rx_queues - 1) - pool_len;
 
 	/* GLORT 0x0-0x3F are used by PF and VMDQ,  0x40-0x7F used by FD */
 	dglortdec = (rss_len << FM10K_DGLORTDEC_RSSLENGTH_SHIFT) | pool_len;
@@ -1073,7 +1063,7 @@ fm10k_dev_dglort_map_configure(struct rte_eth_dev *dev)
 	FM10K_WRITE_REG(hw, FM10K_DGLORTDEC(0), dglortdec);
 
 	/* Flow Director configurations, only queue number is valid. */
-	dglortdec = fls(dev->data->nb_rx_queues - 1);
+	dglortdec = rte_fls_u32(dev->data->nb_rx_queues - 1);
 	dglortmask = (GLORT_FD_MASK << FM10K_DGLORTMAP_MASK_SHIFT) |
 			(hw->mac.dglort_map + GLORT_FD_Q_BASE);
 	FM10K_WRITE_REG(hw, FM10K_DGLORTMAP(1), dglortmask);
@@ -1230,28 +1220,6 @@ fm10k_dev_queue_release(struct rte_eth_dev *dev)
 	}
 }
 
-static void
-fm10k_dev_close(struct rte_eth_dev *dev)
-{
-	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-
-	PMD_INIT_FUNC_TRACE();
-
-	fm10k_mbx_lock(hw);
-	hw->mac.ops.update_lport_state(hw, hw->mac.dglort_map,
-		MAX_LPORT_NUM, false);
-	fm10k_mbx_unlock(hw);
-
-	/* allow 100ms for device to quiesce */
-	rte_delay_us(FM10K_SWITCH_QUIESCE_US);
-
-	/* Stop mailbox service first */
-	fm10k_close_mbx_service(hw);
-	fm10k_dev_stop(dev);
-	fm10k_dev_queue_release(dev);
-	fm10k_stop_hw(hw);
-}
-
 static int
 fm10k_link_update(struct rte_eth_dev *dev,
 	__rte_unused int wait_to_complete)
@@ -1260,13 +1228,11 @@ fm10k_link_update(struct rte_eth_dev *dev,
 		FM10K_DEV_PRIVATE_TO_INFO(dev->data->dev_private);
 	PMD_INIT_FUNC_TRACE();
 
-	/* The speed is ~50Gbps per Gen3 x8 PCIe interface. For now, we
-	 * leave the speed undefined since there is no 50Gbps Ethernet.
-	 */
-	dev->data->dev_link.link_speed  = 0;
+	dev->data->dev_link.link_speed  = ETH_SPEED_NUM_50G;
 	dev->data->dev_link.link_duplex = ETH_LINK_FULL_DUPLEX;
 	dev->data->dev_link.link_status =
 		dev_info->sm_down ? ETH_LINK_DOWN : ETH_LINK_UP;
+	dev->data->dev_link.link_autoneg = ETH_LINK_FIXED;
 
 	return 0;
 }
@@ -1352,7 +1318,7 @@ fm10k_xstats_get(struct rte_eth_dev *dev, struct rte_eth_xstat *xstats,
 static int
 fm10k_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 {
-	uint64_t ipackets, opackets, ibytes, obytes;
+	uint64_t ipackets, opackets, ibytes, obytes, imissed;
 	struct fm10k_hw *hw =
 		FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct fm10k_hw_stats *hw_stats =
@@ -1363,26 +1329,29 @@ fm10k_stats_get(struct rte_eth_dev *dev, struct rte_eth_stats *stats)
 
 	fm10k_update_hw_stats(hw, hw_stats);
 
-	ipackets = opackets = ibytes = obytes = 0;
+	ipackets = opackets = ibytes = obytes = imissed = 0;
 	for (i = 0; (i < RTE_ETHDEV_QUEUE_STAT_CNTRS) &&
 		(i < hw->mac.max_queues); ++i) {
 		stats->q_ipackets[i] = hw_stats->q[i].rx_packets.count;
 		stats->q_opackets[i] = hw_stats->q[i].tx_packets.count;
 		stats->q_ibytes[i]   = hw_stats->q[i].rx_bytes.count;
 		stats->q_obytes[i]   = hw_stats->q[i].tx_bytes.count;
+		stats->q_errors[i]   = hw_stats->q[i].rx_drops.count;
 		ipackets += stats->q_ipackets[i];
 		opackets += stats->q_opackets[i];
 		ibytes   += stats->q_ibytes[i];
 		obytes   += stats->q_obytes[i];
+		imissed  += stats->q_errors[i];
 	}
 	stats->ipackets = ipackets;
 	stats->opackets = opackets;
 	stats->ibytes = ibytes;
 	stats->obytes = obytes;
+	stats->imissed = imissed;
 	return 0;
 }
 
-static void
+static int
 fm10k_stats_reset(struct rte_eth_dev *dev)
 {
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
@@ -1393,9 +1362,11 @@ fm10k_stats_reset(struct rte_eth_dev *dev)
 
 	memset(hw_stats, 0, sizeof(*hw_stats));
 	fm10k_rebind_hw_stats(hw, hw_stats);
+
+	return 0;
 }
 
-static void
+static int
 fm10k_dev_infos_get(struct rte_eth_dev *dev,
 	struct rte_eth_dev_info *dev_info)
 {
@@ -1424,6 +1395,15 @@ fm10k_dev_infos_get(struct rte_eth_dev *dev,
 
 	dev_info->hash_key_size = FM10K_RSSRK_SIZE * sizeof(uint32_t);
 	dev_info->reta_size = FM10K_MAX_RSS_INDICES;
+	dev_info->flow_type_rss_offloads = ETH_RSS_IPV4 |
+					ETH_RSS_IPV6 |
+					ETH_RSS_IPV6_EX |
+					ETH_RSS_NONFRAG_IPV4_TCP |
+					ETH_RSS_NONFRAG_IPV6_TCP |
+					ETH_RSS_IPV6_TCP_EX |
+					ETH_RSS_NONFRAG_IPV4_UDP |
+					ETH_RSS_NONFRAG_IPV6_UDP |
+					ETH_RSS_IPV6_UDP_EX;
 
 	dev_info->default_rxconf = (struct rte_eth_rxconf) {
 		.rx_thresh = {
@@ -1444,7 +1424,6 @@ fm10k_dev_infos_get(struct rte_eth_dev *dev,
 		},
 		.tx_free_thresh = FM10K_TX_FREE_THRESH_DEFAULT(0),
 		.tx_rs_thresh = FM10K_TX_RS_THRESH_DEFAULT(0),
-		.txq_flags = FM10K_SIMPLE_TX_FLAG,
 		.offloads = 0,
 	};
 
@@ -1465,6 +1444,8 @@ fm10k_dev_infos_get(struct rte_eth_dev *dev,
 	dev_info->speed_capa = ETH_LINK_SPEED_1G | ETH_LINK_SPEED_2_5G |
 			ETH_LINK_SPEED_10G | ETH_LINK_SPEED_25G |
 			ETH_LINK_SPEED_40G | ETH_LINK_SPEED_100G;
+
+	return 0;
 }
 
 #ifdef RTE_LIBRTE_FM10K_RX_OLFLAGS_ENABLE
@@ -1561,7 +1542,7 @@ fm10k_vlan_filter_set(struct rte_eth_dev *dev, uint16_t vlan_id, int on)
 
 	for (mac_index = 0; (mac_index < FM10K_MAX_MACADDR_NUM) &&
 			(result == FM10K_SUCCESS); mac_index++) {
-		if (is_zero_ether_addr(&data->mac_addrs[mac_index]))
+		if (rte_is_zero_ether_addr(&data->mac_addrs[mac_index]))
 			continue;
 		if (mac_num > macvlan->mac_num - 1) {
 			PMD_INIT_LOG(ERR, "MAC address number "
@@ -1700,7 +1681,7 @@ static void fm10k_MAC_filter_set(struct rte_eth_dev *dev,
 /* Add a MAC address, and update filters */
 static int
 fm10k_macaddr_add(struct rte_eth_dev *dev,
-		struct ether_addr *mac_addr,
+		struct rte_ether_addr *mac_addr,
 		uint32_t index,
 		uint32_t pool)
 {
@@ -1824,24 +1805,7 @@ static uint64_t fm10k_get_rx_port_offloads_capa(struct rte_eth_dev *dev)
 			   DEV_RX_OFFLOAD_UDP_CKSUM   |
 			   DEV_RX_OFFLOAD_TCP_CKSUM   |
 			   DEV_RX_OFFLOAD_JUMBO_FRAME |
-			   DEV_RX_OFFLOAD_CRC_STRIP   |
 			   DEV_RX_OFFLOAD_HEADER_SPLIT);
-}
-
-static int
-fm10k_check_rx_queue_offloads(struct rte_eth_dev *dev, uint64_t requested)
-{
-	uint64_t port_offloads = dev->data->dev_conf.rxmode.offloads;
-	uint64_t queue_supported = fm10k_get_rx_queue_offloads_capa(dev);
-	uint64_t port_supported = fm10k_get_rx_port_offloads_capa(dev);
-
-	if ((requested & (queue_supported | port_supported)) != requested)
-		return 0;
-
-	if ((port_offloads ^ requested) & port_supported)
-		return 0;
-
-	return 1;
 }
 
 static int
@@ -1854,20 +1818,11 @@ fm10k_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_id,
 		FM10K_DEV_PRIVATE_TO_INFO(dev->data->dev_private);
 	struct fm10k_rx_queue *q;
 	const struct rte_memzone *mz;
+	uint64_t offloads;
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (!fm10k_check_rx_queue_offloads(dev, conf->offloads)) {
-		PMD_INIT_LOG(ERR, "%p: Rx queue offloads 0x%" PRIx64
-			" don't match port offloads 0x%" PRIx64
-			" or supported port offloads 0x%" PRIx64
-			" or supported queue offloads 0x%" PRIx64,
-			(void *)dev, conf->offloads,
-			dev->data->dev_conf.rxmode.offloads,
-			fm10k_get_rx_port_offloads_capa(dev),
-			fm10k_get_rx_queue_offloads_capa(dev));
-		return -ENOTSUP;
-	}
+	offloads = conf->offloads | dev->data->dev_conf.rxmode.offloads;
 
 	/* make sure the mempool element size can account for alignment. */
 	if (!mempool_element_size_valid(mp)) {
@@ -1913,7 +1868,7 @@ fm10k_rx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_id,
 	q->queue_id = queue_id;
 	q->tail_ptr = (volatile uint32_t *)
 		&((uint32_t *)hw->hw_addr)[FM10K_RDT(queue_id)];
-	q->offloads = conf->offloads;
+	q->offloads = offloads;
 	if (handle_rxconf(q, conf))
 		return -EINVAL;
 
@@ -2035,26 +1990,11 @@ static uint64_t fm10k_get_tx_port_offloads_capa(struct rte_eth_dev *dev)
 	RTE_SET_USED(dev);
 
 	return (uint64_t)(DEV_TX_OFFLOAD_VLAN_INSERT |
+			  DEV_TX_OFFLOAD_MULTI_SEGS  |
 			  DEV_TX_OFFLOAD_IPV4_CKSUM  |
 			  DEV_TX_OFFLOAD_UDP_CKSUM   |
 			  DEV_TX_OFFLOAD_TCP_CKSUM   |
 			  DEV_TX_OFFLOAD_TCP_TSO);
-}
-
-static int
-fm10k_check_tx_queue_offloads(struct rte_eth_dev *dev, uint64_t requested)
-{
-	uint64_t port_offloads = dev->data->dev_conf.txmode.offloads;
-	uint64_t queue_supported = fm10k_get_tx_queue_offloads_capa(dev);
-	uint64_t port_supported = fm10k_get_tx_port_offloads_capa(dev);
-
-	if ((requested & (queue_supported | port_supported)) != requested)
-		return 0;
-
-	if ((port_offloads ^ requested) & port_supported)
-		return 0;
-
-	return 1;
 }
 
 static int
@@ -2065,20 +2005,11 @@ fm10k_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_id,
 	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
 	struct fm10k_tx_queue *q;
 	const struct rte_memzone *mz;
+	uint64_t offloads;
 
 	PMD_INIT_FUNC_TRACE();
 
-	if (!fm10k_check_tx_queue_offloads(dev, conf->offloads)) {
-		PMD_INIT_LOG(ERR, "%p: Tx queue offloads 0x%" PRIx64
-			" don't match port offloads 0x%" PRIx64
-			" or supported port offloads 0x%" PRIx64
-			" or supported queue offloads 0x%" PRIx64,
-			(void *)dev, conf->offloads,
-			dev->data->dev_conf.txmode.offloads,
-			fm10k_get_tx_port_offloads_capa(dev),
-			fm10k_get_tx_queue_offloads_capa(dev));
-		return -ENOTSUP;
-	}
+	offloads = conf->offloads | dev->data->dev_conf.txmode.offloads;
 
 	/* make sure a valid number of descriptors have been requested */
 	if (check_nb_desc(FM10K_MIN_TX_DESC, FM10K_MAX_TX_DESC,
@@ -2116,8 +2047,7 @@ fm10k_tx_queue_setup(struct rte_eth_dev *dev, uint16_t queue_id,
 	q->nb_desc = nb_desc;
 	q->port_id = dev->data->port_id;
 	q->queue_id = queue_id;
-	q->txq_flags = conf->txq_flags;
-	q->offloads = conf->offloads;
+	q->offloads = offloads;
 	q->ops = &def_txq_ops;
 	q->tail_ptr = (volatile uint32_t *)
 		&((uint32_t *)hw->hw_addr)[FM10K_TDT(queue_id)];
@@ -2459,7 +2389,7 @@ fm10k_dev_rx_queue_intr_enable(struct rte_eth_dev *dev, uint16_t queue_id)
 	else
 		FM10K_WRITE_REG(hw, FM10K_VFITR(Q2V(pdev, queue_id)),
 			FM10K_ITR_AUTOMASK | FM10K_ITR_MASK_CLEAR);
-	rte_intr_enable(&pdev->intr_handle);
+	rte_intr_ack(&pdev->intr_handle);
 	return 0;
 }
 
@@ -2758,7 +2688,7 @@ fm10k_dev_interrupt_handler_pf(void *param)
 	FM10K_WRITE_REG(hw, FM10K_ITR(0), FM10K_ITR_AUTOMASK |
 					FM10K_ITR_MASK_CLEAR);
 	/* Re-enable interrupt from host side */
-	rte_intr_enable(dev->intr_handle);
+	rte_intr_ack(dev->intr_handle);
 }
 
 /**
@@ -2838,7 +2768,7 @@ fm10k_dev_interrupt_handler_vf(void *param)
 	FM10K_WRITE_REG(hw, FM10K_VFITR(0), FM10K_ITR_AUTOMASK |
 					FM10K_ITR_MASK_CLEAR);
 	/* Re-enable interrupt from host side */
-	rte_intr_enable(dev->intr_handle);
+	rte_intr_ack(dev->intr_handle);
 }
 
 /* Mailbox message handler in VF */
@@ -2877,6 +2807,53 @@ fm10k_close_mbx_service(struct fm10k_hw *hw)
 	hw->mbx.ops.disconnect(hw, &hw->mbx);
 }
 
+static void
+fm10k_dev_close(struct rte_eth_dev *dev)
+{
+	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
+	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
+	struct rte_intr_handle *intr_handle = &pdev->intr_handle;
+
+	PMD_INIT_FUNC_TRACE();
+
+	fm10k_mbx_lock(hw);
+	hw->mac.ops.update_lport_state(hw, hw->mac.dglort_map,
+		MAX_LPORT_NUM, false);
+	fm10k_mbx_unlock(hw);
+
+	/* allow 100ms for device to quiesce */
+	rte_delay_us(FM10K_SWITCH_QUIESCE_US);
+
+	/* Stop mailbox service first */
+	fm10k_close_mbx_service(hw);
+	fm10k_dev_stop(dev);
+	fm10k_dev_queue_release(dev);
+	fm10k_stop_hw(hw);
+
+	dev->dev_ops = NULL;
+	dev->rx_pkt_burst = NULL;
+	dev->tx_pkt_burst = NULL;
+
+	/* disable uio/vfio intr */
+	rte_intr_disable(intr_handle);
+
+	/*PF/VF has different interrupt handling mechanism */
+	if (hw->mac.type == fm10k_mac_pf) {
+		/* disable interrupt */
+		fm10k_dev_disable_intr_pf(dev);
+
+		/* unregister callback func to eal lib */
+		rte_intr_callback_unregister(intr_handle,
+			fm10k_dev_interrupt_handler_pf, (void *)dev);
+	} else {
+		/* disable interrupt */
+		fm10k_dev_disable_intr_vf(dev);
+
+		rte_intr_callback_unregister(intr_handle,
+			fm10k_dev_interrupt_handler_vf, (void *)dev);
+	}
+}
+
 static const struct eth_dev_ops fm10k_eth_dev_ops = {
 	.dev_configure		= fm10k_dev_configure,
 	.dev_start		= fm10k_dev_start,
@@ -2906,7 +2883,10 @@ static const struct eth_dev_ops fm10k_eth_dev_ops = {
 	.rx_queue_release	= fm10k_rx_queue_release,
 	.tx_queue_setup		= fm10k_tx_queue_setup,
 	.tx_queue_release	= fm10k_tx_queue_release,
+	.rx_queue_count		= fm10k_dev_rx_queue_count,
 	.rx_descriptor_done	= fm10k_dev_rx_descriptor_done,
+	.rx_descriptor_status = fm10k_dev_rx_descriptor_status,
+	.tx_descriptor_status = fm10k_dev_tx_descriptor_status,
 	.rx_queue_intr_enable	= fm10k_dev_rx_queue_intr_enable,
 	.rx_queue_intr_disable	= fm10k_dev_rx_queue_intr_disable,
 	.reta_update		= fm10k_reta_update,
@@ -2983,7 +2963,7 @@ fm10k_set_tx_function(struct rte_eth_dev *dev)
 	uint16_t tx_ftag_en = 0;
 
 	if (rte_eal_process_type() != RTE_PROC_PRIMARY) {
-		/* primary process has set the ftag flag and txq_flags */
+		/* primary process has set the ftag flag and offloads */
 		txq = dev->data->tx_queues[0];
 		if (fm10k_tx_vec_condition_check(txq)) {
 			dev->tx_pkt_burst = fm10k_xmit_pkts;
@@ -3088,6 +3068,7 @@ fm10k_params_init(struct rte_eth_dev *dev)
 	hw->bus.payload = fm10k_bus_payload_256;
 
 	info->rx_vec_allowed = true;
+	info->sm_down = false;
 }
 
 static int
@@ -3156,7 +3137,7 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 
 	/* Initialize MAC address(es) */
 	dev->data->mac_addrs = rte_zmalloc("fm10k",
-			ETHER_ADDR_LEN * FM10K_MAX_MACADDR_NUM, 0);
+			RTE_ETHER_ADDR_LEN * FM10K_MAX_MACADDR_NUM, 0);
 	if (dev->data->mac_addrs == NULL) {
 		PMD_INIT_LOG(ERR, "Cannot allocate memory for MAC addresses");
 		return -ENOMEM;
@@ -3164,21 +3145,30 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 
 	diag = fm10k_read_mac_addr(hw);
 
-	ether_addr_copy((const struct ether_addr *)hw->mac.addr,
+	rte_ether_addr_copy((const struct rte_ether_addr *)hw->mac.addr,
 			&dev->data->mac_addrs[0]);
 
 	if (diag != FM10K_SUCCESS ||
-		!is_valid_assigned_ether_addr(dev->data->mac_addrs)) {
+		!rte_is_valid_assigned_ether_addr(dev->data->mac_addrs)) {
 
 		/* Generate a random addr */
-		eth_random_addr(hw->mac.addr);
+		rte_eth_random_addr(hw->mac.addr);
 		memcpy(hw->mac.perm_addr, hw->mac.addr, ETH_ALEN);
-		ether_addr_copy((const struct ether_addr *)hw->mac.addr,
+		rte_ether_addr_copy((const struct rte_ether_addr *)hw->mac.addr,
 		&dev->data->mac_addrs[0]);
 	}
 
+	/* Pass the information to the rte_eth_dev_close() that it should also
+	 * release the private port resources.
+	 */
+	dev->data->dev_flags |= RTE_ETH_DEV_CLOSE_REMOVE;
+
 	/* Reset the hw statistics */
-	fm10k_stats_reset(dev);
+	diag = fm10k_stats_reset(dev);
+	if (diag != 0) {
+		PMD_INIT_LOG(ERR, "Stats reset failed: %d", diag);
+		return diag;
+	}
 
 	/* Reset the hw */
 	diag = fm10k_reset_hw(hw);
@@ -3279,9 +3269,6 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 static int
 eth_fm10k_dev_uninit(struct rte_eth_dev *dev)
 {
-	struct fm10k_hw *hw = FM10K_DEV_PRIVATE_TO_HW(dev->data->dev_private);
-	struct rte_pci_device *pdev = RTE_ETH_DEV_TO_PCI(dev);
-	struct rte_intr_handle *intr_handle = &pdev->intr_handle;
 	PMD_INIT_FUNC_TRACE();
 
 	/* only uninitialize in the primary process */
@@ -3290,37 +3277,6 @@ eth_fm10k_dev_uninit(struct rte_eth_dev *dev)
 
 	/* safe to close dev here */
 	fm10k_dev_close(dev);
-
-	dev->dev_ops = NULL;
-	dev->rx_pkt_burst = NULL;
-	dev->tx_pkt_burst = NULL;
-
-	/* disable uio/vfio intr */
-	rte_intr_disable(intr_handle);
-
-	/*PF/VF has different interrupt handling mechanism */
-	if (hw->mac.type == fm10k_mac_pf) {
-		/* disable interrupt */
-		fm10k_dev_disable_intr_pf(dev);
-
-		/* unregister callback func to eal lib */
-		rte_intr_callback_unregister(intr_handle,
-			fm10k_dev_interrupt_handler_pf, (void *)dev);
-	} else {
-		/* disable interrupt */
-		fm10k_dev_disable_intr_vf(dev);
-
-		rte_intr_callback_unregister(intr_handle,
-			fm10k_dev_interrupt_handler_vf, (void *)dev);
-	}
-
-	/* free mac memory */
-	if (dev->data->mac_addrs) {
-		rte_free(dev->data->mac_addrs);
-		dev->data->mac_addrs = NULL;
-	}
-
-	memset(hw, 0, sizeof(*hw));
 
 	return 0;
 }
@@ -3350,8 +3306,7 @@ static const struct rte_pci_id pci_id_fm10k_map[] = {
 
 static struct rte_pci_driver rte_pmd_fm10k = {
 	.id_table = pci_id_fm10k_map,
-	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC |
-		     RTE_PCI_DRV_IOVA_AS_VA,
+	.drv_flags = RTE_PCI_DRV_NEED_MAPPING | RTE_PCI_DRV_INTR_LSC,
 	.probe = eth_fm10k_pci_probe,
 	.remove = eth_fm10k_pci_remove,
 };
@@ -3360,9 +3315,7 @@ RTE_PMD_REGISTER_PCI(net_fm10k, rte_pmd_fm10k);
 RTE_PMD_REGISTER_PCI_TABLE(net_fm10k, pci_id_fm10k_map);
 RTE_PMD_REGISTER_KMOD_DEP(net_fm10k, "* igb_uio | uio_pci_generic | vfio-pci");
 
-RTE_INIT(fm10k_init_log);
-static void
-fm10k_init_log(void)
+RTE_INIT(fm10k_init_log)
 {
 	fm10k_logtype_init = rte_log_register("pmd.net.fm10k.init");
 	if (fm10k_logtype_init >= 0)
@@ -3370,4 +3323,22 @@ fm10k_init_log(void)
 	fm10k_logtype_driver = rte_log_register("pmd.net.fm10k.driver");
 	if (fm10k_logtype_driver >= 0)
 		rte_log_set_level(fm10k_logtype_driver, RTE_LOG_NOTICE);
+
+#ifdef RTE_LIBRTE_FM10K_DEBUG_RX
+	fm10k_logtype_rx = rte_log_register("pmd.net.fm10k.rx");
+	if (fm10k_logtype_rx >= 0)
+		rte_log_set_level(fm10k_logtype_rx, RTE_LOG_DEBUG);
+#endif
+
+#ifdef RTE_LIBRTE_FM10K_DEBUG_TX
+	fm10k_logtype_tx = rte_log_register("pmd.net.fm10k.tx");
+	if (fm10k_logtype_tx >= 0)
+		rte_log_set_level(fm10k_logtype_tx, RTE_LOG_DEBUG);
+#endif
+
+#ifdef RTE_LIBRTE_FM10K_DEBUG_TX_FREE
+	fm10k_logtype_tx_free = rte_log_register("pmd.net.fm10k.tx_free");
+	if (fm10k_logtype_tx_free >= 0)
+		rte_log_set_level(fm10k_logtype_tx_free, RTE_LOG_DEBUG);
+#endif
 }

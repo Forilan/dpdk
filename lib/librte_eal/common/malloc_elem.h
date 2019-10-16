@@ -7,7 +7,7 @@
 
 #include <stdbool.h>
 
-#include <rte_eal_memconfig.h>
+#define MIN_DATA_SIZE (RTE_CACHE_LINE_SIZE)
 
 /* dummy definition of struct so we can use pointers to it in malloc_elem struct */
 struct malloc_heap;
@@ -30,6 +30,8 @@ struct malloc_elem {
 	volatile enum elem_state state;
 	uint32_t pad;
 	size_t size;
+	struct malloc_elem *orig_elem;
+	size_t orig_size;
 #ifdef RTE_MALLOC_DEBUG
 	uint64_t header_cookie;         /* Cookie marking start of data */
 	                                /* trailer cookie at start + size */
@@ -114,7 +116,9 @@ void
 malloc_elem_init(struct malloc_elem *elem,
 		struct malloc_heap *heap,
 		struct rte_memseg_list *msl,
-		size_t size);
+		size_t size,
+		struct malloc_elem *orig_elem,
+		size_t orig_size);
 
 void
 malloc_elem_insert(struct malloc_elem *elem);
@@ -176,5 +180,11 @@ malloc_elem_free_list_index(size_t size);
  */
 void
 malloc_elem_free_list_insert(struct malloc_elem *elem);
+
+/*
+ * Find biggest IOVA-contiguous zone within an element with specified alignment.
+ */
+size_t
+malloc_elem_find_max_iova_contig(struct malloc_elem *elem, size_t align);
 
 #endif /* MALLOC_ELEM_H_ */

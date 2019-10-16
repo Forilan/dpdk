@@ -13,6 +13,7 @@
 #include <sys/types.h>
 #include <sys/queue.h>
 
+#include <rte_string_fns.h>
 #include <rte_byteorder.h>
 #include <rte_log.h>
 #include <rte_debug.h>
@@ -35,24 +36,22 @@
 /* dynamic log identifier */
 int librawdev_logtype;
 
-struct rte_rawdev rte_rawdevices[RTE_RAWDEV_MAX_DEVS];
+static struct rte_rawdev rte_rawdevices[RTE_RAWDEV_MAX_DEVS];
 
-struct rte_rawdev *rte_rawdevs = &rte_rawdevices[0];
+struct rte_rawdev *rte_rawdevs = rte_rawdevices;
 
 static struct rte_rawdev_global rawdev_globals = {
 	.nb_devs		= 0
 };
 
-struct rte_rawdev_global *rte_rawdev_globals = &rawdev_globals;
-
 /* Raw device, northbound API implementation */
-uint8_t __rte_experimental
+uint8_t
 rte_rawdev_count(void)
 {
-	return rte_rawdev_globals->nb_devs;
+	return rawdev_globals.nb_devs;
 }
 
-uint16_t __rte_experimental
+uint16_t
 rte_rawdev_get_dev_id(const char *name)
 {
 	uint16_t i;
@@ -60,7 +59,7 @@ rte_rawdev_get_dev_id(const char *name)
 	if (!name)
 		return -EINVAL;
 
-	for (i = 0; i < rte_rawdev_globals->nb_devs; i++)
+	for (i = 0; i < rawdev_globals.nb_devs; i++)
 		if ((strcmp(rte_rawdevices[i].name, name)
 				== 0) &&
 				(rte_rawdevices[i].attached ==
@@ -69,7 +68,7 @@ rte_rawdev_get_dev_id(const char *name)
 	return -ENODEV;
 }
 
-int __rte_experimental
+int
 rte_rawdev_socket_id(uint16_t dev_id)
 {
 	struct rte_rawdev *dev;
@@ -80,16 +79,13 @@ rte_rawdev_socket_id(uint16_t dev_id)
 	return dev->socket_id;
 }
 
-int __rte_experimental
+int
 rte_rawdev_info_get(uint16_t dev_id, struct rte_rawdev_info *dev_info)
 {
 	struct rte_rawdev *rawdev;
 
 	RTE_RAWDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
 	RTE_FUNC_PTR_OR_ERR_RET(dev_info, -EINVAL);
-
-	if (dev_info == NULL)
-		return -EINVAL;
 
 	rawdev = &rte_rawdevs[dev_id];
 
@@ -105,7 +101,7 @@ rte_rawdev_info_get(uint16_t dev_id, struct rte_rawdev_info *dev_info)
 	return 0;
 }
 
-int __rte_experimental
+int
 rte_rawdev_configure(uint16_t dev_id, struct rte_rawdev_info *dev_conf)
 {
 	struct rte_rawdev *dev;
@@ -134,7 +130,7 @@ rte_rawdev_configure(uint16_t dev_id, struct rte_rawdev_info *dev_conf)
 	return diag;
 }
 
-int __rte_experimental
+int
 rte_rawdev_queue_conf_get(uint16_t dev_id,
 			  uint16_t queue_id,
 			  rte_rawdev_obj_t queue_conf)
@@ -149,7 +145,7 @@ rte_rawdev_queue_conf_get(uint16_t dev_id,
 	return 0;
 }
 
-int __rte_experimental
+int
 rte_rawdev_queue_setup(uint16_t dev_id,
 		       uint16_t queue_id,
 		       rte_rawdev_obj_t queue_conf)
@@ -163,7 +159,7 @@ rte_rawdev_queue_setup(uint16_t dev_id,
 	return (*dev->dev_ops->queue_setup)(dev, queue_id, queue_conf);
 }
 
-int __rte_experimental
+int
 rte_rawdev_queue_release(uint16_t dev_id, uint16_t queue_id)
 {
 	struct rte_rawdev *dev;
@@ -175,7 +171,19 @@ rte_rawdev_queue_release(uint16_t dev_id, uint16_t queue_id)
 	return (*dev->dev_ops->queue_release)(dev, queue_id);
 }
 
-int __rte_experimental
+uint16_t
+rte_rawdev_queue_count(uint16_t dev_id)
+{
+	struct rte_rawdev *dev;
+
+	RTE_RAWDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
+	dev = &rte_rawdevs[dev_id];
+
+	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->queue_count, -ENOTSUP);
+	return (*dev->dev_ops->queue_count)(dev);
+}
+
+int
 rte_rawdev_get_attr(uint16_t dev_id,
 		    const char *attr_name,
 		    uint64_t *attr_value)
@@ -189,7 +197,7 @@ rte_rawdev_get_attr(uint16_t dev_id,
 	return (*dev->dev_ops->attr_get)(dev, attr_name, attr_value);
 }
 
-int __rte_experimental
+int
 rte_rawdev_set_attr(uint16_t dev_id,
 		    const char *attr_name,
 		    const uint64_t attr_value)
@@ -203,7 +211,7 @@ rte_rawdev_set_attr(uint16_t dev_id,
 	return (*dev->dev_ops->attr_set)(dev, attr_name, attr_value);
 }
 
-int __rte_experimental
+int
 rte_rawdev_enqueue_buffers(uint16_t dev_id,
 			   struct rte_rawdev_buf **buffers,
 			   unsigned int count,
@@ -218,7 +226,7 @@ rte_rawdev_enqueue_buffers(uint16_t dev_id,
 	return (*dev->dev_ops->enqueue_bufs)(dev, buffers, count, context);
 }
 
-int __rte_experimental
+int
 rte_rawdev_dequeue_buffers(uint16_t dev_id,
 			   struct rte_rawdev_buf **buffers,
 			   unsigned int count,
@@ -233,7 +241,7 @@ rte_rawdev_dequeue_buffers(uint16_t dev_id,
 	return (*dev->dev_ops->dequeue_bufs)(dev, buffers, count, context);
 }
 
-int __rte_experimental
+int
 rte_rawdev_dump(uint16_t dev_id, FILE *f)
 {
 	struct rte_rawdev *dev;
@@ -254,7 +262,7 @@ xstats_get_count(uint16_t dev_id)
 	return (*dev->dev_ops->xstats_get_names)(dev, NULL, 0);
 }
 
-int __rte_experimental
+int
 rte_rawdev_xstats_names_get(uint16_t dev_id,
 		struct rte_rawdev_xstats_name *xstats_names,
 		unsigned int size)
@@ -277,7 +285,7 @@ rte_rawdev_xstats_names_get(uint16_t dev_id,
 }
 
 /* retrieve rawdev extended statistics */
-int __rte_experimental
+int
 rte_rawdev_xstats_get(uint16_t dev_id,
 		      const unsigned int ids[],
 		      uint64_t values[],
@@ -290,7 +298,7 @@ rte_rawdev_xstats_get(uint16_t dev_id,
 	return (*dev->dev_ops->xstats_get)(dev, ids, values, n);
 }
 
-uint64_t __rte_experimental
+uint64_t
 rte_rawdev_xstats_by_name_get(uint16_t dev_id,
 			      const char *name,
 			      unsigned int *id)
@@ -309,7 +317,7 @@ rte_rawdev_xstats_by_name_get(uint16_t dev_id,
 	return (*dev->dev_ops->xstats_get_by_name)(dev, name, id);
 }
 
-int __rte_experimental
+int
 rte_rawdev_xstats_reset(uint16_t dev_id,
 			const uint32_t ids[], uint32_t nb_ids)
 {
@@ -320,7 +328,7 @@ rte_rawdev_xstats_reset(uint16_t dev_id,
 	return (*dev->dev_ops->xstats_reset)(dev, ids, nb_ids);
 }
 
-int __rte_experimental
+int
 rte_rawdev_firmware_status_get(uint16_t dev_id, rte_rawdev_obj_t status_info)
 {
 	RTE_RAWDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
@@ -330,7 +338,7 @@ rte_rawdev_firmware_status_get(uint16_t dev_id, rte_rawdev_obj_t status_info)
 	return (*dev->dev_ops->firmware_status_get)(dev, status_info);
 }
 
-int __rte_experimental
+int
 rte_rawdev_firmware_version_get(uint16_t dev_id, rte_rawdev_obj_t version_info)
 {
 	RTE_RAWDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
@@ -340,7 +348,7 @@ rte_rawdev_firmware_version_get(uint16_t dev_id, rte_rawdev_obj_t version_info)
 	return (*dev->dev_ops->firmware_version_get)(dev, version_info);
 }
 
-int __rte_experimental
+int
 rte_rawdev_firmware_load(uint16_t dev_id, rte_rawdev_obj_t firmware_image)
 {
 	RTE_RAWDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
@@ -353,7 +361,7 @@ rte_rawdev_firmware_load(uint16_t dev_id, rte_rawdev_obj_t firmware_image)
 	return (*dev->dev_ops->firmware_load)(dev, firmware_image);
 }
 
-int __rte_experimental
+int
 rte_rawdev_firmware_unload(uint16_t dev_id)
 {
 	RTE_RAWDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
@@ -363,17 +371,17 @@ rte_rawdev_firmware_unload(uint16_t dev_id)
 	return (*dev->dev_ops->firmware_unload)(dev);
 }
 
-int __rte_experimental
+int
 rte_rawdev_selftest(uint16_t dev_id)
 {
 	RTE_RAWDEV_VALID_DEVID_OR_ERR_RET(dev_id, -EINVAL);
 	struct rte_rawdev *dev = &rte_rawdevs[dev_id];
 
 	RTE_FUNC_PTR_OR_ERR_RET(*dev->dev_ops->dev_selftest, -ENOTSUP);
-	return (*dev->dev_ops->dev_selftest)();
+	return (*dev->dev_ops->dev_selftest)(dev_id);
 }
 
-int __rte_experimental
+int
 rte_rawdev_start(uint16_t dev_id)
 {
 	struct rte_rawdev *dev;
@@ -400,7 +408,7 @@ rte_rawdev_start(uint16_t dev_id)
 	return 0;
 }
 
-void __rte_experimental
+void
 rte_rawdev_stop(uint16_t dev_id)
 {
 	struct rte_rawdev *dev;
@@ -422,7 +430,7 @@ rte_rawdev_stop(uint16_t dev_id)
 	dev->started = 0;
 }
 
-int __rte_experimental
+int
 rte_rawdev_close(uint16_t dev_id)
 {
 	struct rte_rawdev *dev;
@@ -441,7 +449,7 @@ rte_rawdev_close(uint16_t dev_id)
 	return (*dev->dev_ops->dev_close)(dev);
 }
 
-int __rte_experimental
+int
 rte_rawdev_reset(uint16_t dev_id)
 {
 	struct rte_rawdev *dev;
@@ -468,7 +476,7 @@ rte_rawdev_find_free_device_index(void)
 	return RTE_RAWDEV_MAX_DEVS;
 }
 
-struct rte_rawdev * __rte_experimental
+struct rte_rawdev *
 rte_rawdev_pmd_allocate(const char *name, size_t dev_priv_size, int socket_id)
 {
 	struct rte_rawdev *rawdev;
@@ -488,20 +496,21 @@ rte_rawdev_pmd_allocate(const char *name, size_t dev_priv_size, int socket_id)
 
 	rawdev = &rte_rawdevs[dev_id];
 
-	rawdev->dev_private = rte_zmalloc_socket("rawdev private",
+	if (dev_priv_size > 0) {
+		rawdev->dev_private = rte_zmalloc_socket("rawdev private",
 				     dev_priv_size,
 				     RTE_CACHE_LINE_SIZE,
 				     socket_id);
-	if (!rawdev->dev_private) {
-		RTE_RDEV_ERR("Unable to allocate memory to Skeleton dev");
-		return NULL;
+		if (!rawdev->dev_private) {
+			RTE_RDEV_ERR("Unable to allocate memory for rawdev");
+			return NULL;
+		}
 	}
-
 
 	rawdev->dev_id = dev_id;
 	rawdev->socket_id = socket_id;
 	rawdev->started = 0;
-	snprintf(rawdev->name, RTE_RAWDEV_NAME_MAX_LEN, "%s", name);
+	strlcpy(rawdev->name, name, RTE_RAWDEV_NAME_MAX_LEN);
 
 	rawdev->attached = RTE_RAWDEV_ATTACHED;
 	rawdev_globals.nb_devs++;
@@ -509,7 +518,7 @@ rte_rawdev_pmd_allocate(const char *name, size_t dev_priv_size, int socket_id)
 	return rawdev;
 }
 
-int __rte_experimental
+int
 rte_rawdev_pmd_release(struct rte_rawdev *rawdev)
 {
 	int ret;
@@ -535,10 +544,7 @@ rte_rawdev_pmd_release(struct rte_rawdev *rawdev)
 	return 0;
 }
 
-RTE_INIT(librawdev_init_log);
-
-static void
-librawdev_init_log(void)
+RTE_INIT(librawdev_init_log)
 {
 	librawdev_logtype = rte_log_register("lib.rawdev");
 	if (librawdev_logtype >= 0)

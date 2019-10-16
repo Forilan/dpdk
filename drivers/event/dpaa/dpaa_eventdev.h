@@ -12,15 +12,8 @@
 
 #define EVENTDEV_NAME_DPAA_PMD		event_dpaa1
 
-#define EVENTDEV_DRV_LOG(fmt, args...)	\
-		DPAA_EVENTDEV_INFO(fmt, ## args)
-#define EVENTDEV_DRV_FUNC_TRACE()	\
-		DPAA_EVENTDEV_DEBUG("%s() Called:\n", __func__)
-#define EVENTDEV_DRV_ERR(fmt, args...)	\
-		DPAA_EVENTDEV_ERR("%s(): " fmt "\n", __func__, ## args)
-
-#define DPAA_EVENT_MAX_PORTS			8
-#define DPAA_EVENT_MAX_QUEUES			16
+#define DPAA_EVENT_MAX_PORTS			4
+#define DPAA_EVENT_MAX_QUEUES			8
 #define DPAA_EVENT_MIN_DEQUEUE_TIMEOUT	1
 #define DPAA_EVENT_MAX_DEQUEUE_TIMEOUT	(UINT32_MAX - 1)
 #define DPAA_EVENT_MAX_QUEUE_FLOWS		2048
@@ -28,7 +21,7 @@
 #define DPAA_EVENT_MAX_EVENT_PRIORITY_LEVELS	0
 #define DPAA_EVENT_MAX_EVENT_PORT		RTE_MIN(RTE_MAX_LCORE, INT8_MAX)
 #define DPAA_EVENT_MAX_PORT_DEQUEUE_DEPTH	8
-#define DPAA_EVENT_PORT_DEQUEUE_TIMEOUT_NS	100UL
+#define DPAA_EVENT_PORT_DEQUEUE_TIMEOUT_NS	100000UL
 #define DPAA_EVENT_PORT_DEQUEUE_TIMEOUT_INVALID	((uint64_t)-1)
 #define DPAA_EVENT_MAX_PORT_ENQUEUE_DEPTH	1
 #define DPAA_EVENT_MAX_NUM_EVENTS		(INT32_MAX - 1)
@@ -47,6 +40,11 @@ do {						\
 		RTE_EVENT_ETH_RX_ADAPTER_CAP_MULTI_EVENTQ | \
 		RTE_EVENT_ETH_RX_ADAPTER_CAP_OVERRIDE_FLOW_ID)
 
+#define RTE_EVENT_CRYPTO_ADAPTER_DPAA_CAP \
+		(RTE_EVENT_CRYPTO_ADAPTER_CAP_INTERNAL_PORT_OP_NEW | \
+		RTE_EVENT_CRYPTO_ADAPTER_CAP_INTERNAL_PORT_QP_EV_BIND | \
+		RTE_EVENT_CRYPTO_ADAPTER_CAP_SESSION_PRIVATE_DATA)
+
 struct dpaa_eventq {
 	/* Channel Id */
 	uint16_t ch_id;
@@ -61,7 +59,7 @@ struct dpaa_port {
 	struct dpaa_eventq evq_info[DPAA_EVENT_MAX_QUEUES];
 	uint8_t num_linked_evq;
 	uint8_t is_port_linked;
-	uint64_t timeout;
+	uint64_t timeout_us;
 };
 
 struct dpaa_eventdev {
@@ -72,7 +70,7 @@ struct dpaa_eventdev {
 	uint8_t max_event_queues;
 	uint8_t nb_event_queues;
 	uint8_t nb_event_ports;
-	uint8_t resvd;
+	uint8_t intr_mode;
 	uint32_t nb_event_queue_flows;
 	uint32_t nb_event_port_dequeue_depth;
 	uint32_t nb_event_port_enqueue_depth;

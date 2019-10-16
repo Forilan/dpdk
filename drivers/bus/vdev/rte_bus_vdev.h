@@ -5,6 +5,12 @@
 #ifndef RTE_VDEV_H
 #define RTE_VDEV_H
 
+/**
+ * @file
+ * RTE virtual bus API
+ *
+ */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -24,6 +30,9 @@ struct rte_vdev_device {
  */
 #define RTE_DEV_TO_VDEV(ptr) \
 	container_of(ptr, struct rte_vdev_device, device)
+
+#define RTE_DEV_TO_VDEV_CONST(ptr) \
+	container_of(ptr, const struct rte_vdev_device, device)
 
 static inline const char *
 rte_vdev_device_name(const struct rte_vdev_device *dev)
@@ -83,9 +92,8 @@ void rte_vdev_register(struct rte_vdev_driver *driver);
 void rte_vdev_unregister(struct rte_vdev_driver *driver);
 
 #define RTE_PMD_REGISTER_VDEV(nm, vdrv)\
-RTE_INIT(vdrvinitfn_ ##vdrv);\
 static const char *vdrvinit_ ## nm ## _alias;\
-static void vdrvinitfn_ ##vdrv(void)\
+RTE_INIT(vdrvinitfn_ ##vdrv)\
 {\
 	(vdrv).driver.name = RTE_STR(nm);\
 	(vdrv).driver.alias = vdrvinit_ ## nm ## _alias;\

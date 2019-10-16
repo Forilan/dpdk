@@ -40,7 +40,7 @@ actual MAC address: ``00:64:74:61:70:[00-FF]``.
    --vdev=net_tap0,mac="00:64:74:61:70:11"
 
 The MAC address will have a user value passed as string. The MAC address is in
-format with delimeter ``:``. The string is byte converted to hex and you get
+format with delimiter ``:``. The string is byte converted to hex and you get
 the actual MAC address: ``00:64:74:61:70:11``.
 
 It is possible to specify a remote netdevice to capture packets from by adding
@@ -108,7 +108,7 @@ The kernel support can be checked with this command::
 Supported items:
 
 - eth: src and dst (with variable masks), and eth_type (0xffff mask).
-- vlan: vid, pcp, tpid, but not eid. (requires kernel 4.9)
+- vlan: vid, pcp, but not eid. (requires kernel 4.9)
 - ipv4/6: src and dst (with variable masks), and ip_proto (0xffff mask).
 - udp/tcp: src and dst port (0xffff) mask.
 
@@ -152,6 +152,22 @@ Distribute IPv4 TCP packets using RSS to a given MAC address over queues 0-3::
    testpmd> flow create 0 priority 4 ingress pattern eth dst is 0a:0b:0c:0d:0e:0f \
             / ipv4 / tcp / end actions rss queues 0 1 2 3 end / end
 
+Multi-process sharing
+---------------------
+
+It is possible to attach an existing TAP device in a secondary process,
+by declaring it as a vdev with the same name as in the primary process,
+and without any parameter.
+
+The port attached in a secondary process will give access to the
+statistics and the queues.
+Therefore it can be used for monitoring or Rx/Tx processing.
+
+The IPC synchronization of Rx/Tx queues is currently limited:
+
+  - Maximum 8 queues shared
+  - Synchronized on probing, but not on later port update
+
 Example
 -------
 
@@ -165,8 +181,8 @@ used to build the dpdk you pulled down.
 Run pktgen from the pktgen directory in a terminal with a commandline like the
 following::
 
-    sudo ./app/app/x86_64-native-linuxapp-gcc/app/pktgen -l 1-5 -n 4        \
-     --proc-type auto --log-level 8 --socket-mem 512,512 --file-prefix pg   \
+    sudo ./app/app/x86_64-native-linux-gcc/app/pktgen -l 1-5 -n 4        \
+     --proc-type auto --log-level debug --socket-mem 512,512 --file-prefix pg   \
      --vdev=net_tap0 --vdev=net_tap1 -b 05:00.0 -b 05:00.1                  \
      -b 04:00.0 -b 04:00.1 -b 04:00.2 -b 04:00.3                            \
      -b 81:00.0 -b 81:00.1 -b 81:00.2 -b 81:00.3                            \
@@ -257,6 +273,11 @@ Please refer to ``iproute2`` package file ``lib/bpf.c`` function
 
 An example utility for eBPF instruction generation in the format of C arrays will
 be added in next releases
+
+TAP reports on supported RSS functions as part of dev_infos_get callback:
+``ETH_RSS_IP``, ``ETH_RSS_UDP`` and ``ETH_RSS_TCP``.
+**Known limitation:** TAP supports all of the above hash functions together
+and not in partial combinations.
 
 Systems supporting flow API
 ---------------------------

@@ -1,5 +1,4 @@
-/*
- * SPDX-License-Identifier: BSD-3-Clause
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2017 Cavium, Inc
  */
 
@@ -7,9 +6,7 @@
 
 int otx_logtype_timvf;
 
-RTE_INIT(otx_timvf_init_log);
-static void
-otx_timvf_init_log(void)
+RTE_INIT(otx_timvf_init_log)
 {
 	otx_logtype_timvf = rte_log_register("pmd.event.octeontx.timer");
 	if (otx_logtype_timvf >= 0)
@@ -175,7 +172,7 @@ timvf_ring_start(const struct rte_event_timer_adapter *adptr)
 	if (use_fpa) {
 		pool = (uintptr_t)((struct rte_mempool *)
 				timr->chunk_pool)->pool_id;
-		ret = octeontx_fpa_bufpool_gpool(pool);
+		ret = octeontx_fpa_bufpool_gaura(pool);
 		if (ret < 0) {
 			timvf_log_dbg("Unable to get gaura id");
 			ret = -ENOMEM;
@@ -295,7 +292,8 @@ timvf_ring_create(struct rte_event_timer_adapter *adptr)
 	if (timr->bkt == NULL)
 		goto mem_err;
 
-	snprintf(pool_name, 30, "timvf_chunk_pool%d", timr->tim_ring_id);
+	snprintf(pool_name, sizeof(pool_name), "timvf_chunk_pool%d",
+			timr->tim_ring_id);
 	timr->chunk_pool = (void *)rte_mempool_create_empty(pool_name,
 			timr->nb_chunks, TIM_CHUNK_SIZE, 0, 0, rte_socket_id(),
 			mp_flags);

@@ -12,7 +12,7 @@ CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
-LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs -lrte_cmdline
+LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs
 LDLIBS += -lrte_pci -lrte_bus_pci
 LDLIBS += -lrte_bus_vdev
 
@@ -28,6 +28,7 @@ SRCS-$(CONFIG_RTE_LIBRTE_PMD_BOND) += rte_eth_bond_pmd.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_BOND) += rte_eth_bond_args.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_BOND) += rte_eth_bond_8023ad.c
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_BOND) += rte_eth_bond_alb.c
+SRCS-$(CONFIG_RTE_LIBRTE_PMD_BOND) += rte_eth_bond_flow.c
 
 #
 # Export include files

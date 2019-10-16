@@ -6,6 +6,7 @@
 # To build this example as a standalone application with an already-installed
 # DPDK instance, use 'make'
 
+build = cc.has_header('sys/epoll.h')
 deps += ['pipeline', 'bus_pci']
 allow_experimental_apis = true
 sources = files(
@@ -21,5 +22,6 @@ sources = files(
 	'swq.c',
 	'tap.c',
 	'thread.c',
-	'tmgr.c'
+	'tmgr.c',
+	'cryptodev.c'
 )

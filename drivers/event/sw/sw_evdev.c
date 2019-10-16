@@ -38,12 +38,12 @@ sw_port_link(struct rte_eventdev *dev, void *port, const uint8_t queues[],
 
 		/* check for qid map overflow */
 		if (q->cq_num_mapped_cqs >= RTE_DIM(q->cq_map)) {
-			rte_errno = -EDQUOT;
+			rte_errno = EDQUOT;
 			break;
 		}
 
 		if (p->is_directed && p->num_qids_mapped > 0) {
-			rte_errno = -EDQUOT;
+			rte_errno = EDQUOT;
 			break;
 		}
 
@@ -59,12 +59,12 @@ sw_port_link(struct rte_eventdev *dev, void *port, const uint8_t queues[],
 		if (q->type == SW_SCHED_TYPE_DIRECT) {
 			/* check directed qids only map to one port */
 			if (p->num_qids_mapped > 0) {
-				rte_errno = -EDQUOT;
+				rte_errno = EDQUOT;
 				break;
 			}
 			/* check port only takes a directed flow */
 			if (num > 1) {
-				rte_errno = -EDQUOT;
+				rte_errno = EDQUOT;
 				break;
 			}
 
@@ -113,7 +113,19 @@ sw_port_unlink(struct rte_eventdev *dev, void *port, uint8_t queues[],
 			}
 		}
 	}
+
+	p->unlinks_in_progress += unlinked;
+	rte_smp_mb();
+
 	return unlinked;
+}
+
+static int
+sw_port_unlinks_in_progress(struct rte_eventdev *dev, void *port)
+{
+	RTE_SET_USED(dev);
+	struct sw_port *p = port;
+	return p->unlinks_in_progress;
 }
 
 static int
@@ -361,9 +373,99 @@ sw_init_qid_iqs(struct sw_evdev *sw)
 	}
 }
 
-static void
-sw_clean_qid_iqs(struct sw_evdev *sw)
+static int
+sw_qids_empty(struct sw_evdev *sw)
 {
+	unsigned int i, j;
+
+	for (i = 0; i < sw->qid_count; i++) {
+		for (j = 0; j < SW_IQS_MAX; j++) {
+			if (iq_count(&sw->qids[i].iq[j]))
+				return 0;
+		}
+	}
+
+	return 1;
+}
+
+static int
+sw_ports_empty(struct sw_evdev *sw)
+{
+	unsigned int i;
+
+	for (i = 0; i < sw->port_count; i++) {
+		if ((rte_event_ring_count(sw->ports[i].rx_worker_ring)) ||
+		     rte_event_ring_count(sw->ports[i].cq_worker_ring))
+			return 0;
+	}
+
+	return 1;
+}
+
+static void
+sw_drain_ports(struct rte_eventdev *dev)
+{
+	struct sw_evdev *sw = sw_pmd_priv(dev);
+	eventdev_stop_flush_t flush;
+	unsigned int i;
+	uint8_t dev_id;
+	void *arg;
+
+	flush = dev->dev_ops->dev_stop_flush;
+	dev_id = dev->data->dev_id;
+	arg = dev->data->dev_stop_flush_arg;
+
+	for (i = 0; i < sw->port_count; i++) {
+		struct rte_event ev;
+
+		while (rte_event_dequeue_burst(dev_id, i, &ev, 1, 0)) {
+			if (flush)
+				flush(dev_id, ev, arg);
+
+			ev.op = RTE_EVENT_OP_RELEASE;
+			rte_event_enqueue_burst(dev_id, i, &ev, 1);
+		}
+	}
+}
+
+static void
+sw_drain_queue(struct rte_eventdev *dev, struct sw_iq *iq)
+{
+	struct sw_evdev *sw = sw_pmd_priv(dev);
+	eventdev_stop_flush_t flush;
+	uint8_t dev_id;
+	void *arg;
+
+	flush = dev->dev_ops->dev_stop_flush;
+	dev_id = dev->data->dev_id;
+	arg = dev->data->dev_stop_flush_arg;
+
+	while (iq_count(iq) > 0) {
+		struct rte_event ev;
+
+		iq_dequeue_burst(sw, iq, &ev, 1);
+
+		if (flush)
+			flush(dev_id, ev, arg);
+	}
+}
+
+static void
+sw_drain_queues(struct rte_eventdev *dev)
+{
+	struct sw_evdev *sw = sw_pmd_priv(dev);
+	unsigned int i, j;
+
+	for (i = 0; i < sw->qid_count; i++) {
+		for (j = 0; j < SW_IQS_MAX; j++)
+			sw_drain_queue(dev, &sw->qids[i].iq[j]);
+	}
+}
+
+static void
+sw_clean_qid_iqs(struct rte_eventdev *dev)
+{
+	struct sw_evdev *sw = sw_pmd_priv(dev);
 	int i, j;
 
 	/* Release the IQ memory of all configured qids */
@@ -477,6 +579,17 @@ sw_timer_adapter_caps_get(const struct rte_eventdev *dev,
 	/* Use default SW ops */
 	*ops = NULL;
 
+	return 0;
+}
+
+static int
+sw_crypto_adapter_caps_get(const struct rte_eventdev *dev,
+			   const struct rte_cryptodev *cdev,
+			   uint32_t *caps)
+{
+	RTE_SET_USED(dev);
+	RTE_SET_USED(cdev);
+	*caps = RTE_EVENT_CRYPTO_ADAPTER_SW_CAP;
 	return 0;
 }
 
@@ -718,10 +831,30 @@ static void
 sw_stop(struct rte_eventdev *dev)
 {
 	struct sw_evdev *sw = sw_pmd_priv(dev);
-	sw_clean_qid_iqs(sw);
+	int32_t runstate;
+
+	/* Stop the scheduler if it's running */
+	runstate = rte_service_runstate_get(sw->service_id);
+	if (runstate == 1)
+		rte_service_runstate_set(sw->service_id, 0);
+
+	while (rte_service_may_be_active(sw->service_id))
+		rte_pause();
+
+	/* Flush all events out of the device */
+	while (!(sw_qids_empty(sw) && sw_ports_empty(sw))) {
+		sw_event_schedule(dev);
+		sw_drain_ports(dev);
+		sw_drain_queues(dev);
+	}
+
+	sw_clean_qid_iqs(dev);
 	sw_xstats_uninit(sw);
 	sw->started = 0;
 	rte_smp_wmb();
+
+	if (runstate == 1)
+		rte_service_runstate_set(sw->service_id, 1);
 }
 
 static int
@@ -804,10 +937,13 @@ sw_probe(struct rte_vdev_device *vdev)
 			.port_release = sw_port_release,
 			.port_link = sw_port_link,
 			.port_unlink = sw_port_unlink,
+			.port_unlinks_in_progress = sw_port_unlinks_in_progress,
 
 			.eth_rx_adapter_caps_get = sw_eth_rx_adapter_caps_get,
 
 			.timer_adapter_caps_get = sw_timer_adapter_caps_get,
+
+			.crypto_adapter_caps_get = sw_crypto_adapter_caps_get,
 
 			.xstats_get = sw_xstats_get,
 			.xstats_get_names = sw_xstats_get_names,
@@ -951,9 +1087,7 @@ RTE_PMD_REGISTER_PARAM_STRING(event_sw, NUMA_NODE_ARG "=<int> "
 /* declared extern in header, for access from other .c files */
 int eventdev_sw_log_level;
 
-RTE_INIT(evdev_sw_init_log);
-static void
-evdev_sw_init_log(void)
+RTE_INIT(evdev_sw_init_log)
 {
 	eventdev_sw_log_level = rte_log_register("pmd.event.sw");
 	if (eventdev_sw_log_level >= 0)

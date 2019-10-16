@@ -8,6 +8,8 @@
 #ifndef _RTE_DPAA2_SEC_PMD_PRIVATE_H_
 #define _RTE_DPAA2_SEC_PMD_PRIVATE_H_
 
+#include <rte_security_driver.h>
+
 #define CRYPTODEV_NAME_DPAA2_SEC_PMD	crypto_dpaa2_sec
 /**< NXP DPAA2 - SEC PMD device name */
 
@@ -23,8 +25,6 @@ struct dpaa2_sec_dev_private {
 	uint16_t token; /**< Token required by DPxxx objects */
 	unsigned int max_nb_queue_pairs;
 	/**< Max number of queue pairs supported by device */
-	unsigned int max_nb_sessions;
-	/**< Max number of sessions supported by device */
 };
 
 struct dpaa2_sec_qp {
@@ -40,6 +40,8 @@ enum shr_desc_type {
 
 #define DIR_ENC                 1
 #define DIR_DEC                 0
+
+#define DPAA2_IPv6_DEFAULT_VTC_FLOW	0x60000000
 
 #define DPAA2_SET_FLC_EWS(flc)  (flc->word1_bits23_16 |= 0x1)
 #define DPAA2_SET_FLC_RSC(flc)  (flc->word1_bits31_24 |= 0x1)
@@ -137,6 +139,22 @@ struct dpaa2_sec_aead_ctxt {
 	uint8_t auth_cipher_text;       /**< Authenticate/cipher ordering */
 };
 
+/*
+ * The structure is to be filled by user for PDCP Protocol
+ */
+struct dpaa2_pdcp_ctxt {
+	enum rte_security_pdcp_domain domain; /*!< Data/Control mode*/
+	int8_t bearer;	/*!< PDCP bearer ID */
+	int8_t pkt_dir;/*!< PDCP Frame Direction 0:UL 1:DL*/
+	int8_t hfn_ovd;/*!< Overwrite HFN per packet*/
+	uint8_t sn_size;	/*!< Sequence number size, 5/7/12/15/18 */
+	uint32_t hfn_ovd_offset;/*!< offset from rte_crypto_op at which
+				 * per packet hfn is stored
+				 */
+	uint32_t hfn;	/*!< Hyper Frame Number */
+	uint32_t hfn_threshold;	/*!< HFN Threashold for key renegotiation */
+};
+
 typedef struct dpaa2_sec_session_entry {
 	void *ctxt;
 	uint8_t ctxt_type;
@@ -160,15 +178,20 @@ typedef struct dpaa2_sec_session_entry {
 			} auth_key;
 		};
 	};
-	struct {
-		uint16_t length; /**< IV length in bytes */
-		uint16_t offset; /**< IV offset in bytes */
-	} iv;
-	uint16_t digest_length;
-	uint8_t status;
 	union {
-		struct dpaa2_sec_aead_ctxt aead_ctxt;
-	} ext_params;
+		struct {
+			struct {
+				uint16_t length; /**< IV length in bytes */
+				uint16_t offset; /**< IV offset in bytes */
+			} iv;
+			uint16_t digest_length;
+			uint8_t status;
+			union {
+				struct dpaa2_sec_aead_ctxt aead_ctxt;
+			} ext_params;
+		};
+		struct dpaa2_pdcp_ctxt pdcp;
+	};
 } dpaa2_sec_session;
 
 static const struct rte_cryptodev_capabilities dpaa2_sec_capabilities[] = {
@@ -388,6 +411,251 @@ static const struct rte_cryptodev_capabilities dpaa2_sec_capabilities[] = {
 			}, }
 		}, }
 	},
+	{	/* SNOW 3G (UIA2) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
+			{.auth = {
+				.algo = RTE_CRYPTO_AUTH_SNOW3G_UIA2,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.digest_size = {
+					.min = 4,
+					.max = 4,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* SNOW 3G (UEA2) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_SNOW3G_UEA2,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* ZUC (EEA3) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_ZUC_EEA3,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* ZUC (EIA3) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
+			{.auth = {
+				.algo = RTE_CRYPTO_AUTH_ZUC_EIA3,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.digest_size = {
+					.min = 4,
+					.max = 4,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
+};
+
+static const struct rte_cryptodev_capabilities dpaa2_pdcp_capabilities[] = {
+	{	/* SNOW 3G (UIA2) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
+			{.auth = {
+				.algo = RTE_CRYPTO_AUTH_SNOW3G_UIA2,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.digest_size = {
+					.min = 4,
+					.max = 4,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* SNOW 3G (UEA2) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_SNOW3G_UEA2,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* AES CTR */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_AES_CTR,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 32,
+					.increment = 8
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* NULL (AUTH) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
+			{.auth = {
+				.algo = RTE_CRYPTO_AUTH_NULL,
+				.block_size = 1,
+				.key_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				},
+				.digest_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				},
+				.iv_size = { 0 }
+			}, },
+		}, },
+	},
+	{	/* NULL (CIPHER) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_NULL,
+				.block_size = 1,
+				.key_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				}
+			}, },
+		}, }
+	},
+	{	/* ZUC (EEA3) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_ZUC_EEA3,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
+	{	/* ZUC (EIA3) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
+			{.auth = {
+				.algo = RTE_CRYPTO_AUTH_ZUC_EIA3,
+				.block_size = 16,
+				.key_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				},
+				.digest_size = {
+					.min = 4,
+					.max = 4,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 16,
+					.max = 16,
+					.increment = 0
+				}
+			}, }
+		}, }
+	},
 
 	RTE_CRYPTODEV_END_OF_CAPABILITIES_LIST()
 };
@@ -414,6 +682,24 @@ static const struct rte_security_capability dpaa2_sec_security_cap[] = {
 			.options = { 0 }
 		},
 		.crypto_capabilities = dpaa2_sec_capabilities
+	},
+	{ /* PDCP Lookaside Protocol offload Data */
+		.action = RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL,
+		.protocol = RTE_SECURITY_PROTOCOL_PDCP,
+		.pdcp = {
+			.domain = RTE_SECURITY_PDCP_MODE_DATA,
+			.capa_flags = 0
+		},
+		.crypto_capabilities = dpaa2_pdcp_capabilities
+	},
+	{ /* PDCP Lookaside Protocol offload Control */
+		.action = RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL,
+		.protocol = RTE_SECURITY_PROTOCOL_PDCP,
+		.pdcp = {
+			.domain = RTE_SECURITY_PDCP_MODE_CONTROL,
+			.capa_flags = 0
+		},
+		.crypto_capabilities = dpaa2_pdcp_capabilities
 	},
 	{
 		.action = RTE_SECURITY_ACTION_TYPE_NONE

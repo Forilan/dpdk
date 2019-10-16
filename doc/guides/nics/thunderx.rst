@@ -30,6 +30,7 @@ Features of the ThunderX PMD are:
 - SR-IOV VF
 - NUMA support
 - Multi queue set support (up to 96 queues (12 queue sets)) per port
+- Skip data bytes
 
 Supported ThunderX SoCs
 -----------------------
@@ -69,7 +70,7 @@ Refer to the document :ref:`compiling and testing a PMD for a NIC <pmd_build_and
 for details.
 
 To compile the ThunderX NICVF PMD for Linux arm64 gcc,
-use arm64-thunderx-linuxapp-gcc as target.
+use arm64-thunderx-linux-gcc as target.
 
 Linux
 -----
@@ -176,7 +177,7 @@ This section provides instructions to configure SR-IOV with Linux OS.
 
    .. code-block:: console
 
-      ./arm64-thunderx-linuxapp-gcc/app/testpmd -l 0-3 -n 4 -w 0002:01:00.2 \
+      ./arm64-thunderx-linux-gcc/app/testpmd -l 0-3 -n 4 -w 0002:01:00.2 \
         -- -i --no-flush-rx \
         --port-topology=loop
 
@@ -312,6 +313,21 @@ We will choose four secondary queue sets from the ending of the list (0002:01:01
 
 The nicvf thunderx driver will make use of attached secondary VFs automatically during the interface configuration stage.
 
+
+Module params
+--------------
+
+skip_data_bytes
+~~~~~~~~~~~~~~~
+This feature is used to create a hole between HEADROOM and actual data. Size of hole is specified
+in bytes as module param("skip_data_bytes") to pmd.
+This scheme is useful when application would like to insert vlan header without disturbing HEADROOM.
+
+Example:
+   .. code-block:: console
+
+      -w 0002:01:00.2,skip_data_bytes=8
+
 Limitations
 -----------
 
@@ -319,8 +335,7 @@ CRC striping
 ~~~~~~~~~~~~
 
 The ThunderX SoC family NICs strip the CRC for every packets coming into the
-host interface. So, CRC will be stripped even when the
-``rxmode.hw_strip_crc`` member is set to 0 in ``struct rte_eth_conf``.
+host interface irrespective of the offload configuration.
 
 Maximum packet length
 ~~~~~~~~~~~~~~~~~~~~~
@@ -336,3 +351,8 @@ Maximum packet segments
 The ThunderX SoC family NICs support up to 12 segments per packet when working
 in scatter/gather mode. So, setting MTU will result with ``EINVAL`` when the
 frame size does not fit in the maximum number of segments.
+
+skip_data_bytes
+~~~~~~~~~~~~~~~
+
+Maximum limit of skip_data_bytes is 128 bytes and number of bytes should be multiple of 8.

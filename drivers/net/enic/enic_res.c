@@ -61,10 +61,10 @@ int enic_get_vnic_config(struct enic *enic)
 	 * and will be 0 for legacy firmware and VICs
 	 */
 	if (c->max_pkt_size > ENIC_DEFAULT_RX_MAX_PKT_SIZE)
-		enic->max_mtu = c->max_pkt_size - (ETHER_HDR_LEN + 4);
+		enic->max_mtu = c->max_pkt_size - RTE_ETHER_HDR_LEN;
 	else
-		enic->max_mtu = ENIC_DEFAULT_RX_MAX_PKT_SIZE
-				- (ETHER_HDR_LEN + 4);
+		enic->max_mtu = ENIC_DEFAULT_RX_MAX_PKT_SIZE -
+			RTE_ETHER_HDR_LEN;
 	if (c->mtu == 0)
 		c->mtu = 1500;
 
@@ -82,6 +82,8 @@ int enic_get_vnic_config(struct enic *enic)
 			"Error getting filter modes, %d\n", err);
 		return err;
 	}
+	vnic_dev_capable_udp_rss_weak(enic->vdev, &enic->nic_cfg_chk,
+				      &enic->udp_rss_weak);
 
 	dev_info(enic, "Flow api filter mode: %s Actions: %s%s%s\n",
 		((enic->flow_filter_mode == FILTER_DPDK_1) ? "DPDK" :
@@ -122,7 +124,10 @@ int enic_get_vnic_config(struct enic *enic)
 		"loopback tag 0x%04x\n",
 		ENIC_SETTING(enic, TXCSUM) ? "yes" : "no",
 		ENIC_SETTING(enic, RXCSUM) ? "yes" : "no",
-		ENIC_SETTING(enic, RSS) ? "yes" : "no",
+		ENIC_SETTING(enic, RSS) ?
+			(ENIC_SETTING(enic, RSSHASH_UDPIPV4) ? "+UDP" :
+			((enic->udp_rss_weak ? "+udp" :
+			"yes"))) : "no",
 		c->intr_mode == VENET_INTR_MODE_INTX ? "INTx" :
 		c->intr_mode == VENET_INTR_MODE_MSI ? "MSI" :
 		c->intr_mode == VENET_INTR_MODE_ANY ? "any" :
@@ -138,59 +143,78 @@ int enic_get_vnic_config(struct enic *enic)
 	enic->hash_key_size = ENIC_RSS_HASH_KEY_SIZE;
 	enic->flow_type_rss_offloads = 0;
 	if (ENIC_SETTING(enic, RSSHASH_IPV4))
-		enic->flow_type_rss_offloads |= ETH_RSS_IPV4;
+		/*
+		 * IPV4 hash type handles both non-frag and frag packet types.
+		 * TCP/UDP is controlled via a separate flag below.
+		 */
+		enic->flow_type_rss_offloads |= ETH_RSS_IPV4 |
+			ETH_RSS_FRAG_IPV4 | ETH_RSS_NONFRAG_IPV4_OTHER;
 	if (ENIC_SETTING(enic, RSSHASH_TCPIPV4))
 		enic->flow_type_rss_offloads |= ETH_RSS_NONFRAG_IPV4_TCP;
 	if (ENIC_SETTING(enic, RSSHASH_IPV6))
-		enic->flow_type_rss_offloads |= ETH_RSS_IPV6;
+		/*
+		 * The VIC adapter can perform RSS on IPv6 packets with and
+		 * without extension headers. An IPv6 "fragment" is an IPv6
+		 * packet with the fragment extension header.
+		 */
+		enic->flow_type_rss_offloads |= ETH_RSS_IPV6 |
+			ETH_RSS_IPV6_EX | ETH_RSS_FRAG_IPV6 |
+			ETH_RSS_NONFRAG_IPV6_OTHER;
 	if (ENIC_SETTING(enic, RSSHASH_TCPIPV6))
-		enic->flow_type_rss_offloads |= ETH_RSS_NONFRAG_IPV6_TCP;
-	if (ENIC_SETTING(enic, RSSHASH_IPV6_EX))
-		enic->flow_type_rss_offloads |= ETH_RSS_IPV6_EX;
-	if (ENIC_SETTING(enic, RSSHASH_TCPIPV6_EX))
-		enic->flow_type_rss_offloads |= ETH_RSS_IPV6_TCP_EX;
-	if (vnic_dev_capable_udp_rss(enic->vdev)) {
+		enic->flow_type_rss_offloads |= ETH_RSS_NONFRAG_IPV6_TCP |
+			ETH_RSS_IPV6_TCP_EX;
+	if (enic->udp_rss_weak)
 		enic->flow_type_rss_offloads |=
-			ETH_RSS_NONFRAG_IPV4_UDP | ETH_RSS_NONFRAG_IPV6_UDP;
-	}
+			ETH_RSS_NONFRAG_IPV4_UDP | ETH_RSS_NONFRAG_IPV6_UDP |
+			ETH_RSS_IPV6_UDP_EX;
+	if (ENIC_SETTING(enic, RSSHASH_UDPIPV4))
+		enic->flow_type_rss_offloads |= ETH_RSS_NONFRAG_IPV4_UDP;
+	if (ENIC_SETTING(enic, RSSHASH_UDPIPV6))
+		enic->flow_type_rss_offloads |= ETH_RSS_NONFRAG_IPV6_UDP |
+			ETH_RSS_IPV6_UDP_EX;
 
 	/* Zero offloads if RSS is not enabled */
 	if (!ENIC_SETTING(enic, RSS))
 		enic->flow_type_rss_offloads = 0;
 
+	enic->vxlan = ENIC_SETTING(enic, VXLAN) &&
+		vnic_dev_capable_vxlan(enic->vdev);
+	/*
+	 * Default hardware capabilities. enic_dev_init() may add additional
+	 * flags if it enables overlay offloads.
+	 */
+	enic->tx_queue_offload_capa = 0;
+	enic->tx_offload_capa =
+		enic->tx_queue_offload_capa |
+		DEV_TX_OFFLOAD_MULTI_SEGS |
+		DEV_TX_OFFLOAD_VLAN_INSERT |
+		DEV_TX_OFFLOAD_IPV4_CKSUM |
+		DEV_TX_OFFLOAD_UDP_CKSUM |
+		DEV_TX_OFFLOAD_TCP_CKSUM |
+		DEV_TX_OFFLOAD_TCP_TSO;
+	enic->rx_offload_capa =
+		DEV_RX_OFFLOAD_SCATTER |
+		DEV_RX_OFFLOAD_JUMBO_FRAME |
+		DEV_RX_OFFLOAD_VLAN_STRIP |
+		DEV_RX_OFFLOAD_IPV4_CKSUM |
+		DEV_RX_OFFLOAD_UDP_CKSUM |
+		DEV_RX_OFFLOAD_TCP_CKSUM;
+	enic->tx_offload_mask =
+		PKT_TX_IPV6 |
+		PKT_TX_IPV4 |
+		PKT_TX_VLAN |
+		PKT_TX_IP_CKSUM |
+		PKT_TX_L4_MASK |
+		PKT_TX_TCP_SEG;
+
 	return 0;
-}
-
-int enic_add_vlan(struct enic *enic, u16 vlanid)
-{
-	u64 a0 = vlanid, a1 = 0;
-	int wait = 1000;
-	int err;
-
-	err = vnic_dev_cmd(enic->vdev, CMD_VLAN_ADD, &a0, &a1, wait);
-	if (err)
-		dev_err(enic_get_dev(enic), "Can't add vlan id, %d\n", err);
-
-	return err;
-}
-
-int enic_del_vlan(struct enic *enic, u16 vlanid)
-{
-	u64 a0 = vlanid, a1 = 0;
-	int wait = 1000;
-	int err;
-
-	err = vnic_dev_cmd(enic->vdev, CMD_VLAN_DEL, &a0, &a1, wait);
-	if (err)
-		dev_err(enic_get_dev(enic), "Can't delete vlan id, %d\n", err);
-
-	return err;
 }
 
 int enic_set_nic_cfg(struct enic *enic, u8 rss_default_cpu, u8 rss_hash_type,
 	u8 rss_hash_bits, u8 rss_base_cpu, u8 rss_enable, u8 tso_ipid_split_en,
 	u8 ig_vlan_strip_en)
 {
+	enum vnic_devcmd_cmd cmd;
 	u64 a0, a1;
 	u32 nic_cfg;
 	int wait = 1000;
@@ -201,8 +225,8 @@ int enic_set_nic_cfg(struct enic *enic, u8 rss_default_cpu, u8 rss_hash_type,
 
 	a0 = nic_cfg;
 	a1 = 0;
-
-	return vnic_dev_cmd(enic->vdev, CMD_NIC_CFG, &a0, &a1, wait);
+	cmd = enic->nic_cfg_chk ? CMD_NIC_CFG_CHK : CMD_NIC_CFG;
+	return vnic_dev_cmd(enic->vdev, cmd, &a0, &a1, wait);
 }
 
 int enic_set_rss_key(struct enic *enic, dma_addr_t key_pa, u64 len)

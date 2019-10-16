@@ -41,7 +41,7 @@ int
 mlx5_rss_hash_update(struct rte_eth_dev *dev,
 		     struct rte_eth_rss_conf *rss_conf)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 	unsigned int i;
 	unsigned int idx;
 
@@ -50,10 +50,11 @@ mlx5_rss_hash_update(struct rte_eth_dev *dev,
 		return -rte_errno;
 	}
 	if (rss_conf->rss_key && rss_conf->rss_key_len) {
-		if (rss_conf->rss_key_len != rss_hash_default_key_len) {
+		if (rss_conf->rss_key_len != MLX5_RSS_HASH_KEY_LEN) {
 			DRV_LOG(ERR,
-				"port %u RSS key len must be %zu Bytes long",
-				dev->data->port_id, rss_hash_default_key_len);
+				"port %u RSS key len must be %s Bytes long",
+				dev->data->port_id,
+				RTE_STR(MLX5_RSS_HASH_KEY_LEN));
 			rte_errno = EINVAL;
 			return -rte_errno;
 		}
@@ -94,7 +95,7 @@ int
 mlx5_rss_hash_conf_get(struct rte_eth_dev *dev,
 		       struct rte_eth_rss_conf *rss_conf)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 
 	if (!rss_conf) {
 		rte_errno = EINVAL;
@@ -124,7 +125,7 @@ mlx5_rss_hash_conf_get(struct rte_eth_dev *dev,
 int
 mlx5_rss_reta_index_resize(struct rte_eth_dev *dev, unsigned int reta_size)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 	void *mem;
 	unsigned int old_size = priv->reta_idx_n;
 
@@ -164,7 +165,7 @@ mlx5_dev_rss_reta_query(struct rte_eth_dev *dev,
 			struct rte_eth_rss_reta_entry64 *reta_conf,
 			uint16_t reta_size)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 	unsigned int idx;
 	unsigned int i;
 
@@ -200,7 +201,7 @@ mlx5_dev_rss_reta_update(struct rte_eth_dev *dev,
 			 uint16_t reta_size)
 {
 	int ret;
-	struct priv *priv = dev->data->dev_private;
+	struct mlx5_priv *priv = dev->data->dev_private;
 	unsigned int idx;
 	unsigned int i;
 	unsigned int pos;

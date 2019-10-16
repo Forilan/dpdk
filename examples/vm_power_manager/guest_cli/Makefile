@@ -5,8 +5,8 @@ ifeq ($(RTE_SDK),)
 $(error "Please define RTE_SDK environment variable")
 endif
 
-# Default target, can be overridden by command line or environment
-RTE_TARGET ?= x86_64-native-linuxapp-gcc
+# Default target, detect a build directory, by looking for a path with a .config
+RTE_TARGET ?= $(notdir $(abspath $(dir $(firstword $(wildcard $(RTE_SDK)/*/.config)))))
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
@@ -14,7 +14,7 @@ include $(RTE_SDK)/mk/rte.vars.mk
 APP = guest_vm_power_mgr
 
 # all source are stored in SRCS-y
-SRCS-y := main.c vm_power_cli_guest.c
+SRCS-y := main.c vm_power_cli_guest.c parse.c
 
 CFLAGS += -O3 -I$(RTE_SDK)/lib/librte_power/
 CFLAGS += $(WERROR_FLAGS)

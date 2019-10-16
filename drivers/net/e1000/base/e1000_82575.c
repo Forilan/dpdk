@@ -1,35 +1,6 @@
-/*******************************************************************************
-
-Copyright (c) 2001-2015, Intel Corporation
-All rights reserved.
-
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
-
- 1. Redistributions of source code must retain the above copyright notice,
-    this list of conditions and the following disclaimer.
-
- 2. Redistributions in binary form must reproduce the above copyright
-    notice, this list of conditions and the following disclaimer in the
-    documentation and/or other materials provided with the distribution.
-
- 3. Neither the name of the Intel Corporation nor the names of its
-    contributors may be used to endorse or promote products derived from
-    this software without specific prior written permission.
-
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
-LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
-CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
-ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-POSSIBILITY OF SUCH DAMAGE.
-
-***************************************************************************/
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2001 - 2015 Intel Corporation
+ */
 
 /*
  * 82575EB Gigabit Network Connection
@@ -311,6 +282,9 @@ STATIC s32 e1000_init_phy_params_82575(struct e1000_hw *hw)
 		phy->ops.set_d0_lplu_state = e1000_set_d0_lplu_state_82580;
 		phy->ops.set_d3_lplu_state = e1000_set_d3_lplu_state_82580;
 		phy->ops.force_speed_duplex = e1000_phy_force_speed_duplex_m88;
+		break;
+	case BCM54616_E_PHY_ID:
+		phy->type		= e1000_phy_none;
 		break;
 	default:
 		ret_val = -E1000_ERR_PHY;
@@ -1606,6 +1580,8 @@ STATIC s32 e1000_setup_copper_link_82575(struct e1000_hw *hw)
 		break;
 	case e1000_phy_82580:
 		ret_val = e1000_copper_link_setup_82577(hw);
+		break;
+	case e1000_phy_none:
 		break;
 	default:
 		ret_val = -E1000_ERR_PHY;

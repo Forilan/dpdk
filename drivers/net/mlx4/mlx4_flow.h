@@ -18,7 +18,6 @@
 #pragma GCC diagnostic error "-Wpedantic"
 #endif
 
-#include <rte_eth_ctrl.h>
 #include <rte_ethdev_driver.h>
 #include <rte_flow.h>
 #include <rte_flow_driver.h>
@@ -42,14 +41,16 @@ struct rte_flow {
 	uint32_t promisc:1; /**< This rule matches everything. */
 	uint32_t allmulti:1; /**< This rule matches all multicast traffic. */
 	uint32_t drop:1; /**< This rule drops packets. */
+	uint32_t priority; /**< Flow rule priority. */
 	struct mlx4_rss *rss; /**< Rx target. */
 };
 
 /* mlx4_flow.c */
 
-uint64_t mlx4_conv_rss_hf(struct priv *priv, uint64_t rss_hf);
-int mlx4_flow_sync(struct priv *priv, struct rte_flow_error *error);
-void mlx4_flow_clean(struct priv *priv);
+uint64_t mlx4_conv_rss_types(struct mlx4_priv *priv, uint64_t types,
+			     int verbs_to_dpdk);
+int mlx4_flow_sync(struct mlx4_priv *priv, struct rte_flow_error *error);
+void mlx4_flow_clean(struct mlx4_priv *priv);
 int mlx4_filter_ctrl(struct rte_eth_dev *dev,
 		     enum rte_filter_type filter_type,
 		     enum rte_filter_op filter_op,

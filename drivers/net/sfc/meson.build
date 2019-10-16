@@ -6,8 +6,9 @@
 # This software was jointly developed between OKTET Labs (under contract
 # for Solarflare) and Solarflare Communications, Inc.
 
-if arch_subdir != 'x86'
+if arch_subdir != 'x86' or not dpdk_conf.get('RTE_ARCH_64')
 	build = false
+	reason = 'only supported on x86_64'
 endif
 
 allow_experimental_apis = true
@@ -54,6 +55,7 @@ sources = files(
 	'sfc_flow.c',
 	'sfc_dp.c',
 	'sfc_ef10_rx.c',
+	'sfc_ef10_essb_rx.c',
 	'sfc_ef10_tx.c'
 )
 

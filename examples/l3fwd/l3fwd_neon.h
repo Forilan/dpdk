@@ -1,37 +1,7 @@
-/*-
- *   BSD LICENSE
- *
- *   Copyright(c) 2016 Intel Corporation. All rights reserved.
- *   Copyright(c) 2017, Linaro Limited
- *   All rights reserved.
- *
- *   Redistribution and use in source and binary forms, with or without
- *   modification, are permitted provided that the following conditions
- *   are met:
- *
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in
- *       the documentation and/or other materials provided with the
- *       distribution.
- *     * Neither the name of Intel Corporation nor the names of its
- *       contributors may be used to endorse or promote products derived
- *       from this software without specific prior written permission.
- *
- *   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- *   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- *   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- *   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- *   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- *   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- *   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- *   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- *   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- *   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright(c) 2016-2018 Intel Corporation.
+ * Copyright(c) 2017-2018 Linaro Limited.
  */
-
 
 #ifndef _L3FWD_NEON_H_
 #define _L3FWD_NEON_H_
@@ -78,14 +48,18 @@ processx4_step3(struct rte_mbuf *pkt[FWDSTEP], uint16_t dst_port[FWDSTEP])
 	vst1q_u32(p[2], ve[2]);
 	vst1q_u32(p[3], ve[3]);
 
-	rfc1812_process((struct ipv4_hdr *)((struct ether_hdr *)p[0] + 1),
-		&dst_port[0], pkt[0]->packet_type);
-	rfc1812_process((struct ipv4_hdr *)((struct ether_hdr *)p[1] + 1),
-		&dst_port[1], pkt[1]->packet_type);
-	rfc1812_process((struct ipv4_hdr *)((struct ether_hdr *)p[2] + 1),
-		&dst_port[2], pkt[2]->packet_type);
-	rfc1812_process((struct ipv4_hdr *)((struct ether_hdr *)p[3] + 1),
-		&dst_port[3], pkt[3]->packet_type);
+	rfc1812_process((struct rte_ipv4_hdr *)
+			((struct rte_ether_hdr *)p[0] + 1),
+			&dst_port[0], pkt[0]->packet_type);
+	rfc1812_process((struct rte_ipv4_hdr *)
+			((struct rte_ether_hdr *)p[1] + 1),
+			&dst_port[1], pkt[1]->packet_type);
+	rfc1812_process((struct rte_ipv4_hdr *)
+			((struct rte_ether_hdr *)p[2] + 1),
+			&dst_port[2], pkt[2]->packet_type);
+	rfc1812_process((struct rte_ipv4_hdr *)
+			((struct rte_ether_hdr *)p[3] + 1),
+			&dst_port[3], pkt[3]->packet_type);
 }
 
 /*
@@ -134,16 +108,16 @@ port_groupx4(uint16_t pn[FWDSTEP + 1], uint16_t *lp, uint16x8_t dp1,
 static inline void
 process_packet(struct rte_mbuf *pkt, uint16_t *dst_port)
 {
-	struct ether_hdr *eth_hdr;
+	struct rte_ether_hdr *eth_hdr;
 	uint32x4_t te, ve;
 
-	eth_hdr = rte_pktmbuf_mtod(pkt, struct ether_hdr *);
+	eth_hdr = rte_pktmbuf_mtod(pkt, struct rte_ether_hdr *);
 
 	te = vld1q_u32((uint32_t *)eth_hdr);
 	ve = vreinterpretq_u32_s32(val_eth[dst_port[0]]);
 
 
-	rfc1812_process((struct ipv4_hdr *)(eth_hdr + 1), dst_port,
+	rfc1812_process((struct rte_ipv4_hdr *)(eth_hdr + 1), dst_port,
 			pkt->packet_type);
 
 	ve = vcopyq_laneq_u32(ve, 3, te, 3);

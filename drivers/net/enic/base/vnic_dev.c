@@ -453,6 +453,32 @@ int vnic_dev_cmd_args(struct vnic_dev *vdev, enum vnic_devcmd_cmd cmd,
 	}
 }
 
+int vnic_dev_fw_info(struct vnic_dev *vdev,
+		     struct vnic_devcmd_fw_info **fw_info)
+{
+	char name[NAME_MAX];
+	u64 a0, a1 = 0;
+	int wait = 1000;
+	int err = 0;
+	static u32 instance;
+
+	if (!vdev->fw_info) {
+		snprintf((char *)name, sizeof(name), "vnic_fw_info-%u",
+			 instance++);
+		vdev->fw_info = vdev->alloc_consistent(vdev->priv,
+			sizeof(struct vnic_devcmd_fw_info),
+			&vdev->fw_info_pa, (u8 *)name);
+		if (!vdev->fw_info)
+			return -ENOMEM;
+		a0 = vdev->fw_info_pa;
+		a1 = sizeof(struct vnic_devcmd_fw_info);
+		err = vnic_dev_cmd(vdev, CMD_MCPU_FW_INFO,
+				   &a0, &a1, wait);
+	}
+	*fw_info = vdev->fw_info;
+	return err;
+}
+
 static int vnic_dev_advanced_filters_cap(struct vnic_dev *vdev, u64 *args,
 		int nargs)
 {
@@ -528,21 +554,20 @@ parse_max_level:
 	return 0;
 }
 
-int vnic_dev_capable_udp_rss(struct vnic_dev *vdev)
+void vnic_dev_capable_udp_rss_weak(struct vnic_dev *vdev, bool *cfg_chk,
+				   bool *weak)
 {
 	u64 a0 = CMD_NIC_CFG, a1 = 0;
-	u64 rss_hash_type;
 	int wait = 1000;
 	int err;
 
+	*cfg_chk = false;
+	*weak = false;
 	err = vnic_dev_cmd(vdev, CMD_CAPABILITY, &a0, &a1, wait);
-	if (err)
-		return 0;
-	if (a0 == 0)
-		return 0;
-	rss_hash_type = (a1 >> NIC_CFG_RSS_HASH_TYPE_SHIFT) &
-		NIC_CFG_RSS_HASH_TYPE_MASK_FIELD;
-	return ((rss_hash_type & NIC_CFG_RSS_HASH_TYPE_UDP) ? 1 : 0);
+	if (err == 0 && a0 != 0 && a1 != 0) {
+		*cfg_chk = true;
+		*weak = !!((a1 >> 32) & CMD_NIC_CFG_CAPF_UDP_WEAK);
+	}
 }
 
 int vnic_dev_capable(struct vnic_dev *vdev, enum vnic_devcmd_cmd cmd)
@@ -1061,4 +1086,37 @@ int vnic_dev_classifier(struct vnic_dev *vdev, u8 cmd, u16 *entry,
 	}
 
 	return ret;
+}
+
+int vnic_dev_overlay_offload_ctrl(struct vnic_dev *vdev, u8 overlay, u8 config)
+{
+	u64 a0 = overlay;
+	u64 a1 = config;
+	int wait = 1000;
+
+	return vnic_dev_cmd(vdev, CMD_OVERLAY_OFFLOAD_CTRL, &a0, &a1, wait);
+}
+
+int vnic_dev_overlay_offload_cfg(struct vnic_dev *vdev, u8 overlay,
+				 u16 vxlan_udp_port_number)
+{
+	u64 a1 = vxlan_udp_port_number;
+	u64 a0 = overlay;
+	int wait = 1000;
+
+	return vnic_dev_cmd(vdev, CMD_OVERLAY_OFFLOAD_CFG, &a0, &a1, wait);
+}
+
+int vnic_dev_capable_vxlan(struct vnic_dev *vdev)
+{
+	u64 a0 = VIC_FEATURE_VXLAN;
+	u64 a1 = 0;
+	int wait = 1000;
+	int ret;
+
+	ret = vnic_dev_cmd(vdev, CMD_GET_SUPP_FEATURE_VER, &a0, &a1, wait);
+	/* 1 if the NIC can do VXLAN for both IPv4 and IPv6 with multiple WQs */
+	return ret == 0 &&
+		(a1 & (FEATURE_VXLAN_IPV6 | FEATURE_VXLAN_MULTI_WQ)) ==
+		(FEATURE_VXLAN_IPV6 | FEATURE_VXLAN_MULTI_WQ);
 }

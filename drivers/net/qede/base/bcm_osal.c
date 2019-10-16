@@ -1,9 +1,7 @@
-/*
- * Copyright (c) 2016 QLogic Corporation.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2016 - 2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
- *
- * See LICENSE.qede_pmd for copyright and licensing details.
+ * www.cavium.com
  */
 
 #include <rte_memzone.h>
@@ -19,7 +17,7 @@
 /* Array of memzone pointers */
 static const struct rte_memzone *ecore_mz_mapping[RTE_MAX_MEMZONE];
 /* Counter to track current memzone allocated */
-uint16_t ecore_mz_count;
+static uint16_t ecore_mz_count;
 
 unsigned long qede_log2_align(unsigned long n)
 {
@@ -130,7 +128,7 @@ void *osal_dma_alloc_coherent(struct ecore_dev *p_dev,
 	}
 
 	OSAL_MEM_ZERO(mz_name, sizeof(*mz_name));
-	snprintf(mz_name, sizeof(mz_name) - 1, "%lx",
+	snprintf(mz_name, sizeof(mz_name), "%lx",
 					(unsigned long)rte_get_timer_cycles());
 	if (core_id == (unsigned int)LCORE_ID_ANY)
 		core_id = rte_get_master_lcore();
@@ -169,7 +167,7 @@ void *osal_dma_alloc_coherent_aligned(struct ecore_dev *p_dev,
 	}
 
 	OSAL_MEM_ZERO(mz_name, sizeof(*mz_name));
-	snprintf(mz_name, sizeof(mz_name) - 1, "%lx",
+	snprintf(mz_name, sizeof(mz_name), "%lx",
 					(unsigned long)rte_get_timer_cycles());
 	if (core_id == (unsigned int)LCORE_ID_ANY)
 		core_id = rte_get_master_lcore();
@@ -201,6 +199,11 @@ void osal_dma_free_mem(struct ecore_dev *p_dev, dma_addr_t phys)
 			DP_VERBOSE(p_dev, ECORE_MSG_SP,
 				"Free memzone %s\n", ecore_mz_mapping[j]->name);
 			rte_memzone_free(ecore_mz_mapping[j]);
+			while (j < ecore_mz_count - 1) {
+				ecore_mz_mapping[j] = ecore_mz_mapping[j + 1];
+				j++;
+			}
+			ecore_mz_count--;
 			return;
 		}
 	}

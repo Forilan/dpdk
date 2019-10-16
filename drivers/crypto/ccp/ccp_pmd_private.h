@@ -40,8 +40,8 @@
 /* private data structure for each CCP crypto device */
 struct ccp_private {
 	unsigned int max_nb_qpairs;	/**< Max number of queue pairs */
-	unsigned int max_nb_sessions;	/**< Max number of sessions */
 	uint8_t crypto_num_dev;		/**< Number of working crypto devices */
+	bool auth_opt;			/**< Authentication offload option */
 	struct ccp_device *last_dev;	/**< Last working crypto device */
 };
 
@@ -62,10 +62,8 @@ struct ccp_batch_info {
 	phys_addr_t lsb_buf_phys;
 	/**< LSB intermediate buf for passthru */
 	int lsb_buf_idx;
-#ifdef RTE_LIBRTE_PMD_CCP_CPU_AUTH
 	uint16_t auth_ctr;
-	/**< auth only ops batch */
-#endif
+	/**< auth only ops batch for CPU based auth */
 } __rte_cache_aligned;
 
 /**< CCP crypto queue pair */
@@ -78,6 +76,8 @@ struct ccp_qp {
 	/**< Ring for placing process packets */
 	struct rte_mempool *sess_mp;
 	/**< Session Mempool */
+	struct rte_mempool *sess_mp_priv;
+	/**< Session Private Data Mempool */
 	struct rte_mempool *batch_mp;
 	/**< Session Mempool for batch info */
 	struct rte_cryptodev_stats qp_stats;

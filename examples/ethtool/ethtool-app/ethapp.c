@@ -30,7 +30,7 @@ struct pcmd_intstr_params {
 struct pcmd_intmac_params {
 	cmdline_fixed_string_t cmd;
 	uint16_t port;
-	struct ether_addr mac;
+	struct rte_ether_addr mac;
 };
 struct pcmd_str_params {
 	cmdline_fixed_string_t cmd;
@@ -75,6 +75,9 @@ cmdline_parse_token_num_t pcmd_int_token_port =
 /* Commands taking port id and string */
 cmdline_parse_token_string_t pcmd_eeprom_token_cmd =
 	TOKEN_STRING_INITIALIZER(struct pcmd_intstr_params, cmd, "eeprom");
+cmdline_parse_token_string_t pcmd_module_eeprom_token_cmd =
+	TOKEN_STRING_INITIALIZER(struct pcmd_intstr_params, cmd,
+				 "module-eeprom");
 cmdline_parse_token_string_t pcmd_mtu_token_cmd =
 	TOKEN_STRING_INITIALIZER(struct pcmd_intstr_params, cmd, "mtu");
 cmdline_parse_token_string_t pcmd_regs_token_cmd =
@@ -298,6 +301,54 @@ pcmd_eeprom_callback(void *ptr_params,
 
 
 static void
+pcmd_module_eeprom_callback(void *ptr_params,
+	__rte_unused struct cmdline *ctx,
+	__rte_unused void *ptr_data)
+{
+	struct pcmd_intstr_params *params = ptr_params;
+	struct ethtool_eeprom info_eeprom;
+	uint32_t module_info[2];
+	int stat;
+	unsigned char bytes_eeprom[EEPROM_DUMP_CHUNKSIZE];
+	FILE *fp_eeprom;
+
+	if (!rte_eth_dev_is_valid_port(params->port)) {
+		printf("Error: Invalid port number %i\n", params->port);
+		return;
+	}
+
+	stat = rte_ethtool_get_module_info(params->port, module_info);
+	if (stat != 0) {
+		printf("Module EEPROM information read error %i\n", stat);
+		return;
+	}
+
+	info_eeprom.len = module_info[1];
+	info_eeprom.offset = 0;
+
+	stat = rte_ethtool_get_module_eeprom(params->port,
+					     &info_eeprom, bytes_eeprom);
+	if (stat != 0) {
+		printf("Module EEPROM read error %i\n", stat);
+		return;
+	}
+
+	fp_eeprom = fopen(params->opt, "wb");
+	if (fp_eeprom == NULL) {
+		printf("Error opening '%s' for writing\n", params->opt);
+		return;
+	}
+	printf("Total plugin module EEPROM length: %i bytes\n",
+	       info_eeprom.len);
+	if (fwrite(bytes_eeprom, 1, info_eeprom.len,
+		   fp_eeprom) != info_eeprom.len) {
+		printf("Error writing '%s'\n", params->opt);
+	}
+	fclose(fp_eeprom);
+}
+
+
+static void
 pcmd_pause_callback(void *ptr_params,
 	__rte_unused struct cmdline *ctx,
 	void *ptr_data)
@@ -424,7 +475,7 @@ pcmd_macaddr_callback(void *ptr_params,
 	void *ptr_data)
 {
 	struct pcmd_intmac_params *params = ptr_params;
-	struct ether_addr mac_addr;
+	struct rte_ether_addr mac_addr;
 	int stat;
 
 	stat = 0;
@@ -479,8 +530,8 @@ pcmd_mtu_callback(void *ptr_params,
 	new_mtu = atoi(params->opt);
 	new_mtu = strtoul(params->opt, &ptr_parse_end, 10);
 	if (*ptr_parse_end != '\0' ||
-			new_mtu < ETHER_MIN_MTU ||
-			new_mtu > ETHER_MAX_JUMBO_FRAME_LEN) {
+			new_mtu < RTE_ETHER_MIN_MTU ||
+			new_mtu > RTE_ETHER_MAX_JUMBO_FRAME_LEN) {
 		printf("Port %i: Invalid MTU value\n", params->port);
 		return;
 	}
@@ -664,6 +715,18 @@ cmdline_parse_inst_t pcmd_eeprom = {
 		NULL
 	},
 };
+cmdline_parse_inst_t pcmd_module_eeprom = {
+	.f = pcmd_module_eeprom_callback,
+	.data = NULL,
+	.help_str = "module-eeprom <port_id> <filename>\n"
+		"     Dump plugin module EEPROM to file",
+	.tokens = {
+		(void *)&pcmd_module_eeprom_token_cmd,
+		(void *)&pcmd_intstr_token_port,
+		(void *)&pcmd_intstr_token_opt,
+		NULL
+	},
+};
 cmdline_parse_inst_t pcmd_pause_noopt = {
 	.f = pcmd_pause_callback,
 	.data = (void *)0x01,
@@ -816,6 +879,7 @@ cmdline_parse_inst_t pcmd_vlan = {
 cmdline_parse_ctx_t list_prompt_commands[] = {
 	(cmdline_parse_inst_t *)&pcmd_drvinfo,
 	(cmdline_parse_inst_t *)&pcmd_eeprom,
+	(cmdline_parse_inst_t *)&pcmd_module_eeprom,
 	(cmdline_parse_inst_t *)&pcmd_link,
 	(cmdline_parse_inst_t *)&pcmd_macaddr_get,
 	(cmdline_parse_inst_t *)&pcmd_macaddr,

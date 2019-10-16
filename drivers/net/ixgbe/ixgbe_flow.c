@@ -363,6 +363,17 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 				item, "Not supported by ntuple filter");
 			return -rte_errno;
 		}
+		if ((ipv4_mask->hdr.src_addr != 0 &&
+			ipv4_mask->hdr.src_addr != UINT32_MAX) ||
+			(ipv4_mask->hdr.dst_addr != 0 &&
+			ipv4_mask->hdr.dst_addr != UINT32_MAX) ||
+			(ipv4_mask->hdr.next_proto_id != UINT8_MAX &&
+			ipv4_mask->hdr.next_proto_id != 0)) {
+			rte_flow_error_set(error,
+				EINVAL, RTE_FLOW_ERROR_TYPE_ITEM,
+				item, "Not supported by ntuple filter");
+			return -rte_errno;
+		}
 
 		filter->dst_ip_mask = ipv4_mask->hdr.dst_addr;
 		filter->src_ip_mask = ipv4_mask->hdr.src_addr;
@@ -432,6 +443,15 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 				item, "Not supported by ntuple filter");
 			return -rte_errno;
 		}
+		if ((tcp_mask->hdr.src_port != 0 &&
+			tcp_mask->hdr.src_port != UINT16_MAX) ||
+			(tcp_mask->hdr.dst_port != 0 &&
+			tcp_mask->hdr.dst_port != UINT16_MAX)) {
+			rte_flow_error_set(error,
+				EINVAL, RTE_FLOW_ERROR_TYPE_ITEM,
+				item, "Not supported by ntuple filter");
+			return -rte_errno;
+		}
 
 		filter->dst_port_mask  = tcp_mask->hdr.dst_port;
 		filter->src_port_mask  = tcp_mask->hdr.src_port;
@@ -464,6 +484,15 @@ cons_parse_ntuple_filter(const struct rte_flow_attr *attr,
 				sizeof(struct rte_eth_ntuple_filter));
 			rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ITEM,
+				item, "Not supported by ntuple filter");
+			return -rte_errno;
+		}
+		if ((udp_mask->hdr.src_port != 0 &&
+			udp_mask->hdr.src_port != UINT16_MAX) ||
+			(udp_mask->hdr.dst_port != 0 &&
+			udp_mask->hdr.dst_port != UINT16_MAX)) {
+			rte_flow_error_set(error,
+				EINVAL, RTE_FLOW_ERROR_TYPE_ITEM,
 				item, "Not supported by ntuple filter");
 			return -rte_errno;
 		}
@@ -554,6 +583,15 @@ action:
 		rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_ATTR_EGRESS,
 				   attr, "Not support egress.");
+		return -rte_errno;
+	}
+
+	/* not supported */
+	if (attr->transfer) {
+		memset(filter, 0, sizeof(struct rte_eth_ntuple_filter));
+		rte_flow_error_set(error, EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+				   attr, "No support for transfer.");
 		return -rte_errno;
 	}
 
@@ -706,9 +744,9 @@ cons_parse_ethertype_filter(const struct rte_flow_attr *attr,
 	 * Mask bits of destination MAC address must be full
 	 * of 1 or full of 0.
 	 */
-	if (!is_zero_ether_addr(&eth_mask->src) ||
-	    (!is_zero_ether_addr(&eth_mask->dst) &&
-	     !is_broadcast_ether_addr(&eth_mask->dst))) {
+	if (!rte_is_zero_ether_addr(&eth_mask->src) ||
+	    (!rte_is_zero_ether_addr(&eth_mask->dst) &&
+	     !rte_is_broadcast_ether_addr(&eth_mask->dst))) {
 		rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ITEM,
 				item, "Invalid ether address mask");
@@ -725,7 +763,7 @@ cons_parse_ethertype_filter(const struct rte_flow_attr *attr,
 	/* If mask bits of destination MAC address
 	 * are full of 1, set RTE_ETHTYPE_FLAGS_MAC.
 	 */
-	if (is_broadcast_ether_addr(&eth_mask->dst)) {
+	if (rte_is_broadcast_ether_addr(&eth_mask->dst)) {
 		filter->mac_addr = eth_spec->dst;
 		filter->flags |= RTE_ETHTYPE_FLAGS_MAC;
 	} else {
@@ -787,6 +825,14 @@ cons_parse_ethertype_filter(const struct rte_flow_attr *attr,
 	}
 
 	/* Not supported */
+	if (attr->transfer) {
+		rte_flow_error_set(error, EINVAL,
+				RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+				attr, "No support for transfer.");
+		return -rte_errno;
+	}
+
+	/* Not supported */
 	if (attr->priority) {
 		rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ATTR_PRIORITY,
@@ -841,8 +887,8 @@ ixgbe_parse_ethertype_filter(struct rte_eth_dev *dev,
 		return -rte_errno;
 	}
 
-	if (filter->ether_type == ETHER_TYPE_IPv4 ||
-		filter->ether_type == ETHER_TYPE_IPv6) {
+	if (filter->ether_type == RTE_ETHER_TYPE_IPV4 ||
+		filter->ether_type == RTE_ETHER_TYPE_IPV6) {
 		memset(filter, 0, sizeof(struct rte_eth_ethertype_filter));
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_ITEM,
@@ -1002,13 +1048,13 @@ cons_parse_syn_filter(const struct rte_flow_attr *attr,
 
 	tcp_spec = item->spec;
 	tcp_mask = item->mask;
-	if (!(tcp_spec->hdr.tcp_flags & TCP_SYN_FLAG) ||
+	if (!(tcp_spec->hdr.tcp_flags & RTE_TCP_SYN_FLAG) ||
 	    tcp_mask->hdr.src_port ||
 	    tcp_mask->hdr.dst_port ||
 	    tcp_mask->hdr.sent_seq ||
 	    tcp_mask->hdr.recv_ack ||
 	    tcp_mask->hdr.data_off ||
-	    tcp_mask->hdr.tcp_flags != TCP_SYN_FLAG ||
+	    tcp_mask->hdr.tcp_flags != RTE_TCP_SYN_FLAG ||
 	    tcp_mask->hdr.rx_win ||
 	    tcp_mask->hdr.cksum ||
 	    tcp_mask->hdr.tcp_urp) {
@@ -1075,6 +1121,15 @@ cons_parse_syn_filter(const struct rte_flow_attr *attr,
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_ATTR_EGRESS,
 			attr, "Not support egress.");
+		return -rte_errno;
+	}
+
+	/* not supported */
+	if (attr->transfer) {
+		memset(filter, 0, sizeof(struct rte_eth_syn_filter));
+		rte_flow_error_set(error, EINVAL,
+			RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+			attr, "No support for transfer.");
 		return -rte_errno;
 	}
 
@@ -1250,6 +1305,15 @@ cons_parse_l2_tn_filter(struct rte_eth_dev *dev,
 	}
 
 	/* not supported */
+	if (attr->transfer) {
+		memset(filter, 0, sizeof(struct rte_eth_l2_tunnel_conf));
+		rte_flow_error_set(error, EINVAL,
+			RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+			attr, "No support for transfer.");
+		return -rte_errno;
+	}
+
+	/* not supported */
 	if (attr->priority) {
 		memset(filter, 0, sizeof(struct rte_eth_l2_tunnel_conf));
 		rte_flow_error_set(error, EINVAL,
@@ -1350,6 +1414,15 @@ ixgbe_parse_fdir_act_attr(const struct rte_flow_attr *attr,
 		rte_flow_error_set(error, EINVAL,
 			RTE_FLOW_ERROR_TYPE_ATTR_EGRESS,
 			attr, "Not support egress.");
+		return -rte_errno;
+	}
+
+	/* not supported */
+	if (attr->transfer) {
+		memset(rule, 0, sizeof(struct ixgbe_fdir_rule));
+		rte_flow_error_set(error, EINVAL,
+			RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+			attr, "No support for transfer.");
 		return -rte_errno;
 	}
 
@@ -1632,7 +1705,7 @@ ixgbe_parse_fdir_filter_normal(struct rte_eth_dev *dev,
 			eth_spec = item->spec;
 
 			/* Get the dst MAC. */
-			for (j = 0; j < ETHER_ADDR_LEN; j++) {
+			for (j = 0; j < RTE_ETHER_ADDR_LEN; j++) {
 				rule->ixgbe_fdir.formatted.inner_mac[j] =
 					eth_spec->dst.addr_bytes[j];
 			}
@@ -1661,7 +1734,7 @@ ixgbe_parse_fdir_filter_normal(struct rte_eth_dev *dev,
 			 * src MAC address must be masked,
 			 * and don't support dst MAC address mask.
 			 */
-			for (j = 0; j < ETHER_ADDR_LEN; j++) {
+			for (j = 0; j < RTE_ETHER_ADDR_LEN; j++) {
 				if (eth_mask->src.addr_bytes[j] ||
 					eth_mask->dst.addr_bytes[j] != 0xFF) {
 					memset(rule, 0,
@@ -1695,7 +1768,8 @@ ixgbe_parse_fdir_filter_normal(struct rte_eth_dev *dev,
 				return -rte_errno;
 			}
 		} else {
-			if (item->type != RTE_FLOW_ITEM_TYPE_IPV4) {
+			if (item->type != RTE_FLOW_ITEM_TYPE_IPV4 &&
+					item->type != RTE_FLOW_ITEM_TYPE_VLAN) {
 				memset(rule, 0, sizeof(struct ixgbe_fdir_rule));
 				rte_flow_error_set(error, EINVAL,
 					RTE_FLOW_ERROR_TYPE_ITEM,
@@ -2393,7 +2467,7 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 	/* Get the VxLAN info */
 	if (item->type == RTE_FLOW_ITEM_TYPE_VXLAN) {
 		rule->ixgbe_fdir.formatted.tunnel_type =
-			RTE_FDIR_TUNNEL_TYPE_VXLAN;
+				IXGBE_FDIR_VXLAN_TUNNEL_TYPE;
 
 		/* Only care about VNI, others should be masked. */
 		if (!item->mask) {
@@ -2443,17 +2517,15 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 			rule->b_spec = TRUE;
 			vxlan_spec = item->spec;
 			rte_memcpy(((uint8_t *)
-				&rule->ixgbe_fdir.formatted.tni_vni + 1),
+				&rule->ixgbe_fdir.formatted.tni_vni),
 				vxlan_spec->vni, RTE_DIM(vxlan_spec->vni));
-			rule->ixgbe_fdir.formatted.tni_vni = rte_be_to_cpu_32(
-				rule->ixgbe_fdir.formatted.tni_vni);
 		}
 	}
 
 	/* Get the NVGRE info */
 	if (item->type == RTE_FLOW_ITEM_TYPE_NVGRE) {
 		rule->ixgbe_fdir.formatted.tunnel_type =
-			RTE_FDIR_TUNNEL_TYPE_NVGRE;
+				IXGBE_FDIR_NVGRE_TUNNEL_TYPE;
 
 		/**
 		 * Only care about flags0, flags1, protocol and TNI,
@@ -2543,7 +2615,6 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 			/* tni is a 24-bits bit field */
 			rte_memcpy(&rule->ixgbe_fdir.formatted.tni_vni,
 			nvgre_spec->tni, RTE_DIM(nvgre_spec->tni));
-			rule->ixgbe_fdir.formatted.tni_vni <<= 8;
 		}
 	}
 
@@ -2589,7 +2660,7 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 	}
 
 	/* src MAC address should be masked. */
-	for (j = 0; j < ETHER_ADDR_LEN; j++) {
+	for (j = 0; j < RTE_ETHER_ADDR_LEN; j++) {
 		if (eth_mask->src.addr_bytes[j]) {
 			memset(rule, 0,
 			       sizeof(struct ixgbe_fdir_rule));
@@ -2600,7 +2671,7 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 		}
 	}
 	rule->mask.mac_addr_byte_mask = 0;
-	for (j = 0; j < ETHER_ADDR_LEN; j++) {
+	for (j = 0; j < RTE_ETHER_ADDR_LEN; j++) {
 		/* It's a per byte mask. */
 		if (eth_mask->dst.addr_bytes[j] == 0xFF) {
 			rule->mask.mac_addr_byte_mask |= 0x1 << j;
@@ -2621,7 +2692,7 @@ ixgbe_parse_fdir_filter_tunnel(const struct rte_flow_attr *attr,
 		eth_spec = item->spec;
 
 		/* Get the dst MAC. */
-		for (j = 0; j < ETHER_ADDR_LEN; j++) {
+		for (j = 0; j < RTE_ETHER_ADDR_LEN; j++) {
 			rule->ixgbe_fdir.formatted.inner_mac[j] =
 				eth_spec->dst.addr_bytes[j];
 		}
@@ -2761,7 +2832,7 @@ ixgbe_parse_rss_filter(struct rte_eth_dev *dev,
 
 	rss = (const struct rte_flow_action_rss *)act->conf;
 
-	if (!rss || !rss->num) {
+	if (!rss || !rss->queue_num) {
 		rte_flow_error_set(error, EINVAL,
 				RTE_FLOW_ERROR_TYPE_ACTION,
 				act,
@@ -2769,7 +2840,7 @@ ixgbe_parse_rss_filter(struct rte_eth_dev *dev,
 		return -rte_errno;
 	}
 
-	for (n = 0; n < rss->num; n++) {
+	for (n = 0; n < rss->queue_num; n++) {
 		if (rss->queue[n] >= dev->data->nb_rx_queues) {
 			rte_flow_error_set(error, EINVAL,
 				   RTE_FLOW_ERROR_TYPE_ACTION,
@@ -2778,14 +2849,27 @@ ixgbe_parse_rss_filter(struct rte_eth_dev *dev,
 			return -rte_errno;
 		}
 	}
-	if (rss->rss_conf)
-		rss_conf->rss_conf = *rss->rss_conf;
-	else
-		rss_conf->rss_conf.rss_hf = IXGBE_RSS_OFFLOAD_ALL;
 
-	for (n = 0; n < rss->num; ++n)
-		rss_conf->queue[n] = rss->queue[n];
-	rss_conf->num = rss->num;
+	if (rss->func != RTE_ETH_HASH_FUNCTION_DEFAULT)
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, act,
+			 "non-default RSS hash functions are not supported");
+	if (rss->level)
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, act,
+			 "a nonzero RSS encapsulation level is not supported");
+	if (rss->key_len && rss->key_len != RTE_DIM(rss_conf->key))
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, act,
+			 "RSS hash key must be exactly 40 bytes");
+	if (rss->queue_num > RTE_DIM(rss_conf->queue))
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ACTION, act,
+			 "too many queues for RSS context");
+	if (ixgbe_rss_conf_init(rss_conf, rss))
+		return rte_flow_error_set
+			(error, EINVAL, RTE_FLOW_ERROR_TYPE_ACTION, act,
+			 "RSS context initialization failure");
 
 	/* check if the next not void item is END */
 	act = next_no_void_action(actions, act);
@@ -2816,6 +2900,15 @@ ixgbe_parse_rss_filter(struct rte_eth_dev *dev,
 		return -rte_errno;
 	}
 
+	/* not supported */
+	if (attr->transfer) {
+		memset(rss_conf, 0, sizeof(struct ixgbe_rte_flow_rss_conf));
+		rte_flow_error_set(error, EINVAL,
+				   RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+				   attr, "No support for transfer.");
+		return -rte_errno;
+	}
+
 	if (attr->priority > 0xFFFF) {
 		memset(rss_conf, 0, sizeof(struct ixgbe_rte_flow_rss_conf));
 		rte_flow_error_set(error, EINVAL,
@@ -2834,7 +2927,7 @@ ixgbe_clear_rss_filter(struct rte_eth_dev *dev)
 	struct ixgbe_filter_info *filter_info =
 		IXGBE_DEV_PRIVATE_TO_FILTER_INFO(dev->data->dev_private);
 
-	if (filter_info->rss_info.num)
+	if (filter_info->rss_info.conf.queue_num)
 		ixgbe_config_rss_filter(dev, &filter_info->rss_info, FALSE);
 }
 
@@ -3153,9 +3246,8 @@ ixgbe_flow_create(struct rte_eth_dev *dev,
 				PMD_DRV_LOG(ERR, "failed to allocate memory");
 				goto out;
 			}
-			rte_memcpy(&rss_filter_ptr->filter_info,
-				&rss_conf,
-				sizeof(struct ixgbe_rte_flow_rss_conf));
+			ixgbe_rss_conf_init(&rss_filter_ptr->filter_info,
+					    &rss_conf.conf);
 			TAILQ_INSERT_TAIL(&filter_rss_list,
 				rss_filter_ptr, entries);
 			flow->rule = rss_filter_ptr;

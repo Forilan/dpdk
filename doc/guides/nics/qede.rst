@@ -7,7 +7,7 @@ QEDE Poll Mode Driver
 
 The QEDE poll mode driver library (**librte_pmd_qede**) implements support
 for **QLogic FastLinQ QL4xxxx 10G/25G/40G/50G/100G Intelligent Ethernet Adapters (IEA) and Converged Network Adapters (CNA)** family of adapters as well as SR-IOV virtual functions (VF). It is supported on
-several standard Linux distros like RHEL7.x, SLES12.x and Ubuntu.
+several standard Linux distros like RHEL, SLES, Ubuntu etc.
 It is compile-tested under FreeBSD OS.
 
 More information can be found at `QLogic Corporation's Website
@@ -35,20 +35,40 @@ Supported Features
 - N-tuple filter and flow director (limited support)
 - NPAR (NIC Partitioning)
 - SR-IOV VF
-- VXLAN Tunneling offload
+- GRE Tunneling offload
 - GENEVE Tunneling offload
+- VXLAN Tunneling offload
 - MPLSoUDP Tx Tunneling offload
+- Generic flow API
 
 Non-supported Features
 ----------------------
 
 - SR-IOV PF
-- GRE and NVGRE Tunneling offloads
 
 Co-existence considerations
 ---------------------------
-- QLogic FastLinQ QL4xxxx CNAs can have both NIC and Storage personalities. However, coexistence with storage protocol drivers (qedi and qedf) is not supported on the same adapter. So storage personality has to be disabled on that adapter when used in DPDK applications.
-- For SR-IOV case, qede PMD will be used to bind to SR-IOV VF device and Linux native kernel driver (qede) will be attached to SR-IOV PF.
+
+- QLogic FastLinQ QL4xxxx CNAs support Ethernet, RDMA, iSCSI and FCoE
+  functionalities. These functionalities are supported using
+  QLogic Linux kernel drivers qed, qede, qedr, qedi and qedf. DPDK is
+  supported on these adapters using qede PMD.
+
+- When SR-IOV is not enabled on the adapter,
+  QLogic Linux kernel drivers (qed, qede, qedr, qedi and qedf) and qede
+  PMD can’t be attached to different PFs on a given QLogic FastLinQ
+  QL4xxx adapter.
+  A given adapter needs to be completely used by DPDK or Linux drivers
+  Before binding DPDK driver to one or more PFs on the adapter,
+  please make sure to unbind Linux drivers from all PFs of the adapter.
+  If there are multiple adapters on the system, one or more adapters
+  can be used by DPDK driver completely and other adapters can be used
+  by Linux drivers completely.
+
+- When SR-IOV is enabled on the adapter,
+  Linux kernel drivers (qed, qede, qedr, qedi and qedf) can be bound
+  to the PFs of a given adapter and either qede PMD or Linux drivers
+  (qed and qede) can be bound to the VFs of the adapter.
 
 Supported QLogic Adapters
 -------------------------
@@ -58,19 +78,21 @@ Supported QLogic Adapters
 Prerequisites
 -------------
 
-- Requires storm firmware version **8.30.12.0**. Firmware may be available
+- Requires storm firmware version **8.37.7.0**. Firmware may be available
   inbox in certain newer Linux distros under the standard directory
-  ``E.g. /lib/firmware/qed/qed_init_values-8.30.12.0.bin``
+  ``E.g. /lib/firmware/qed/qed_init_values-8.37.7.0.bin``.
   If the required firmware files are not available then download it from
-  `QLogic Driver Download Center <http://driverdownloads.qlogic.com/QLogicDriverDownloads_UI/DefaultNewSearch.aspx>`_.
-  For downloading firmware file, select adapter category, model and DPDK Poll Mode Driver.
+  `linux-firmware git repository <http://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/tree/qed>`_
+  or `QLogic Driver Download Center <http://driverdownloads.qlogic.com/QLogicDriverDownloads_UI/DefaultNewSearch.aspx>`_.
+  To download firmware file from QLogic website, select adapter category, model and DPDK Poll Mode Driver.
 
-- Requires management firmware (MFW) version **8.30.x.x** or higher to be
-  flashed on to the adapter. If the required management firmware is not
-  available then download from
-  `QLogic Driver Download Center <http://driverdownloads.qlogic.com/QLogicDriverDownloads_UI/DefaultNewSearch.aspx>`_.
-  For downloading firmware upgrade utility, select adapter category, model and Linux distro.
-  To flash the management firmware refer to the instructions in the QLogic Firmware Upgrade Utility Readme document.
+- Requires the NIC be updated minimally with **8.30.x.x** Management firmware(MFW) version supported for that NIC.
+  It is highly recommended that the NIC be updated with the latest available management firmware version to get latest feature  set.
+  Management Firmware and Firmware Upgrade Utility for Cavium FastLinQ(r) branded adapters can be downloaded from
+  `Driver Download Center <http://driverdownloads.qlogic.com/QLogicDriverDownloads_UI/DefaultNewSearch.aspx>`_.
+  For downloading Firmware Upgrade Utility, select NIC category, model and Linux distro.
+  To update the management firmware, refer to the instructions in the Firmware Upgrade Utility Readme document.
+  For OEM branded adapters please follow the instruction provided by the OEM to update the Management Firmware on the NIC.
 
 - SR-IOV requires Linux PF driver version **8.20.x.x** or higher.
   If the required PF driver is not available then download it from
@@ -104,7 +126,7 @@ enabling debugging options may affect system performance.
 - ``CONFIG_RTE_LIBRTE_QEDE_FW`` (default **""**)
 
   Gives absolute path of firmware file.
-  ``Eg: "/lib/firmware/qed/qed_init_values-8.30.12.0.bin"``
+  ``Eg: "/lib/firmware/qed/qed_init_values-8.37.7.0.bin"``
   Empty string indicates driver will pick up the firmware file
   from the default location /lib/firmware/qed.
   CAUTION this option is more for custom firmware, it is not
@@ -116,12 +138,50 @@ Driver compilation and testing
 Refer to the document :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>`
 for details.
 
+RTE Flow Support
+----------------
+
+QLogic FastLinQ QL4xxxx NICs has support for the following patterns and
+actions.
+
+Patterns:
+
+.. _table_qede_supported_flow_item_types:
+
+.. table:: Item types
+
+   +----+--------------------------------+
+   | #  | Pattern Type                   |
+   +====+================================+
+   | 1  | RTE_FLOW_ITEM_TYPE_IPV4        |
+   +----+--------------------------------+
+   | 2  | RTE_FLOW_ITEM_TYPE_IPV6        |
+   +----+--------------------------------+
+   | 3  | RTE_FLOW_ITEM_TYPE_UDP         |
+   +----+--------------------------------+
+   | 4  | RTE_FLOW_ITEM_TYPE_TCP         |
+   +----+--------------------------------+
+
+Actions:
+
+.. _table_qede_supported_ingress_action_types:
+
+.. table:: Ingress action types
+
+   +----+--------------------------------+
+   | #  | Action Type                    |
+   +====+================================+
+   | 1  | RTE_FLOW_ACTION_TYPE_QUEUE     |
+   +----+--------------------------------+
+   | 2  | RTE_FLOW_ACTION_TYPE_DROP      |
+   +----+--------------------------------+
+
 SR-IOV: Prerequisites and Sample Application Notes
 --------------------------------------------------
 
 This section provides instructions to configure SR-IOV with Linux OS.
 
-**Note**: librte_pmd_qede will be used to bind to SR-IOV VF device and Linux native kernel driver (qede) will function as SR-IOV PF driver. Requires PF driver to be 8.10.x.x or higher.
+**Note**: librte_pmd_qede will be used to bind to SR-IOV VF device and Linux native kernel driver (qede) will function as SR-IOV PF driver. Requires PF driver to be 8.20.x.x or higher.
 
 #. Verify SR-IOV and ARI capability is enabled on the adapter using ``lspci``:
 
@@ -193,7 +253,7 @@ This section provides instructions to configure SR-IOV with Linux OS.
 
 
 #. Running testpmd
-   (Supply ``--log-level="pmd.net.qede.driver",7`` to view informational messages):
+   (Supply ``--log-level="pmd.net.qede.driver:info`` to view informational messages):
 
    Refer to the document
    :ref:`compiling and testing a PMD for a NIC <pmd_build_and_test>` to run

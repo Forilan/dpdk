@@ -24,8 +24,6 @@
 static struct rte_eth_conf port_conf = {
 		.rxmode = {
 			.split_hdr_size = 0,
-			.ignore_offload_bitfield = 1,
-			.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 		},
 		.txmode = {
 			.mq_mode = ETH_DCB_NONE,
@@ -82,7 +80,6 @@ void configure_eth_port(uint16_t port_id)
 
 	/* Initialize the port's TX queue */
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = local_port_conf.txmode.offloads;
 	ret = rte_eth_tx_queue_setup(port_id, 0, nb_txd,
 			rte_eth_dev_socket_id(port_id),
@@ -106,7 +103,11 @@ void configure_eth_port(uint16_t port_id)
 				(unsigned int) port_id, ret);
 
 	/* Put it in promiscuous mode */
-	rte_eth_promiscuous_enable(port_id);
+	ret = rte_eth_promiscuous_enable(port_id);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			"Failed to enable promiscuous mode for port %u: %s\n",
+			port_id, rte_strerror(-ret));
 }
 
 void

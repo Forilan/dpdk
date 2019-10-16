@@ -1,3 +1,6 @@
+..  SPDX-License-Identifier: BSD-3-Clause
+    Copyright 2018 The DPDK contributors
+
 .. _coding_style:
 
 DPDK Coding Style
@@ -243,6 +246,15 @@ Structure Declarations
 * Major structures should be declared at the top of the file in which they are used, or in separate header files if they are used in multiple source files.
 * Use of the structures should be by separate variable declarations and those declarations must be extern if they are declared in a header file.
 * Externally visible structure definitions should have the structure name prefixed by ``rte_`` to avoid namespace collisions.
+
+.. note::
+
+    Uses of ``bool`` in structures are not preferred as is wastes space and
+    it's also not clear as to what type size the bool is. A preferred use of
+    ``bool`` is mainly as a return type from functions that return true/false,
+    and maybe local variable functions.
+
+    Ref: `LKML <https://lkml.org/lkml/2017/11/21/384>`_
 
 Queues
 ~~~~~~
@@ -614,8 +626,8 @@ In the DPDK environment, use the logging interface provided:
   * is DEBUG) */
  rte_log_set_level(my_logtype2, RTE_LOG_NOTICE);
 
- /* enable all PMD logs (whose identifier string starts with "pmd") */
- rte_log_set_level_regexp("pmd.*", RTE_LOG_DEBUG);
+ /* enable all PMD logs (whose identifier string starts with "pmd.") */
+ rte_log_set_level_pattern("pmd.*", RTE_LOG_DEBUG);
 
  /* log in debug level */
  rte_log_set_global_level(RTE_LOG_DEBUG);
@@ -738,8 +750,8 @@ A specialization looks like this:
  * PF/VF mailbox output: ``type.section.name.mbox``
 
 A real world example is the i40e poll mode driver which exposes two
-specializations, one for initialization ``pmd.i40e.init`` and the other for
-the remaining driver logs ``pmd.i40e.driver``.
+specializations, one for initialization ``pmd.net.i40e.init`` and the other for
+the remaining driver logs ``pmd.net.i40e.driver``.
 
 Note that specializations have no formatting rules, but please follow
 a precedent if one exists. In order to see all current log topics and
@@ -813,10 +825,10 @@ format.
 .. code-block:: python
 
 	sources = files('file1.c', ...)
-	headers = files('file1.c', ...)
+	headers = files('file1.h', ...)
 
 
-The will build based on a number of conventions and assumptions within the DPDK
+This will build based on a number of conventions and assumptions within the DPDK
 itself, for example, that the library name is the same as the directory name in
 which the files are stored.
 
@@ -840,12 +852,15 @@ allow_experimental_apis
 build
 	**Default Value = true**
 	Used to optionally compile a library, based on its dependencies or
-	environment. A simple example of use would be:
+	environment. When set to "false" the ``reason`` value, explained below, should
+	also be set to explain to the user why the component is not being built.
+	A simple example of use would be:
 
 .. code-block:: python
 
-	if host_machine.system() != 'linux'
+	if not is_linux
 	        build = false
+	        reason = 'only supported on Linux'
 	endif
 
 
@@ -926,6 +941,13 @@ objs
 	objects that were compiled up as part of another target given in the
 	included library ``meson.build`` file.
 
+reason
+	**Default Value = '<unknown reason>'**.
+	This variable should be used when a library is not to be built i.e. when
+	``build`` is set to "false", to specify the reason why a library will not be
+	built. For missing dependencies this should be of the form
+	``'missing dependency, "libname"'``.
+
 version
 	**Default Value = 1**.
 	Specifies the ABI version of the library, and is used as the major
@@ -978,6 +1000,9 @@ pkgconfig_extra_libs
 	libraries that may need to be linked into the build - especially when
 	using static libraries. Anything added here will be appended to the end
 	of the ``pkgconfig --libs`` output.
+
+reason
+	As above.
 
 sources [mandatory]
 	As above

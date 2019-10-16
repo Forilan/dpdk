@@ -1,34 +1,5 @@
-/*-
- * BSD LICENSE
- *
- * Copyright (c) 2015-2017 Atomic Rules LLC
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- *
- * * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- * * Redistributions in binary form must reproduce the above copyright
- * notice, this list of conditions and the following disclaimer in
- * the documentation and/or other materials provided with the
- * distribution.
- * * Neither the name of copyright holder nor the names of its
- * contributors may be used to endorse or promote products derived
- * from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2015-2018 Atomic Rules LLC
  */
 
 #ifndef _ARK_DEBUG_H_
@@ -55,29 +26,32 @@
 #define ARK_SU64X "\n\t%-20s    %#20" PRIx64
 #define ARK_SPTR  "\n\t%-20s    %20p"
 
-
+extern int ark_logtype;
 
 #define PMD_DRV_LOG(level, fmt, args...)	\
-	RTE_LOG(level, PMD, fmt, ## args)
+	rte_log(RTE_LOG_ ##level, ark_logtype, fmt, ## args)
 
 /* Conditional trace definitions */
-#define ARK_TRACE_ON(level, fmt, ...)		\
-	RTE_LOG(level, PMD, fmt, ##__VA_ARGS__)
+#define ARK_TRACE_ON(level, fmt, args...) \
+	PMD_DRV_LOG(level, fmt, ## args)
 
 /* This pattern allows compiler check arguments even if disabled  */
-#define ARK_TRACE_OFF(level, fmt, ...)					\
-	do {if (0) RTE_LOG(level, PMD, fmt, ##__VA_ARGS__); }		\
-	while (0)
-
+#define ARK_TRACE_OFF(level, fmt, args...)			\
+	do {							\
+		if (0)						\
+			PMD_DRV_LOG(level, fmt, ## args);	\
+	} while (0)
 
 /* tracing including the function name */
 #define ARK_FUNC_ON(level, fmt, args...) \
-	RTE_LOG(level, PMD, "%s(): " fmt, __func__, ## args)
+	PMD_DRV_LOG(level, "%s(): " fmt, __func__, ## args)
 
 /* tracing including the function name */
 #define ARK_FUNC_OFF(level, fmt, args...)				\
-	do { if (0) RTE_LOG(level, PMD, "%s(): " fmt, __func__, ## args); } \
-	while (0)
+	do {								\
+		if (0)							\
+			PMD_DRV_LOG(level, "%s(): " fmt, __func__, ## args); \
+	} while (0)
 
 
 /* Debug macro for tracing full behavior, function tracing and messages*/

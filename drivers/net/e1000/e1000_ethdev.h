@@ -4,6 +4,10 @@
 
 #ifndef _E1000_ETHDEV_H_
 #define _E1000_ETHDEV_H_
+
+#include <stdint.h>
+
+#include <rte_flow.h>
 #include <rte_time.h>
 #include <rte_pci.h>
 
@@ -27,8 +31,12 @@
 #define E1000_CTRL_EXT_EXTEND_VLAN  (1<<26)    /* EXTENDED VLAN */
 #define IGB_VFTA_SIZE 128
 
+#define IGB_HKEY_MAX_INDEX             10
 #define IGB_MAX_RX_QUEUE_NUM           8
 #define IGB_MAX_RX_QUEUE_NUM_82576     16
+
+#define E1000_I219_MAX_RX_QUEUE_NUM		2
+#define E1000_I219_MAX_TX_QUEUE_NUM		2
 
 #define E1000_SYN_FILTER_ENABLE        0x00000001 /* syn filter enable field */
 #define E1000_SYN_FILTER_QUEUE         0x0000000E /* syn filter queue field */
@@ -82,6 +90,13 @@
 	ETH_RSS_IPV6_EX | \
 	ETH_RSS_IPV6_TCP_EX | \
 	ETH_RSS_IPV6_UDP_EX)
+
+/*
+ * The overhead from MTU to max frame size.
+ * Considering VLAN so a tag needs to be counted.
+ */
+#define E1000_ETH_OVERHEAD (RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + \
+				VLAN_TAG_SIZE)
 
 /*
  * Maximum number of Ring Descriptors.
@@ -144,7 +159,7 @@ struct e1000_vfta {
  */
 #define E1000_MAX_VF_MC_ENTRIES         30
 struct e1000_vf_info {
-	uint8_t vf_mac_addresses[ETHER_ADDR_LEN];
+	uint8_t vf_mac_addresses[RTE_ETHER_ADDR_LEN];
 	uint16_t vf_mc_hashes[E1000_MAX_VF_MC_ENTRIES];
 	uint16_t num_vf_mc_hashes;
 	uint16_t default_vf_vlan_id;
@@ -229,9 +244,10 @@ struct igb_ethertype_filter {
 };
 
 struct igb_rte_flow_rss_conf {
-	struct rte_eth_rss_conf rss_conf; /**< RSS parameters. */
-	uint16_t num; /**< Number of entries in queue[]. */
-	uint16_t queue[IGB_MAX_RX_QUEUE_NUM]; /**< Queues indices to use. */
+	struct rte_flow_action_rss conf; /**< RSS parameters. */
+	uint8_t key[IGB_HKEY_MAX_INDEX * sizeof(uint32_t)]; /* Hash key. */
+	/* Queues indices to use. */
+	uint16_t queue[IGB_MAX_RX_QUEUE_NUM_82576];
 };
 
 /*
@@ -501,8 +517,14 @@ int eth_igb_syn_filter_set(struct rte_eth_dev *dev,
 int eth_igb_add_del_flex_filter(struct rte_eth_dev *dev,
 			struct rte_eth_flex_filter *filter,
 			bool add);
+int igb_rss_conf_init(struct rte_eth_dev *dev,
+		      struct igb_rte_flow_rss_conf *out,
+		      const struct rte_flow_action_rss *in);
+int igb_action_rss_same(const struct rte_flow_action_rss *comp,
+			const struct rte_flow_action_rss *with);
 int igb_config_rss_filter(struct rte_eth_dev *dev,
 			struct igb_rte_flow_rss_conf *conf,
 			bool add);
+void em_flush_desc_rings(struct rte_eth_dev *dev);
 
 #endif /* _E1000_ETHDEV_H_ */

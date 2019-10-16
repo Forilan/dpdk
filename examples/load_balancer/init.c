@@ -45,9 +45,7 @@ static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.mq_mode	= ETH_MQ_RX_RSS,
 		.split_hdr_size = 0,
-		.ignore_offload_bitfield = 1,
-		.offloads = (DEV_RX_OFFLOAD_CHECKSUM |
-			     DEV_RX_OFFLOAD_CRC_STRIP),
+		.offloads = DEV_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
@@ -333,6 +331,7 @@ check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 	uint16_t portid;
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
+	int ret;
 	uint32_t n_rx_queues, n_tx_queues;
 
 	printf("\nChecking link status");
@@ -347,7 +346,14 @@ check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 			if ((n_rx_queues == 0) && (n_tx_queues == 0))
 				continue;
 			memset(&link, 0, sizeof(link));
-			rte_eth_link_get_nowait(portid, &link);
+			ret = rte_eth_link_get_nowait(portid, &link);
+			if (ret < 0) {
+				all_ports_up = 0;
+				if (print_flag == 1)
+					printf("Port %u link get failed: %s\n",
+						portid, rte_strerror(-ret));
+				continue;
+			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status)
@@ -413,10 +419,27 @@ app_init_nics(void)
 
 		/* Init port */
 		printf("Initializing NIC port %u ...\n", port);
-		rte_eth_dev_info_get(port, &dev_info);
+
+		ret = rte_eth_dev_info_get(port, &dev_info);
+		if (ret != 0)
+			rte_panic("Error during getting device (port %u) info: %s\n",
+				port, strerror(-ret));
+
 		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+		local_port_conf.rx_adv_conf.rss_conf.rss_hf &=
+			dev_info.flow_type_rss_offloads;
+		if (local_port_conf.rx_adv_conf.rss_conf.rss_hf !=
+				port_conf.rx_adv_conf.rss_conf.rss_hf) {
+			printf("Port %u modified RSS hash function based on hardware support,"
+				"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+				port,
+				port_conf.rx_adv_conf.rss_conf.rss_hf,
+				local_port_conf.rx_adv_conf.rss_conf.rss_hf);
+		}
+
 		ret = rte_eth_dev_configure(
 			port,
 			(uint8_t) n_rx_queues,
@@ -425,7 +448,11 @@ app_init_nics(void)
 		if (ret < 0) {
 			rte_panic("Cannot init NIC port %u (%d)\n", port, ret);
 		}
-		rte_eth_promiscuous_enable(port);
+
+		ret = rte_eth_promiscuous_enable(port);
+		if (ret != 0)
+			rte_panic("Cannot enable promiscuous mode on port %u (%s)\n",
+				port, rte_strerror(-ret));
 
 		nic_rx_ring_size = app.nic_rx_ring_size;
 		nic_tx_ring_size = app.nic_tx_ring_size;
@@ -466,7 +493,6 @@ app_init_nics(void)
 		}
 
 		txq_conf = dev_info.default_txconf;
-		txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 		txq_conf.offloads = local_port_conf.txmode.offloads;
 		/* Init TX queues */
 		if (app.nic_tx_port_mask[port] == 1) {

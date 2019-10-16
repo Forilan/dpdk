@@ -4,12 +4,48 @@
  */
 
 #include <rte_malloc.h>
+#include <rte_alarm.h>
+#include <rte_cycles.h>
 
 #include "bnxt.h"
 #include "bnxt_cpr.h"
 #include "bnxt_hwrm.h"
 #include "bnxt_ring.h"
 #include "hsi_struct_def_dpdk.h"
+
+void bnxt_wait_for_device_shutdown(struct bnxt *bp)
+{
+	uint32_t val, timeout;
+
+	/* if HWRM_FUNC_QCAPS_OUTPUT_FLAGS_ERR_RECOVER_RELOAD is set
+	 * in HWRM_FUNC_QCAPS command, wait for FW_STATUS to set
+	 * the SHUTDOWN bit in health register
+	 */
+	if (!(bp->recovery_info &&
+	      (bp->flags & BNXT_FLAG_FW_CAP_ERR_RECOVER_RELOAD)))
+		return;
+
+	/* Driver has to wait for fw_reset_max_msecs or shutdown bit which comes
+	 * first for FW to collect crash dump.
+	 */
+	timeout = bp->fw_reset_max_msecs;
+
+	/* Driver has to poll for shutdown bit in fw_status register
+	 *
+	 * 1. in case of hot fw upgrade, this bit will be set after all
+	 *    function drivers unregistered with fw.
+	 * 2. in case of fw initiated error recovery, this bit will be
+	 *    set after fw has collected the core dump
+	 */
+	do {
+		val = bnxt_read_fw_status_reg(bp, BNXT_FW_STATUS_REG);
+		if (val & BNXT_FW_STATUS_SHUTDOWN)
+			return;
+
+		rte_delay_ms(100);
+		timeout -= 100;
+	} while (timeout);
+}
 
 /*
  * Async event handling
@@ -20,6 +56,8 @@ void bnxt_handle_async_event(struct bnxt *bp,
 	struct hwrm_async_event_cmpl *async_cmp =
 				(struct hwrm_async_event_cmpl *)cmp;
 	uint16_t event_id = rte_le_to_cpu_16(async_cmp->event_id);
+	struct bnxt_error_recovery_info *info;
+	uint32_t event_data;
 
 	/* TODO: HWRM async events are not defined yet */
 	/* Needs to handle: link events, error events, etc. */
@@ -27,19 +65,79 @@ void bnxt_handle_async_event(struct bnxt *bp,
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_STATUS_CHANGE:
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CHANGE:
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_LINK_SPEED_CFG_CHANGE:
-		bnxt_link_update_op(bp->eth_dev, 1);
+		/* FALLTHROUGH */
+		bnxt_link_update_op(bp->eth_dev, 0);
 		break;
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PF_DRVR_UNLOAD:
 		PMD_DRV_LOG(INFO, "Async event: PF driver unloaded\n");
 		break;
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_VF_CFG_CHANGE:
 		PMD_DRV_LOG(INFO, "Async event: VF config changed\n");
+		bnxt_hwrm_func_qcfg(bp, NULL);
 		break;
 	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_PORT_CONN_NOT_ALLOWED:
 		PMD_DRV_LOG(INFO, "Port conn async event\n");
 		break;
+	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_RESET_NOTIFY:
+		event_data = rte_le_to_cpu_32(async_cmp->event_data1);
+		/* timestamp_lo/hi values are in units of 100ms */
+		bp->fw_reset_max_msecs = async_cmp->timestamp_hi ?
+			rte_le_to_cpu_16(async_cmp->timestamp_hi) * 100 :
+			BNXT_MAX_FW_RESET_TIMEOUT;
+		bp->fw_reset_min_msecs = async_cmp->timestamp_lo ?
+			async_cmp->timestamp_lo * 100 :
+			BNXT_MIN_FW_READY_TIMEOUT;
+		if ((event_data & EVENT_DATA1_REASON_CODE_MASK) ==
+		    EVENT_DATA1_REASON_CODE_FW_EXCEPTION_FATAL) {
+			PMD_DRV_LOG(INFO,
+				    "Firmware fatal reset event received\n");
+			bp->flags |= BNXT_FLAG_FATAL_ERROR;
+		} else {
+			PMD_DRV_LOG(INFO,
+				    "Firmware non-fatal reset event received\n");
+		}
+
+		bp->flags |= BNXT_FLAG_FW_RESET;
+		rte_eal_alarm_set(US_PER_MS, bnxt_dev_reset_and_resume,
+				  (void *)bp);
+		break;
+	case HWRM_ASYNC_EVENT_CMPL_EVENT_ID_ERROR_RECOVERY:
+		info = bp->recovery_info;
+
+		if (!info)
+			return;
+
+		PMD_DRV_LOG(INFO, "Error recovery async event received\n");
+
+		event_data = rte_le_to_cpu_32(async_cmp->event_data1) &
+				EVENT_DATA1_FLAGS_MASK;
+
+		if (event_data & EVENT_DATA1_FLAGS_MASTER_FUNC)
+			info->flags |= BNXT_FLAG_MASTER_FUNC;
+		else
+			info->flags &= ~BNXT_FLAG_MASTER_FUNC;
+
+		if (event_data & EVENT_DATA1_FLAGS_RECOVERY_ENABLED)
+			info->flags |= BNXT_FLAG_RECOVERY_ENABLED;
+		else
+			info->flags &= ~BNXT_FLAG_RECOVERY_ENABLED;
+
+		PMD_DRV_LOG(INFO, "recovery enabled(%d), master function(%d)\n",
+			    bnxt_is_recovery_enabled(bp),
+			    bnxt_is_master_func(bp));
+
+		if (bp->flags & BNXT_FLAG_FW_HEALTH_CHECK_SCHEDULED)
+			return;
+
+		info->last_heart_beat =
+			bnxt_read_fw_status_reg(bp, BNXT_FW_HEARTBEAT_CNT_REG);
+		info->last_reset_counter =
+			bnxt_read_fw_status_reg(bp, BNXT_FW_RECOVERY_CNT_REG);
+
+		bnxt_schedule_fw_health_check(bp);
+		break;
 	default:
-		PMD_DRV_LOG(INFO, "handle_async_event id = 0x%x\n", event_id);
+		PMD_DRV_LOG(DEBUG, "handle_async_event id = 0x%x\n", event_id);
 		break;
 	}
 }
@@ -131,69 +229,53 @@ reject:
 	return;
 }
 
-/* For the default completion ring only */
-int bnxt_alloc_def_cp_ring(struct bnxt *bp)
+int bnxt_event_hwrm_resp_handler(struct bnxt *bp, struct cmpl_base *cmp)
 {
-	struct bnxt_cp_ring_info *cpr = bp->def_cp_ring;
-	struct bnxt_ring *cp_ring = cpr->cp_ring_struct;
-	int rc;
+	bool evt = 0;
 
-	rc = bnxt_hwrm_ring_alloc(bp, cp_ring,
-				  HWRM_RING_ALLOC_INPUT_RING_TYPE_L2_CMPL,
-				  0, HWRM_NA_SIGNATURE,
-				  HWRM_NA_SIGNATURE);
-	if (rc)
-		goto err_out;
-	cpr->cp_doorbell = bp->pdev->mem_resource[2].addr;
-	B_CP_DIS_DB(cpr, cpr->cp_raw_cons);
-	if (BNXT_PF(bp))
-		rc = bnxt_hwrm_func_cfg_def_cp(bp);
-	else
-		rc = bnxt_hwrm_vf_func_cfg_def_cp(bp);
+	if (bp == NULL || cmp == NULL) {
+		PMD_DRV_LOG(ERR, "invalid NULL argument\n");
+		return evt;
+	}
 
-err_out:
-	return rc;
+	if (unlikely(is_bnxt_in_error(bp)))
+		return 0;
+
+	switch (CMP_TYPE(cmp)) {
+	case CMPL_BASE_TYPE_HWRM_ASYNC_EVENT:
+		/* Handle any async event */
+		bnxt_handle_async_event(bp, cmp);
+		evt = 1;
+		break;
+	case CMPL_BASE_TYPE_HWRM_FWD_RESP:
+		/* Handle HWRM forwarded responses */
+		bnxt_handle_fwd_req(bp, cmp);
+		evt = 1;
+		break;
+	default:
+		/* Ignore any other events */
+		PMD_DRV_LOG(DEBUG, "Ignoring %02x completion\n", CMP_TYPE(cmp));
+		break;
+	}
+
+	return evt;
 }
 
-void bnxt_free_def_cp_ring(struct bnxt *bp)
+bool bnxt_is_master_func(struct bnxt *bp)
 {
-	struct bnxt_cp_ring_info *cpr = bp->def_cp_ring;
+	if (bp->recovery_info->flags & BNXT_FLAG_MASTER_FUNC)
+		return true;
 
-	if (cpr == NULL)
-		return;
-
-	bnxt_free_ring(cpr->cp_ring_struct);
-	cpr->cp_ring_struct = NULL;
-	rte_free(cpr->cp_ring_struct);
-	rte_free(cpr);
-	bp->def_cp_ring = NULL;
+	return false;
 }
 
-/* For the default completion ring only */
-int bnxt_init_def_ring_struct(struct bnxt *bp, unsigned int socket_id)
+bool bnxt_is_recovery_enabled(struct bnxt *bp)
 {
-	struct bnxt_cp_ring_info *cpr;
-	struct bnxt_ring *ring;
+	struct bnxt_error_recovery_info *info;
 
-	cpr = rte_zmalloc_socket("cpr",
-				 sizeof(struct bnxt_cp_ring_info),
-				 RTE_CACHE_LINE_SIZE, socket_id);
-	if (cpr == NULL)
-		return -ENOMEM;
-	bp->def_cp_ring = cpr;
+	info = bp->recovery_info;
+	if (info && (info->flags & BNXT_FLAG_RECOVERY_ENABLED))
+		return true;
 
-	ring = rte_zmalloc_socket("bnxt_cp_ring_struct",
-				  sizeof(struct bnxt_ring),
-				  RTE_CACHE_LINE_SIZE, socket_id);
-	if (ring == NULL)
-		return -ENOMEM;
-	cpr->cp_ring_struct = ring;
-	ring->bd = (void *)cpr->cp_desc_ring;
-	ring->bd_dma = cpr->cp_desc_mapping;
-	ring->ring_size = rte_align32pow2(DEFAULT_CP_RING_SIZE);
-	ring->ring_mask = ring->ring_size - 1;
-	ring->vmem_size = 0;
-	ring->vmem = NULL;
-
-	return 0;
+	return false;
 }

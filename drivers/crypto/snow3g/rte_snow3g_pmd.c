@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2016-2017 Intel Corporation
+ * Copyright(c) 2016-2018 Intel Corporation
  */
 
 #include <rte_common.h>
@@ -79,47 +79,62 @@ snow3g_set_session_parameters(struct snow3g_session *sess,
 		break;
 	case SNOW3G_OP_NOT_SUPPORTED:
 	default:
-		SNOW3G_LOG_ERR("Unsupported operation chain order parameter");
+		SNOW3G_LOG(ERR, "Unsupported operation chain order parameter");
 		return -ENOTSUP;
 	}
 
 	if (cipher_xform) {
+		uint8_t cipher_key[SNOW3G_MAX_KEY_SIZE];
+
 		/* Only SNOW 3G UEA2 supported */
 		if (cipher_xform->cipher.algo != RTE_CRYPTO_CIPHER_SNOW3G_UEA2)
 			return -ENOTSUP;
 
 		if (cipher_xform->cipher.iv.length != SNOW3G_IV_LENGTH) {
-			SNOW3G_LOG_ERR("Wrong IV length");
+			SNOW3G_LOG(ERR, "Wrong IV length");
 			return -EINVAL;
 		}
+		if (cipher_xform->cipher.key.length > SNOW3G_MAX_KEY_SIZE) {
+			SNOW3G_LOG(ERR, "Not enough memory to store the key");
+			return -ENOMEM;
+		}
+
 		sess->cipher_iv_offset = cipher_xform->cipher.iv.offset;
 
 		/* Initialize key */
-		sso_snow3g_init_key_sched(cipher_xform->cipher.key.data,
-				&sess->pKeySched_cipher);
+		memcpy(cipher_key, cipher_xform->cipher.key.data,
+				cipher_xform->cipher.key.length);
+		sso_snow3g_init_key_sched(cipher_key, &sess->pKeySched_cipher);
 	}
 
 	if (auth_xform) {
+		uint8_t auth_key[SNOW3G_MAX_KEY_SIZE];
+
 		/* Only SNOW 3G UIA2 supported */
 		if (auth_xform->auth.algo != RTE_CRYPTO_AUTH_SNOW3G_UIA2)
 			return -ENOTSUP;
 
 		if (auth_xform->auth.digest_length != SNOW3G_DIGEST_LENGTH) {
-			SNOW3G_LOG_ERR("Wrong digest length");
+			SNOW3G_LOG(ERR, "Wrong digest length");
 			return -EINVAL;
+		}
+		if (auth_xform->auth.key.length > SNOW3G_MAX_KEY_SIZE) {
+			SNOW3G_LOG(ERR, "Not enough memory to store the key");
+			return -ENOMEM;
 		}
 
 		sess->auth_op = auth_xform->auth.op;
 
 		if (auth_xform->auth.iv.length != SNOW3G_IV_LENGTH) {
-			SNOW3G_LOG_ERR("Wrong IV length");
+			SNOW3G_LOG(ERR, "Wrong IV length");
 			return -EINVAL;
 		}
 		sess->auth_iv_offset = auth_xform->auth.iv.offset;
 
 		/* Initialize key */
-		sso_snow3g_init_key_sched(auth_xform->auth.key.data,
-				&sess->pKeySched_hash);
+		memcpy(auth_key, auth_xform->auth.key.data,
+				auth_xform->auth.key.length);
+		sso_snow3g_init_key_sched(auth_key, &sess->pKeySched_hash);
 	}
 
 
@@ -137,7 +152,7 @@ snow3g_get_session(struct snow3g_qp *qp, struct rte_crypto_op *op)
 	if (op->sess_type == RTE_CRYPTO_OP_WITH_SESSION) {
 		if (likely(op->sym->session != NULL))
 			sess = (struct snow3g_session *)
-					get_session_private_data(
+					get_sym_session_private_data(
 					op->sym->session,
 					cryptodev_driver_id);
 	} else {
@@ -147,7 +162,8 @@ snow3g_get_session(struct snow3g_qp *qp, struct rte_crypto_op *op)
 		if (rte_mempool_get(qp->sess_mp, (void **)&_sess))
 			return NULL;
 
-		if (rte_mempool_get(qp->sess_mp, (void **)&_sess_private_data))
+		if (rte_mempool_get(qp->sess_mp_priv,
+				(void **)&_sess_private_data))
 			return NULL;
 
 		sess = (struct snow3g_session *)_sess_private_data;
@@ -155,12 +171,12 @@ snow3g_get_session(struct snow3g_qp *qp, struct rte_crypto_op *op)
 		if (unlikely(snow3g_set_session_parameters(sess,
 				op->sym->xform) != 0)) {
 			rte_mempool_put(qp->sess_mp, _sess);
-			rte_mempool_put(qp->sess_mp, _sess_private_data);
+			rte_mempool_put(qp->sess_mp_priv, _sess_private_data);
 			sess = NULL;
 		}
 		op->sym->session = (struct rte_cryptodev_sym_session *)_sess;
-		set_session_private_data(op->sym->session, cryptodev_driver_id,
-			_sess_private_data);
+		set_sym_session_private_data(op->sym->session,
+				cryptodev_driver_id, _sess_private_data);
 	}
 
 	if (unlikely(sess == NULL))
@@ -216,7 +232,7 @@ process_snow3g_cipher_op_bit(struct rte_crypto_op *op,
 	src = rte_pktmbuf_mtod(op->sym->m_src, uint8_t *);
 	if (op->sym->m_dst == NULL) {
 		op->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-		SNOW3G_LOG_ERR("bit-level in-place not supported\n");
+		SNOW3G_LOG(ERR, "bit-level in-place not supported\n");
 		return 0;
 	}
 	dst = rte_pktmbuf_mtod(op->sym->m_dst, uint8_t *);
@@ -246,7 +262,7 @@ process_snow3g_hash_op(struct snow3g_qp *qp, struct rte_crypto_op **ops,
 		/* Data must be byte aligned */
 		if ((ops[i]->sym->auth.data.offset % BYTE_LEN) != 0) {
 			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
-			SNOW3G_LOG_ERR("Offset");
+			SNOW3G_LOG(ERR, "Offset");
 			break;
 		}
 
@@ -295,7 +311,7 @@ process_ops(struct rte_crypto_op **ops, struct snow3g_session *session,
 				(ops[i]->sym->m_dst != NULL &&
 				!rte_pktmbuf_is_contiguous(
 						ops[i]->sym->m_dst))) {
-			SNOW3G_LOG_ERR("PMD supports only contiguous mbufs, "
+			SNOW3G_LOG(ERR, "PMD supports only contiguous mbufs, "
 				"op (%p) provides noncontiguous mbuf as "
 				"source/destination buffer.\n", ops[i]);
 			ops[i]->status = RTE_CRYPTO_OP_STATUS_INVALID_ARGS;
@@ -339,8 +355,9 @@ process_ops(struct rte_crypto_op **ops, struct snow3g_session *session,
 		if (ops[i]->sess_type == RTE_CRYPTO_OP_SESSIONLESS) {
 			memset(session, 0, sizeof(struct snow3g_session));
 			memset(ops[i]->sym->session, 0,
-					rte_cryptodev_get_header_session_size());
-			rte_mempool_put(qp->sess_mp, session);
+			rte_cryptodev_sym_get_existing_header_session_size(
+					ops[i]->sym->session));
+			rte_mempool_put(qp->sess_mp_priv, session);
 			rte_mempool_put(qp->sess_mp, ops[i]->sym->session);
 			ops[i]->sym->session = NULL;
 		}
@@ -537,7 +554,7 @@ cryptodev_snow3g_create(const char *name,
 
 	dev = rte_cryptodev_pmd_create(name, &vdev->device, init_params);
 	if (dev == NULL) {
-		SNOW3G_LOG_ERR("failed to create cryptodev vdev");
+		SNOW3G_LOG(ERR, "failed to create cryptodev vdev");
 		goto init_error;
 	}
 
@@ -555,11 +572,10 @@ cryptodev_snow3g_create(const char *name,
 	internals = dev->data->dev_private;
 
 	internals->max_nb_queue_pairs = init_params->max_nb_queue_pairs;
-	internals->max_nb_sessions = init_params->max_nb_sessions;
 
 	return 0;
 init_error:
-	SNOW3G_LOG_ERR("driver %s: cryptodev_snow3g_create failed",
+	SNOW3G_LOG(ERR, "driver %s: cryptodev_snow3g_create failed",
 			init_params->name);
 
 	cryptodev_snow3g_remove(vdev);
@@ -573,8 +589,7 @@ cryptodev_snow3g_probe(struct rte_vdev_device *vdev)
 		"",
 		sizeof(struct snow3g_private),
 		rte_socket_id(),
-		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_QUEUE_PAIRS,
-		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_SESSIONS
+		RTE_CRYPTODEV_PMD_DEFAULT_MAX_NB_QUEUE_PAIRS
 	};
 	const char *name;
 	const char *input_args;
@@ -617,7 +632,11 @@ RTE_PMD_REGISTER_VDEV(CRYPTODEV_NAME_SNOW3G_PMD, cryptodev_snow3g_pmd_drv);
 RTE_PMD_REGISTER_ALIAS(CRYPTODEV_NAME_SNOW3G_PMD, cryptodev_snow3g_pmd);
 RTE_PMD_REGISTER_PARAM_STRING(CRYPTODEV_NAME_SNOW3G_PMD,
 	"max_nb_queue_pairs=<int> "
-	"max_nb_sessions=<int> "
 	"socket_id=<int>");
 RTE_PMD_REGISTER_CRYPTO_DRIVER(snow3g_crypto_drv,
 		cryptodev_snow3g_pmd_drv.driver, cryptodev_driver_id);
+
+RTE_INIT(snow3g_init_log)
+{
+	snow3g_logtype_driver = rte_log_register("pmd.crypto.snow3g");
+}

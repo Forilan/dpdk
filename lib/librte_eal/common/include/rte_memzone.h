@@ -77,6 +77,17 @@ struct rte_memzone {
  * correctly filled memzone descriptor. If the allocation cannot be
  * done, return NULL.
  *
+ * @note Reserving memzones with len set to 0 will only attempt to allocate
+ *   memzones from memory that is already available. It will not trigger any
+ *   new allocations.
+ *
+ * @note: When reserving memzones with len set to 0, it is preferable to also
+ *   set a valid socket_id. Setting socket_id to SOCKET_ID_ANY is supported, but
+ *   will likely not yield expected results. Specifically, the resulting memzone
+ *   may not necessarily be the biggest memzone available, but rather biggest
+ *   memzone available on socket id corresponding to an lcore from which
+ *   reservation was called.
+ *
  * @param name
  *   The name of the memzone. If it already exists, the function will
  *   fail and return NULL.
@@ -129,6 +140,17 @@ const struct rte_memzone *rte_memzone_reserve(const char *name,
  * boundary, and returns a pointer to a correctly filled memzone
  * descriptor. If the allocation cannot be done or if the alignment
  * is not a power of 2, returns NULL.
+ *
+ * @note Reserving memzones with len set to 0 will only attempt to allocate
+ *   memzones from memory that is already available. It will not trigger any
+ *   new allocations.
+ *
+ * @note: When reserving memzones with len set to 0, it is preferable to also
+ *   set a valid socket_id. Setting socket_id to SOCKET_ID_ANY is supported, but
+ *   will likely not yield expected results. Specifically, the resulting memzone
+ *   may not necessarily be the biggest memzone available, but rather biggest
+ *   memzone available on socket id corresponding to an lcore from which
+ *   reservation was called.
  *
  * @param name
  *   The name of the memzone. If it already exists, the function will
@@ -187,6 +209,17 @@ const struct rte_memzone *rte_memzone_reserve_aligned(const char *name,
  * Memory buffer is reserved in a way, that it wouldn't cross specified
  * boundary. That implies that requested length should be less or equal
  * then boundary.
+ *
+ * @note Reserving memzones with len set to 0 will only attempt to allocate
+ *   memzones from memory that is already available. It will not trigger any
+ *   new allocations.
+ *
+ * @note: When reserving memzones with len set to 0, it is preferable to also
+ *   set a valid socket_id. Setting socket_id to SOCKET_ID_ANY is supported, but
+ *   will likely not yield expected results. Specifically, the resulting memzone
+ *   may not necessarily be the biggest memzone available, but rather biggest
+ *   memzone available on socket id corresponding to an lcore from which
+ *   reservation was called.
  *
  * @param name
  *   The name of the memzone. If it already exists, the function will

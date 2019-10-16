@@ -50,12 +50,21 @@ static void send_pause_frame(uint16_t port_id, uint16_t duration)
 {
 	struct rte_mbuf *mbuf;
 	struct ether_fc_frame *pause_frame;
-	struct ether_hdr *hdr;
-	struct ether_addr mac_addr;
+	struct rte_ether_hdr *hdr;
+	struct rte_ether_addr mac_addr;
+	int ret;
 
 	RTE_LOG_DP(DEBUG, USER1,
 			"Sending PAUSE frame (duration=%d) on port %d\n",
 			duration, port_id);
+
+	ret = rte_eth_macaddr_get(port_id, &mac_addr);
+	if (ret != 0) {
+		RTE_LOG_DP(ERR, USER1,
+				"Failed to get MAC address (port %u): %s\n",
+				port_id, rte_strerror(-ret));
+		return;
+	}
 
 	/* Get a mbuf from the pool */
 	mbuf = rte_pktmbuf_alloc(mbuf_pool);
@@ -63,11 +72,10 @@ static void send_pause_frame(uint16_t port_id, uint16_t duration)
 		return;
 
 	/* Prepare a PAUSE frame */
-	hdr = rte_pktmbuf_mtod(mbuf, struct ether_hdr *);
+	hdr = rte_pktmbuf_mtod(mbuf, struct rte_ether_hdr *);
 	pause_frame = (struct ether_fc_frame *) &hdr[1];
 
-	rte_eth_macaddr_get(port_id, &mac_addr);
-	ether_addr_copy(&mac_addr, &hdr->s_addr);
+	rte_ether_addr_copy(&mac_addr, &hdr->s_addr);
 
 	void *tmp = &hdr->d_addr.addr_bytes[0];
 	*((uint64_t *)tmp) = 0x010000C28001ULL;
@@ -181,7 +189,7 @@ receive_stage(__attribute__((unused)) void *args)
 	}
 }
 
-static void
+static int
 pipeline_stage(__attribute__((unused)) void *args)
 {
 	int i, ret;
@@ -243,9 +251,11 @@ pipeline_stage(__attribute__((unused)) void *args)
 			}
 		}
 	}
+
+	return 0;
 }
 
-static void
+static int
 send_stage(__attribute__((unused)) void *args)
 {
 	uint16_t nb_dq_pkts;
@@ -287,6 +297,8 @@ send_stage(__attribute__((unused)) void *args)
 			/* TODO: Check if nb_dq_pkts == nb_tx_pkts? */
 		}
 	}
+
+	return 0;
 }
 
 int
@@ -346,15 +358,13 @@ main(int argc, char **argv)
 				if (is_bit_set(port_id, portmask))
 					init_ring(lcore_id, port_id);
 
-			/* typecast is a workaround for GCC 4.3 bug */
-			rte_eal_remote_launch((int (*)(void *))pipeline_stage,
+			rte_eal_remote_launch(pipeline_stage,
 					NULL, lcore_id);
 		}
 	}
 
 	/* Start send_stage() on the last slave core */
-	/* typecast is a workaround for GCC 4.3 bug */
-	rte_eal_remote_launch((int (*)(void *))send_stage, NULL, last_lcore_id);
+	rte_eal_remote_launch(send_stage, NULL, last_lcore_id);
 
 	/* Start receive_stage() on the master core */
 	receive_stage(NULL);

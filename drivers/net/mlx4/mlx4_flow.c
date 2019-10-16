@@ -28,7 +28,6 @@
 
 #include <rte_byteorder.h>
 #include <rte_errno.h>
-#include <rte_eth_ctrl.h>
 #include <rte_ethdev_driver.h>
 #include <rte_ether.h>
 #include <rte_flow.h>
@@ -71,74 +70,99 @@ struct mlx4_flow_proc_item {
 struct mlx4_drop {
 	struct ibv_qp *qp; /**< QP target. */
 	struct ibv_cq *cq; /**< CQ associated with above QP. */
-	struct priv *priv; /**< Back pointer to private data. */
+	struct mlx4_priv *priv; /**< Back pointer to private data. */
 	uint32_t refcnt; /**< Reference count. */
 };
 
 /**
- * Convert DPDK RSS hash fields to their Verbs equivalent.
+ * Convert supported RSS hash field types between DPDK and Verbs formats.
  *
- * This function returns the supported (default) set when @p rss_hf has
- * special value (uint64_t)-1.
+ * This function returns the supported (default) set when @p types has
+ * special value 0.
  *
  * @param priv
  *   Pointer to private structure.
- * @param rss_hf
- *   Hash fields in DPDK format (see struct rte_eth_rss_conf).
+ * @param types
+ *   Depending on @p verbs_to_dpdk, hash types in either DPDK (see struct
+ *   rte_eth_rss_conf) or Verbs format.
+ * @param verbs_to_dpdk
+ *   A zero value converts @p types from DPDK to Verbs, a nonzero value
+ *   performs the reverse operation.
  *
  * @return
- *   A valid Verbs RSS hash fields mask for mlx4 on success, (uint64_t)-1
- *   otherwise and rte_errno is set.
+ *   Converted RSS hash fields on success, (uint64_t)-1 otherwise and
+ *   rte_errno is set.
  */
 uint64_t
-mlx4_conv_rss_hf(struct priv *priv, uint64_t rss_hf)
+mlx4_conv_rss_types(struct mlx4_priv *priv, uint64_t types, int verbs_to_dpdk)
 {
-	enum { IPV4, IPV6, TCP, UDP, };
-	const uint64_t in[] = {
-		[IPV4] = (ETH_RSS_IPV4 |
-			  ETH_RSS_FRAG_IPV4 |
-			  ETH_RSS_NONFRAG_IPV4_TCP |
-			  ETH_RSS_NONFRAG_IPV4_UDP |
-			  ETH_RSS_NONFRAG_IPV4_OTHER),
-		[IPV6] = (ETH_RSS_IPV6 |
-			  ETH_RSS_FRAG_IPV6 |
-			  ETH_RSS_NONFRAG_IPV6_TCP |
-			  ETH_RSS_NONFRAG_IPV6_UDP |
-			  ETH_RSS_NONFRAG_IPV6_OTHER |
-			  ETH_RSS_IPV6_EX |
-			  ETH_RSS_IPV6_TCP_EX |
-			  ETH_RSS_IPV6_UDP_EX),
-		[TCP] = (ETH_RSS_NONFRAG_IPV4_TCP |
-			 ETH_RSS_NONFRAG_IPV6_TCP |
-			 ETH_RSS_IPV6_TCP_EX),
-		[UDP] = (ETH_RSS_NONFRAG_IPV4_UDP |
-			 ETH_RSS_NONFRAG_IPV6_UDP |
-			 ETH_RSS_IPV6_UDP_EX),
+	enum {
+		INNER,
+		IPV4, IPV4_1, IPV4_2, IPV6, IPV6_1, IPV6_2, IPV6_3,
+		TCP, UDP,
+		IPV4_TCP, IPV4_UDP, IPV6_TCP, IPV6_TCP_1, IPV6_UDP, IPV6_UDP_1,
 	};
-	const uint64_t out[RTE_DIM(in)] = {
-		[IPV4] = IBV_RX_HASH_SRC_IPV4 | IBV_RX_HASH_DST_IPV4,
-		[IPV6] = IBV_RX_HASH_SRC_IPV6 | IBV_RX_HASH_DST_IPV6,
-		[TCP] = IBV_RX_HASH_SRC_PORT_TCP | IBV_RX_HASH_DST_PORT_TCP,
-		[UDP] = IBV_RX_HASH_SRC_PORT_UDP | IBV_RX_HASH_DST_PORT_UDP,
+	enum {
+		VERBS_IPV4 = IBV_RX_HASH_SRC_IPV4 | IBV_RX_HASH_DST_IPV4,
+		VERBS_IPV6 = IBV_RX_HASH_SRC_IPV6 | IBV_RX_HASH_DST_IPV6,
+		VERBS_TCP = IBV_RX_HASH_SRC_PORT_TCP | IBV_RX_HASH_DST_PORT_TCP,
+		VERBS_UDP = IBV_RX_HASH_SRC_PORT_UDP | IBV_RX_HASH_DST_PORT_UDP,
 	};
+	static const uint64_t dpdk[] = {
+		[INNER] = 0,
+		[IPV4] = ETH_RSS_IPV4,
+		[IPV4_1] = ETH_RSS_FRAG_IPV4,
+		[IPV4_2] = ETH_RSS_NONFRAG_IPV4_OTHER,
+		[IPV6] = ETH_RSS_IPV6,
+		[IPV6_1] = ETH_RSS_FRAG_IPV6,
+		[IPV6_2] = ETH_RSS_NONFRAG_IPV6_OTHER,
+		[IPV6_3] = ETH_RSS_IPV6_EX,
+		[TCP] = 0,
+		[UDP] = 0,
+		[IPV4_TCP] = ETH_RSS_NONFRAG_IPV4_TCP,
+		[IPV4_UDP] = ETH_RSS_NONFRAG_IPV4_UDP,
+		[IPV6_TCP] = ETH_RSS_NONFRAG_IPV6_TCP,
+		[IPV6_TCP_1] = ETH_RSS_IPV6_TCP_EX,
+		[IPV6_UDP] = ETH_RSS_NONFRAG_IPV6_UDP,
+		[IPV6_UDP_1] = ETH_RSS_IPV6_UDP_EX,
+	};
+	static const uint64_t verbs[RTE_DIM(dpdk)] = {
+		[INNER] = IBV_RX_HASH_INNER,
+		[IPV4] = VERBS_IPV4,
+		[IPV4_1] = VERBS_IPV4,
+		[IPV4_2] = VERBS_IPV4,
+		[IPV6] = VERBS_IPV6,
+		[IPV6_1] = VERBS_IPV6,
+		[IPV6_2] = VERBS_IPV6,
+		[IPV6_3] = VERBS_IPV6,
+		[TCP] = VERBS_TCP,
+		[UDP] = VERBS_UDP,
+		[IPV4_TCP] = VERBS_IPV4 | VERBS_TCP,
+		[IPV4_UDP] = VERBS_IPV4 | VERBS_UDP,
+		[IPV6_TCP] = VERBS_IPV6 | VERBS_TCP,
+		[IPV6_TCP_1] = VERBS_IPV6 | VERBS_TCP,
+		[IPV6_UDP] = VERBS_IPV6 | VERBS_UDP,
+		[IPV6_UDP_1] = VERBS_IPV6 | VERBS_UDP,
+	};
+	const uint64_t *in = verbs_to_dpdk ? verbs : dpdk;
+	const uint64_t *out = verbs_to_dpdk ? dpdk : verbs;
 	uint64_t seen = 0;
 	uint64_t conv = 0;
 	unsigned int i;
 
-	for (i = 0; i != RTE_DIM(in); ++i)
-		if (rss_hf & in[i]) {
-			seen |= rss_hf & in[i];
+	if (!types) {
+		if (!verbs_to_dpdk)
+			return priv->hw_rss_sup;
+		types = priv->hw_rss_sup;
+	}
+	for (i = 0; i != RTE_DIM(dpdk); ++i)
+		if (in[i] && (types & in[i]) == in[i]) {
+			seen |= types & in[i];
 			conv |= out[i];
 		}
-	if ((conv & priv->hw_rss_sup) == conv) {
-		if (rss_hf == (uint64_t)-1) {
-			/* Include inner RSS by default if supported. */
-			conv |= priv->hw_rss_sup & IBV_RX_HASH_INNER;
-			return conv;
-		}
-		if (!(rss_hf & ~seen))
-			return conv;
-	}
+	if ((verbs_to_dpdk || (conv & priv->hw_rss_sup) == conv) &&
+	    !(types & ~seen))
+		return conv;
 	rte_errno = ENOTSUP;
 	return (uint64_t)-1;
 }
@@ -180,9 +204,7 @@ mlx4_flow_merge_eth(struct rte_flow *flow,
 	const char *msg;
 	unsigned int i;
 
-	if (!mask) {
-		flow->promisc = 1;
-	} else {
+	if (mask) {
 		uint32_t sum_dst = 0;
 		uint32_t sum_src = 0;
 
@@ -202,7 +224,7 @@ mlx4_flow_merge_eth(struct rte_flow *flow,
 				goto error;
 			}
 			flow->allmulti = 1;
-		} else if (sum_dst != (UINT8_C(0xff) * ETHER_ADDR_LEN)) {
+		} else if (sum_dst != (UINT8_C(0xff) * RTE_ETHER_ADDR_LEN)) {
 			msg = "mlx4 does not support matching partial"
 				" Ethernet fields";
 			goto error;
@@ -224,12 +246,18 @@ mlx4_flow_merge_eth(struct rte_flow *flow,
 		.type = IBV_FLOW_SPEC_ETH,
 		.size = sizeof(*eth),
 	};
-	memcpy(eth->val.dst_mac, spec->dst.addr_bytes, ETHER_ADDR_LEN);
-	memcpy(eth->mask.dst_mac, mask->dst.addr_bytes, ETHER_ADDR_LEN);
-	/* Remove unwanted bits from values. */
-	for (i = 0; i < ETHER_ADDR_LEN; ++i) {
-		eth->val.dst_mac[i] &= eth->mask.dst_mac[i];
+	if (!mask) {
+		eth->val.dst_mac[0] = 0xff;
+		flow->ibv_attr->type = IBV_FLOW_ATTR_ALL_DEFAULT;
+		flow->promisc = 1;
+		return 0;
 	}
+	memcpy(eth->val.dst_mac, spec->dst.addr_bytes, RTE_ETHER_ADDR_LEN);
+	memcpy(eth->mask.dst_mac, mask->dst.addr_bytes, RTE_ETHER_ADDR_LEN);
+	/* Remove unwanted bits from values. */
+	for (i = 0; i < RTE_ETHER_ADDR_LEN; ++i)
+		eth->val.dst_mac[i] &= eth->mask.dst_mac[i];
+
 	return 0;
 error:
 	return rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM,
@@ -286,6 +314,8 @@ mlx4_flow_merge_vlan(struct rte_flow *flow,
 	eth->val.vlan_tag = spec->tci;
 	eth->mask.vlan_tag = mask->tci;
 	eth->val.vlan_tag &= eth->mask.vlan_tag;
+	if (flow->ibv_attr->type == IBV_FLOW_ATTR_ALL_DEFAULT)
+		flow->ibv_attr->type = IBV_FLOW_ATTR_NORMAL;
 	return 0;
 error:
 	return rte_flow_error_set(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ITEM,
@@ -362,6 +392,9 @@ error:
  * Additional mlx4-specific constraints on supported fields:
  *
  * - No support for partial masks.
+ * - Due to HW/FW limitation, flow rule priority is not taken into account
+ *   when matching UDP destination ports, doing is therefore only supported
+ *   at the highest priority level (0).
  *
  * @param[in, out] flow
  *   Flow rule handle to update.
@@ -391,6 +424,11 @@ mlx4_flow_merge_udp(struct rte_flow *flow,
 	    ((uint16_t)(mask->hdr.src_port + 1) > UINT16_C(1) ||
 	     (uint16_t)(mask->hdr.dst_port + 1) > UINT16_C(1))) {
 		msg = "mlx4 does not support matching partial UDP fields";
+		goto error;
+	}
+	if (mask && mask->hdr.dst_port && flow->priority) {
+		msg = "combining UDP destination port matching with a nonzero"
+			" priority level is not supported";
 		goto error;
 	}
 	if (!flow->ibv_attr)
@@ -624,7 +662,7 @@ static const struct mlx4_flow_proc_item mlx4_flow_proc_item_list[] = {
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
-mlx4_flow_prepare(struct priv *priv,
+mlx4_flow_prepare(struct mlx4_priv *priv,
 		  const struct rte_flow_attr *attr,
 		  const struct rte_flow_item pattern[],
 		  const struct rte_flow_action actions[],
@@ -637,6 +675,7 @@ mlx4_flow_prepare(struct priv *priv,
 	struct rte_flow temp = { .ibv_attr_size = sizeof(*temp.ibv_attr) };
 	struct rte_flow *flow = &temp;
 	const char *msg = NULL;
+	int overlap;
 
 	if (attr->group)
 		return rte_flow_error_set
@@ -651,12 +690,18 @@ mlx4_flow_prepare(struct priv *priv,
 		return rte_flow_error_set
 			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ATTR_EGRESS,
 			 NULL, "egress is not supported");
+	if (attr->transfer)
+		return rte_flow_error_set
+			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER,
+			 NULL, "transfer is not supported");
 	if (!attr->ingress)
 		return rte_flow_error_set
 			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_ATTR_INGRESS,
 			 NULL, "only ingress is supported");
 fill:
+	overlap = 0;
 	proc = mlx4_flow_proc_item_list;
+	flow->priority = attr->priority;
 	/* Go over pattern. */
 	for (item = pattern; item->type; ++item) {
 		const struct mlx4_flow_proc_item *next = NULL;
@@ -702,14 +747,24 @@ fill:
 	}
 	/* Go over actions list. */
 	for (action = actions; action->type; ++action) {
+		/* This one may appear anywhere multiple times. */
+		if (action->type == RTE_FLOW_ACTION_TYPE_VOID)
+			continue;
+		/* Fate-deciding actions may appear exactly once. */
+		if (overlap) {
+			msg = "cannot combine several fate-deciding actions,"
+				" choose between DROP, QUEUE or RSS";
+			goto exit_action_not_supported;
+		}
+		overlap = 1;
 		switch (action->type) {
 			const struct rte_flow_action_queue *queue;
 			const struct rte_flow_action_rss *rss;
-			const struct rte_eth_rss_conf *rss_conf;
+			const uint8_t *rss_key;
+			uint32_t rss_key_len;
+			uint64_t fields;
 			unsigned int i;
 
-		case RTE_FLOW_ACTION_TYPE_VOID:
-			continue;
 		case RTE_FLOW_ACTION_TYPE_DROP:
 			flow->drop = 1;
 			break;
@@ -717,7 +772,7 @@ fill:
 			if (flow->rss)
 				break;
 			queue = action->conf;
-			if (queue->index >= priv->dev->data->nb_rx_queues) {
+			if (queue->index >= ETH_DEV(priv)->data->nb_rx_queues) {
 				msg = "queue target index beyond number of"
 					" configured Rx queues";
 				goto exit_action_not_supported;
@@ -736,54 +791,68 @@ fill:
 				break;
 			rss = action->conf;
 			/* Default RSS configuration if none is provided. */
-			rss_conf =
-				rss->rss_conf ?
-				rss->rss_conf :
-				&(struct rte_eth_rss_conf){
-					.rss_key = mlx4_rss_hash_key_default,
-					.rss_key_len = MLX4_RSS_HASH_KEY_SIZE,
-					.rss_hf = -1,
-				};
+			if (rss->key_len) {
+				rss_key = rss->key;
+				rss_key_len = rss->key_len;
+			} else {
+				rss_key = mlx4_rss_hash_key_default;
+				rss_key_len = MLX4_RSS_HASH_KEY_SIZE;
+			}
 			/* Sanity checks. */
-			for (i = 0; i < rss->num; ++i)
+			for (i = 0; i < rss->queue_num; ++i)
 				if (rss->queue[i] >=
-				    priv->dev->data->nb_rx_queues)
+				    ETH_DEV(priv)->data->nb_rx_queues)
 					break;
-			if (i != rss->num) {
+			if (i != rss->queue_num) {
 				msg = "queue index target beyond number of"
 					" configured Rx queues";
 				goto exit_action_not_supported;
 			}
-			if (!rte_is_power_of_2(rss->num)) {
+			if (!rte_is_power_of_2(rss->queue_num)) {
 				msg = "for RSS, mlx4 requires the number of"
 					" queues to be a power of two";
 				goto exit_action_not_supported;
 			}
-			if (rss_conf->rss_key_len !=
-			    sizeof(flow->rss->key)) {
+			if (rss_key_len != sizeof(flow->rss->key)) {
 				msg = "mlx4 supports exactly one RSS hash key"
 					" length: "
 					MLX4_STR_EXPAND(MLX4_RSS_HASH_KEY_SIZE);
 				goto exit_action_not_supported;
 			}
-			for (i = 1; i < rss->num; ++i)
+			for (i = 1; i < rss->queue_num; ++i)
 				if (rss->queue[i] - rss->queue[i - 1] != 1)
 					break;
-			if (i != rss->num) {
+			if (i != rss->queue_num) {
 				msg = "mlx4 requires RSS contexts to use"
 					" consecutive queue indices only";
 				goto exit_action_not_supported;
 			}
-			if (rss->queue[0] % rss->num) {
+			if (rss->queue[0] % rss->queue_num) {
 				msg = "mlx4 requires the first queue of a RSS"
 					" context to be aligned on a multiple"
 					" of the context size";
 				goto exit_action_not_supported;
 			}
+			if (rss->func &&
+			    rss->func != RTE_ETH_HASH_FUNCTION_TOEPLITZ) {
+				msg = "the only supported RSS hash function"
+					" is Toeplitz";
+				goto exit_action_not_supported;
+			}
+			if (rss->level) {
+				msg = "a nonzero RSS encapsulation level is"
+					" not supported";
+				goto exit_action_not_supported;
+			}
+			rte_errno = 0;
+			fields = mlx4_conv_rss_types(priv, rss->types, 0);
+			if (fields == (uint64_t)-1 && rte_errno) {
+				msg = "unsupported RSS hash type requested";
+				goto exit_action_not_supported;
+			}
 			flow->rss = mlx4_rss_get
-				(priv,
-				 mlx4_conv_rss_hf(priv, rss_conf->rss_hf),
-				 rss_conf->rss_key, rss->num, rss->queue);
+				(priv, fields, rss_key, rss->queue_num,
+				 rss->queue);
 			if (!flow->rss) {
 				msg = "either invalid parameters or not enough"
 					" resources for additional multi-queue"
@@ -795,10 +864,9 @@ fill:
 			goto exit_action_not_supported;
 		}
 	}
-	if (!flow->rss && !flow->drop)
-		return rte_flow_error_set
-			(error, ENOTSUP, RTE_FLOW_ERROR_TYPE_UNSPECIFIED,
-			 NULL, "no valid action");
+	/* When fate is unknown, drop traffic. */
+	if (!overlap)
+		flow->drop = 1;
 	/* Validation ends here. */
 	if (!addr) {
 		if (flow->rss)
@@ -820,11 +888,14 @@ fill:
 			},
 		};
 
-		if (!mlx4_zmallocv(__func__, vec, RTE_DIM(vec)))
+		if (!mlx4_zmallocv(__func__, vec, RTE_DIM(vec))) {
+			if (temp.rss)
+				mlx4_rss_put(temp.rss);
 			return rte_flow_error_set
 				(error, -rte_errno,
 				 RTE_FLOW_ERROR_TYPE_UNSPECIFIED, NULL,
 				 "flow rule handle allocation failure");
+		}
 		/* Most fields will be updated by second pass. */
 		*flow = (struct rte_flow){
 			.ibv_attr = temp.ibv_attr,
@@ -862,7 +933,7 @@ mlx4_flow_validate(struct rte_eth_dev *dev,
 		   const struct rte_flow_action actions[],
 		   struct rte_flow_error *error)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 
 	return mlx4_flow_prepare(priv, attr, pattern, actions, error, NULL);
 }
@@ -878,7 +949,7 @@ mlx4_flow_validate(struct rte_eth_dev *dev,
  *   is set.
  */
 static struct mlx4_drop *
-mlx4_drop_get(struct priv *priv)
+mlx4_drop_get(struct mlx4_priv *priv)
 {
 	struct mlx4_drop *drop = priv->drop;
 
@@ -954,7 +1025,7 @@ mlx4_drop_put(struct mlx4_drop *drop)
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
-mlx4_flow_toggle(struct priv *priv,
+mlx4_flow_toggle(struct mlx4_priv *priv,
 		 struct rte_flow *flow,
 		 int enable,
 		 struct rte_flow_error *error)
@@ -1000,8 +1071,8 @@ mlx4_flow_toggle(struct priv *priv,
 		/* Stop at the first nonexistent target queue. */
 		for (i = 0; i != rss->queues; ++i)
 			if (rss->queue_id[i] >=
-			    priv->dev->data->nb_rx_queues ||
-			    !priv->dev->data->rx_queues[rss->queue_id[i]]) {
+			    ETH_DEV(priv)->data->nb_rx_queues ||
+			    !ETH_DEV(priv)->data->rx_queues[rss->queue_id[i]]) {
 				missing = 1;
 				break;
 			}
@@ -1070,7 +1141,7 @@ mlx4_flow_create(struct rte_eth_dev *dev,
 		 const struct rte_flow_action actions[],
 		 struct rte_flow_error *error)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	struct rte_flow *flow;
 	int err;
 
@@ -1111,7 +1182,7 @@ mlx4_flow_isolate(struct rte_eth_dev *dev,
 		  int enable,
 		  struct rte_flow_error *error)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 
 	if (!!enable == !!priv->isolated)
 		return 0;
@@ -1134,7 +1205,7 @@ mlx4_flow_destroy(struct rte_eth_dev *dev,
 		  struct rte_flow *flow,
 		  struct rte_flow_error *error)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	int err = mlx4_flow_toggle(priv, flow, 0, error);
 
 	if (err)
@@ -1158,7 +1229,7 @@ static int
 mlx4_flow_flush(struct rte_eth_dev *dev,
 		struct rte_flow_error *error)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	struct rte_flow *flow = LIST_FIRST(&priv->flows);
 
 	while (flow) {
@@ -1183,10 +1254,10 @@ mlx4_flow_flush(struct rte_eth_dev *dev,
  *   Next configured VLAN ID or a high value (>= 4096) if there is none.
  */
 static uint16_t
-mlx4_flow_internal_next_vlan(struct priv *priv, uint16_t vlan)
+mlx4_flow_internal_next_vlan(struct mlx4_priv *priv, uint16_t vlan)
 {
 	while (vlan < 4096) {
-		if (priv->dev->data->vlan_filter_conf.ids[vlan / 64] &
+		if (ETH_DEV(priv)->data->vlan_filter_conf.ids[vlan / 64] &
 		    (UINT64_C(1) << (vlan % 64)))
 			return vlan;
 		++vlan;
@@ -1223,7 +1294,7 @@ mlx4_flow_internal_next_vlan(struct priv *priv, uint16_t vlan)
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 static int
-mlx4_flow_internal(struct priv *priv, struct rte_flow_error *error)
+mlx4_flow_internal(struct mlx4_priv *priv, struct rte_flow_error *error)
 {
 	struct rte_flow_attr attr = {
 		.priority = MLX4_FLOW_PRIORITY_LAST,
@@ -1263,25 +1334,31 @@ mlx4_flow_internal(struct priv *priv, struct rte_flow_error *error)
 	 * get RSS by default.
 	 */
 	uint32_t queues =
-		rte_align32pow2(priv->dev->data->nb_rx_queues + 1) >> 1;
-	alignas(struct rte_flow_action_rss) uint8_t rss_conf_data
-		[offsetof(struct rte_flow_action_rss, queue) +
-		 sizeof(((struct rte_flow_action_rss *)0)->queue[0]) * queues];
-	struct rte_flow_action_rss *rss_conf = (void *)rss_conf_data;
+		rte_align32pow2(ETH_DEV(priv)->data->nb_rx_queues + 1) >> 1;
+	uint16_t queue[queues];
+	struct rte_flow_action_rss action_rss = {
+		.func = RTE_ETH_HASH_FUNCTION_DEFAULT,
+		.level = 0,
+		.types = 0,
+		.key_len = MLX4_RSS_HASH_KEY_SIZE,
+		.queue_num = queues,
+		.key = mlx4_rss_hash_key_default,
+		.queue = queue,
+	};
 	struct rte_flow_action actions[] = {
 		{
 			.type = RTE_FLOW_ACTION_TYPE_RSS,
-			.conf = rss_conf,
+			.conf = &action_rss,
 		},
 		{
 			.type = RTE_FLOW_ACTION_TYPE_END,
 		},
 	};
-	struct ether_addr *rule_mac = &eth_spec.dst;
+	struct rte_ether_addr *rule_mac = &eth_spec.dst;
 	rte_be16_t *rule_vlan =
-		(priv->dev->data->dev_conf.rxmode.offloads &
+		(ETH_DEV(priv)->data->dev_conf.rxmode.offloads &
 		 DEV_RX_OFFLOAD_VLAN_FILTER) &&
-		!priv->dev->data->promiscuous ?
+		!ETH_DEV(priv)->data->promiscuous ?
 		&vlan_spec.tci :
 		NULL;
 	uint16_t vlan = 0;
@@ -1293,12 +1370,8 @@ mlx4_flow_internal(struct priv *priv, struct rte_flow_error *error)
 	if (!queues)
 		goto error;
 	/* Prepare default RSS configuration. */
-	*rss_conf = (struct rte_flow_action_rss){
-		.rss_conf = NULL, /* Rely on default fallback settings. */
-		.num = queues,
-	};
 	for (i = 0; i != queues; ++i)
-		rss_conf->queue[i] = i;
+		queue[i] = i;
 	/*
 	 * Set up VLAN item if filtering is enabled and at least one VLAN
 	 * filter is configured.
@@ -1318,14 +1391,14 @@ next_vlan:
 		}
 	}
 	for (i = 0; i != RTE_DIM(priv->mac) + 1; ++i) {
-		const struct ether_addr *mac;
+		const struct rte_ether_addr *mac;
 
 		/* Broadcasts are handled by an extra iteration. */
 		if (i < RTE_DIM(priv->mac))
 			mac = &priv->mac[i];
 		else
 			mac = &eth_mask.dst;
-		if (is_zero_ether_addr(mac))
+		if (rte_is_zero_ether_addr(mac))
 			continue;
 		/* Check if MAC flow rule is already present. */
 		for (flow = LIST_FIRST(&priv->flows);
@@ -1357,7 +1430,7 @@ next_vlan:
 			if (j != sizeof(mac->addr_bytes))
 				continue;
 			if (flow->rss->queues != queues ||
-			    memcmp(flow->rss->queue_id, rss_conf->queue,
+			    memcmp(flow->rss->queue_id, action_rss.queue,
 				   queues * sizeof(flow->rss->queue_id[0])))
 				continue;
 			break;
@@ -1365,7 +1438,7 @@ next_vlan:
 		if (!flow || !flow->internal) {
 			/* Not found, create a new flow rule. */
 			memcpy(rule_mac, mac, sizeof(*mac));
-			flow = mlx4_flow_create(priv->dev, &attr, pattern,
+			flow = mlx4_flow_create(ETH_DEV(priv), &attr, pattern,
 						actions, error);
 			if (!flow) {
 				err = -rte_errno;
@@ -1381,15 +1454,16 @@ next_vlan:
 			goto next_vlan;
 	}
 	/* Take care of promiscuous and all multicast flow rules. */
-	if (priv->dev->data->promiscuous || priv->dev->data->all_multicast) {
+	if (ETH_DEV(priv)->data->promiscuous ||
+	    ETH_DEV(priv)->data->all_multicast) {
 		for (flow = LIST_FIRST(&priv->flows);
 		     flow && flow->internal;
 		     flow = LIST_NEXT(flow, next)) {
-			if (priv->dev->data->promiscuous) {
+			if (ETH_DEV(priv)->data->promiscuous) {
 				if (flow->promisc)
 					break;
 			} else {
-				assert(priv->dev->data->all_multicast);
+				assert(ETH_DEV(priv)->data->all_multicast);
 				if (flow->allmulti)
 					break;
 			}
@@ -1397,22 +1471,22 @@ next_vlan:
 		if (flow && flow->internal) {
 			assert(flow->rss);
 			if (flow->rss->queues != queues ||
-			    memcmp(flow->rss->queue_id, rss_conf->queue,
+			    memcmp(flow->rss->queue_id, action_rss.queue,
 				   queues * sizeof(flow->rss->queue_id[0])))
 				flow = NULL;
 		}
 		if (!flow || !flow->internal) {
 			/* Not found, create a new flow rule. */
-			if (priv->dev->data->promiscuous) {
+			if (ETH_DEV(priv)->data->promiscuous) {
 				pattern[1].spec = NULL;
 				pattern[1].mask = NULL;
 			} else {
-				assert(priv->dev->data->all_multicast);
+				assert(ETH_DEV(priv)->data->all_multicast);
 				pattern[1].spec = &eth_allmulti;
 				pattern[1].mask = &eth_allmulti;
 			}
 			pattern[2] = pattern[3];
-			flow = mlx4_flow_create(priv->dev, &attr, pattern,
+			flow = mlx4_flow_create(ETH_DEV(priv), &attr, pattern,
 						actions, error);
 			if (!flow) {
 				err = -rte_errno;
@@ -1429,7 +1503,8 @@ error:
 		struct rte_flow *next = LIST_NEXT(flow, next);
 
 		if (!flow->select)
-			claim_zero(mlx4_flow_destroy(priv->dev, flow, error));
+			claim_zero(mlx4_flow_destroy(ETH_DEV(priv), flow,
+						     error));
 		else
 			flow->select = 0;
 		flow = next;
@@ -1453,7 +1528,7 @@ error:
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-mlx4_flow_sync(struct priv *priv, struct rte_flow_error *error)
+mlx4_flow_sync(struct mlx4_priv *priv, struct rte_flow_error *error)
 {
 	struct rte_flow *flow;
 	int ret;
@@ -1467,7 +1542,8 @@ mlx4_flow_sync(struct priv *priv, struct rte_flow_error *error)
 		for (flow = LIST_FIRST(&priv->flows);
 		     flow && flow->internal;
 		     flow = LIST_FIRST(&priv->flows))
-			claim_zero(mlx4_flow_destroy(priv->dev, flow, error));
+			claim_zero(mlx4_flow_destroy(ETH_DEV(priv), flow,
+						     error));
 	} else {
 		/* Refresh internal rules. */
 		ret = mlx4_flow_internal(priv, error);
@@ -1495,12 +1571,12 @@ mlx4_flow_sync(struct priv *priv, struct rte_flow_error *error)
  *   Pointer to private structure.
  */
 void
-mlx4_flow_clean(struct priv *priv)
+mlx4_flow_clean(struct mlx4_priv *priv)
 {
 	struct rte_flow *flow;
 
 	while ((flow = LIST_FIRST(&priv->flows)))
-		mlx4_flow_destroy(priv->dev, flow, NULL);
+		mlx4_flow_destroy(ETH_DEV(priv), flow, NULL);
 	assert(LIST_EMPTY(&priv->rss));
 }
 

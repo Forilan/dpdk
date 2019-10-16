@@ -13,7 +13,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <inttypes.h>
+#include <unistd.h>
 
 /* Verbs headers do not support -pedantic. */
 #ifdef PEDANTIC
@@ -36,6 +38,137 @@
 #include "mlx4_prm.h"
 #include "mlx4_rxtx.h"
 #include "mlx4_utils.h"
+
+/**
+ * Initialize Tx UAR registers for primary process.
+ *
+ * @param txq
+ *   Pointer to Tx queue structure.
+ */
+static void
+txq_uar_init(struct txq *txq)
+{
+	struct mlx4_priv *priv = txq->priv;
+	struct mlx4_proc_priv *ppriv = MLX4_PROC_PRIV(PORT_ID(priv));
+
+	assert(rte_eal_process_type() == RTE_PROC_PRIMARY);
+	assert(ppriv);
+	ppriv->uar_table[txq->stats.idx] = txq->msq.db;
+}
+
+#ifdef HAVE_IBV_MLX4_UAR_MMAP_OFFSET
+/**
+ * Remap UAR register of a Tx queue for secondary process.
+ *
+ * Remapped address is stored at the table in the process private structure of
+ * the device, indexed by queue index.
+ *
+ * @param txq
+ *   Pointer to Tx queue structure.
+ * @param fd
+ *   Verbs file descriptor to map UAR pages.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+static int
+txq_uar_init_secondary(struct txq *txq, int fd)
+{
+	struct mlx4_priv *priv = txq->priv;
+	struct mlx4_proc_priv *ppriv = MLX4_PROC_PRIV(PORT_ID(priv));
+	void *addr;
+	uintptr_t uar_va;
+	uintptr_t offset;
+	const size_t page_size = sysconf(_SC_PAGESIZE);
+
+	assert(ppriv);
+	/*
+	 * As rdma-core, UARs are mapped in size of OS page
+	 * size. Ref to libmlx4 function: mlx4_init_context()
+	 */
+	uar_va = (uintptr_t)txq->msq.db;
+	offset = uar_va & (page_size - 1); /* Offset in page. */
+	addr = mmap(NULL, page_size, PROT_WRITE, MAP_SHARED, fd,
+			txq->msq.uar_mmap_offset);
+	if (addr == MAP_FAILED) {
+		ERROR("port %u mmap failed for BF reg of txq %u",
+		      txq->port_id, txq->stats.idx);
+		rte_errno = ENXIO;
+		return -rte_errno;
+	}
+	addr = RTE_PTR_ADD(addr, offset);
+	ppriv->uar_table[txq->stats.idx] = addr;
+	return 0;
+}
+
+/**
+ * Unmap UAR register of a Tx queue for secondary process.
+ *
+ * @param txq
+ *   Pointer to Tx queue structure.
+ */
+static void
+txq_uar_uninit_secondary(struct txq *txq)
+{
+	struct mlx4_proc_priv *ppriv = MLX4_PROC_PRIV(PORT_ID(txq->priv));
+	const size_t page_size = sysconf(_SC_PAGESIZE);
+	void *addr;
+
+	addr = ppriv->uar_table[txq->stats.idx];
+	munmap(RTE_PTR_ALIGN_FLOOR(addr, page_size), page_size);
+}
+
+/**
+ * Initialize Tx UAR registers for secondary process.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param fd
+ *   Verbs file descriptor to map UAR pages.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx4_tx_uar_init_secondary(struct rte_eth_dev *dev, int fd)
+{
+	const unsigned int txqs_n = dev->data->nb_tx_queues;
+	struct txq *txq;
+	unsigned int i;
+	int ret;
+
+	assert(rte_eal_process_type() == RTE_PROC_SECONDARY);
+	for (i = 0; i != txqs_n; ++i) {
+		txq = dev->data->tx_queues[i];
+		if (!txq)
+			continue;
+		assert(txq->stats.idx == (uint16_t)i);
+		ret = txq_uar_init_secondary(txq, fd);
+		if (ret)
+			goto error;
+	}
+	return 0;
+error:
+	/* Rollback. */
+	do {
+		txq = dev->data->tx_queues[i];
+		if (!txq)
+			continue;
+		txq_uar_uninit_secondary(txq);
+	} while (i--);
+	return -rte_errno;
+}
+#else
+int
+mlx4_tx_uar_init_secondary(struct rte_eth_dev *dev __rte_unused,
+			   int fd __rte_unused)
+{
+	assert(rte_eal_process_type() == RTE_PROC_SECONDARY);
+	ERROR("UAR remap is not supported");
+	rte_errno = ENOTSUP;
+	return -rte_errno;
+}
+#endif
 
 /**
  * Free Tx queue elements.
@@ -63,64 +196,6 @@ mlx4_txq_free_elts(struct txq *txq)
 	txq->elts_tail = txq->elts_head;
 }
 
-struct txq_mp2mr_mbuf_check_data {
-	int ret;
-};
-
-/**
- * Callback function for rte_mempool_obj_iter() to check whether a given
- * mempool object looks like a mbuf.
- *
- * @param[in] mp
- *   The mempool pointer
- * @param[in] arg
- *   Context data (struct mlx4_txq_mp2mr_mbuf_check_data). Contains the
- *   return value.
- * @param[in] obj
- *   Object address.
- * @param index
- *   Object index, unused.
- */
-static void
-mlx4_txq_mp2mr_mbuf_check(struct rte_mempool *mp, void *arg, void *obj,
-			  uint32_t index)
-{
-	struct txq_mp2mr_mbuf_check_data *data = arg;
-	struct rte_mbuf *buf = obj;
-
-	(void)index;
-	/*
-	 * Check whether mbuf structure fits element size and whether mempool
-	 * pointer is valid.
-	 */
-	if (sizeof(*buf) > mp->elt_size || buf->pool != mp)
-		data->ret = -1;
-}
-
-/**
- * Iterator function for rte_mempool_walk() to register existing mempools and
- * fill the MP to MR cache of a Tx queue.
- *
- * @param[in] mp
- *   Memory Pool to register.
- * @param *arg
- *   Pointer to Tx queue structure.
- */
-static void
-mlx4_txq_mp2mr_iter(struct rte_mempool *mp, void *arg)
-{
-	struct txq *txq = arg;
-	struct txq_mp2mr_mbuf_check_data data = {
-		.ret = 0,
-	};
-
-	/* Register mempool only if the first element looks like a mbuf. */
-	if (rte_mempool_obj_iter(mp, mlx4_txq_mp2mr_mbuf_check, &data) == 0 ||
-			data.ret == -1)
-		return;
-	mlx4_txq_mp2mr(txq, mp);
-}
-
 /**
  * Retrieves information needed in order to directly access the Tx queue.
  *
@@ -144,9 +219,14 @@ mlx4_txq_fill_dv_obj_info(struct txq *txq, struct mlx4dv_obj *mlxdv)
 	uint32_t headroom_size = 2048 + (1 << dqp->sq.wqe_shift);
 	/* Continuous headroom size bytes must always stay freed. */
 	sq->remain_size = sq->size - headroom_size;
-	sq->owner_opcode = MLX4_OPCODE_SEND | (0 << MLX4_SQ_OWNER_BIT);
+	sq->owner_opcode = MLX4_OPCODE_SEND | (0u << MLX4_SQ_OWNER_BIT);
 	sq->stamp = rte_cpu_to_be_32(MLX4_SQ_STAMP_VAL |
-				     (0 << MLX4_SQ_OWNER_BIT));
+				     (0u << MLX4_SQ_OWNER_BIT));
+#ifdef HAVE_IBV_MLX4_UAR_MMAP_OFFSET
+	sq->uar_mmap_offset = dqp->uar_mmap_offset;
+#else
+	sq->uar_mmap_offset = -1; /* Make mmap() fail. */
+#endif
 	sq->db = dqp->sdb;
 	sq->doorbell_qpn = dqp->doorbell_qpn;
 	cq->buf = dcq->buf.buf;
@@ -165,7 +245,7 @@ mlx4_txq_fill_dv_obj_info(struct txq *txq, struct mlx4dv_obj *mlxdv)
  *   Supported Tx offloads.
  */
 uint64_t
-mlx4_get_tx_port_offloads(struct priv *priv)
+mlx4_get_tx_port_offloads(struct mlx4_priv *priv)
 {
 	uint64_t offloads = DEV_TX_OFFLOAD_MULTI_SEGS;
 
@@ -174,29 +254,15 @@ mlx4_get_tx_port_offloads(struct priv *priv)
 			     DEV_TX_OFFLOAD_UDP_CKSUM |
 			     DEV_TX_OFFLOAD_TCP_CKSUM);
 	}
-	if (priv->hw_csum_l2tun)
+	if (priv->tso)
+		offloads |= DEV_TX_OFFLOAD_TCP_TSO;
+	if (priv->hw_csum_l2tun) {
 		offloads |= DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM;
+		if (priv->tso)
+			offloads |= (DEV_TX_OFFLOAD_VXLAN_TNL_TSO |
+				     DEV_TX_OFFLOAD_GRE_TNL_TSO);
+	}
 	return offloads;
-}
-
-/**
- * Checks if the per-queue offload configuration is valid.
- *
- * @param priv
- *   Pointer to private structure.
- * @param requested
- *   Per-queue offloads configuration.
- *
- * @return
- *   Nonzero when configuration is valid.
- */
-static int
-mlx4_check_tx_queue_offloads(struct priv *priv, uint64_t requested)
-{
-	uint64_t mandatory = priv->dev->data->dev_conf.txmode.offloads;
-	uint64_t supported = mlx4_get_tx_port_offloads(priv);
-
-	return !((mandatory ^ requested) & supported);
 }
 
 /**
@@ -220,7 +286,7 @@ int
 mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		    unsigned int socket, const struct rte_eth_txconf *conf)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	struct mlx4dv_obj mlxdv;
 	struct mlx4dv_qp dv_qp;
 	struct mlx4dv_cq dv_cq;
@@ -246,23 +312,11 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		},
 	};
 	int ret;
+	uint64_t offloads;
 
+	offloads = conf->offloads | dev->data->dev_conf.txmode.offloads;
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
-	/*
-	 * Don't verify port offloads for application which
-	 * use the old API.
-	 */
-	if ((conf->txq_flags & ETH_TXQ_FLAGS_IGNORE) &&
-	    !mlx4_check_tx_queue_offloads(priv, conf->offloads)) {
-		rte_errno = ENOTSUP;
-		ERROR("%p: Tx queue offloads 0x%" PRIx64 " don't match port "
-		      "offloads 0x%" PRIx64 " or supported offloads 0x%" PRIx64,
-		      (void *)dev, conf->offloads,
-		      dev->data->dev_conf.txmode.offloads,
-		      mlx4_get_tx_port_offloads(priv));
-		return -rte_errno;
-	}
 	if (idx >= dev->data->nb_tx_queues) {
 		rte_errno = EOVERFLOW;
 		ERROR("%p: queue index out of range (%u >= %u)",
@@ -296,6 +350,7 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	}
 	*txq = (struct txq){
 		.priv = priv,
+		.port_id = dev->data->port_id,
 		.stats = {
 			.idx = idx,
 		},
@@ -313,16 +368,18 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		.elts_comp_cd_init =
 			RTE_MIN(MLX4_PMD_TX_PER_COMP_REQ, desc / 4),
 		.csum = priv->hw_csum &&
-			(conf->offloads & (DEV_TX_OFFLOAD_IPV4_CKSUM |
+			(offloads & (DEV_TX_OFFLOAD_IPV4_CKSUM |
 					   DEV_TX_OFFLOAD_UDP_CKSUM |
 					   DEV_TX_OFFLOAD_TCP_CKSUM)),
 		.csum_l2tun = priv->hw_csum_l2tun &&
-			      (conf->offloads &
+			      (offloads &
 			       DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM),
 		/* Enable Tx loopback for VF devices. */
 		.lb = !!priv->vf,
 		.bounce_buf = bounce_buf,
 	};
+	priv->verbs_alloc_ctx.type = MLX4_VERBS_ALLOC_TYPE_TX_QUEUE;
+	priv->verbs_alloc_ctx.obj = txq;
 	txq->cq = mlx4_glue->create_cq(priv->ctx, desc, NULL, NULL, 0);
 	if (!txq->cq) {
 		rte_errno = ENOMEM;
@@ -389,6 +446,11 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		goto error;
 	}
 	/* Retrieve device queue information. */
+#ifdef HAVE_IBV_MLX4_UAR_MMAP_OFFSET
+	dv_qp = (struct mlx4dv_qp){
+		.comp_mask = MLX4DV_QP_MASK_UAR_MMAP_OFFSET,
+	};
+#endif
 	mlxdv.cq.in = txq->cq;
 	mlxdv.cq.out = &dv_cq;
 	mlxdv.qp.in = txq->qp;
@@ -400,14 +462,27 @@ mlx4_tx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      " accessing the device queues", (void *)dev);
 		goto error;
 	}
+#ifdef HAVE_IBV_MLX4_UAR_MMAP_OFFSET
+	if (!(dv_qp.comp_mask & MLX4DV_QP_MASK_UAR_MMAP_OFFSET)) {
+		WARN("%p: failed to obtain UAR mmap offset", (void *)dev);
+		dv_qp.uar_mmap_offset = -1; /* Make mmap() fail. */
+	}
+#endif
 	mlx4_txq_fill_dv_obj_info(txq, &mlxdv);
+	txq_uar_init(txq);
 	/* Save first wqe pointer in the first element. */
 	(&(*txq->elts)[0])->wqe =
 		(volatile struct mlx4_wqe_ctrl_seg *)txq->msq.buf;
-	/* Pre-register known mempools. */
-	rte_mempool_walk(mlx4_txq_mp2mr_iter, txq);
+	if (mlx4_mr_btree_init(&txq->mr_ctrl.cache_bh,
+			       MLX4_MR_BTREE_CACHE_N, socket)) {
+		/* rte_errno is already set. */
+		goto error;
+	}
+	/* Save pointer of global generation number to check memory event. */
+	txq->mr_ctrl.dev_gen_ptr = &priv->mr.dev_gen;
 	DEBUG("%p: adding Tx queue %p to list", (void *)dev, (void *)txq);
 	dev->data->tx_queues[idx] = txq;
+	priv->verbs_alloc_ctx.type = MLX4_VERBS_ALLOC_TYPE_NONE;
 	return 0;
 error:
 	dev->data->tx_queues[idx] = NULL;
@@ -415,6 +490,7 @@ error:
 	mlx4_tx_queue_release(txq);
 	rte_errno = ret;
 	assert(rte_errno > 0);
+	priv->verbs_alloc_ctx.type = MLX4_VERBS_ALLOC_TYPE_NONE;
 	return -rte_errno;
 }
 
@@ -428,17 +504,17 @@ void
 mlx4_tx_queue_release(void *dpdk_txq)
 {
 	struct txq *txq = (struct txq *)dpdk_txq;
-	struct priv *priv;
+	struct mlx4_priv *priv;
 	unsigned int i;
 
 	if (txq == NULL)
 		return;
 	priv = txq->priv;
-	for (i = 0; i != priv->dev->data->nb_tx_queues; ++i)
-		if (priv->dev->data->tx_queues[i] == txq) {
+	for (i = 0; i != ETH_DEV(priv)->data->nb_tx_queues; ++i)
+		if (ETH_DEV(priv)->data->tx_queues[i] == txq) {
 			DEBUG("%p: removing Tx queue %p from list",
-			      (void *)priv->dev, (void *)txq);
-			priv->dev->data->tx_queues[i] = NULL;
+			      (void *)ETH_DEV(priv), (void *)txq);
+			ETH_DEV(priv)->data->tx_queues[i] = NULL;
 			break;
 		}
 	mlx4_txq_free_elts(txq);
@@ -446,11 +522,6 @@ mlx4_tx_queue_release(void *dpdk_txq)
 		claim_zero(mlx4_glue->destroy_qp(txq->qp));
 	if (txq->cq)
 		claim_zero(mlx4_glue->destroy_cq(txq->cq));
-	for (i = 0; i != RTE_DIM(txq->mp2mr); ++i) {
-		if (!txq->mp2mr[i].mp)
-			break;
-		assert(txq->mp2mr[i].mr);
-		mlx4_mr_put(txq->mp2mr[i].mr);
-	}
+	mlx4_mr_btree_free(&txq->mr_ctrl.cache_bh);
 	rte_free(txq);
 }

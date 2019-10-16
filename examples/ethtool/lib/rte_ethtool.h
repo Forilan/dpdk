@@ -9,7 +9,7 @@
  * This new interface is designed to provide a user-space shim layer for
  * Ethtool and Netdevice op API.
  *
- * rte_ethtool_get_driver:          ethtool_ops::get_driverinfo
+ * rte_ethtool_get_driver:          ethtool_ops::get_drvinfo
  * rte_ethtool_get_link:            ethtool_ops::get_link
  * rte_ethtool_get_regs_len:        ethtool_ops::get_regs_len
  * rte_ethtool_get_regs:            ethtool_ops::get_regs
@@ -23,7 +23,7 @@
  * rte_ethtool_net_stop:            net_device_ops::ndo_stop
  * rte_ethtool_net_set_mac_addr:    net_device_ops::ndo_set_mac_address
  * rte_ethtool_net_validate_addr:   net_device_ops::ndo_validate_addr
- * rte_ethtool_net_change_mtu:      net_device_ops::rte_net_change_mtu
+ * rte_ethtool_net_change_mtu:      net_device_ops::ndo_change_mtu
  * rte_ethtool_net_get_stats64:     net_device_ops::ndo_get_stats64
  * rte_ethtool_net_vlan_rx_add_vid  net_device_ops::ndo_vlan_rx_add_vid
  * rte_ethtool_net_vlan_rx_kill_vid net_device_ops::ndo_vlan_rx_kill_vid
@@ -154,6 +154,40 @@ int rte_ethtool_set_eeprom(uint16_t port_id, struct ethtool_eeprom *eeprom,
 			      void *words);
 
 /**
+ * Retrieve the type and size of plugin module EEPROM
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param modinfo
+ *	 The pointer that provides the type and size of plugin module EEPROM.
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-ENODEV) if *port_id* invalid.
+ *   - others depends on the specific operations implementation.
+ */
+int rte_ethtool_get_module_info(uint16_t port_id, uint32_t *modinfo);
+
+/**
+ * Retrieve the data of plugin module EEPROM
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param eeprom
+ *	 The pointer of ethtool_eeprom that provides plugin module eeprom
+ *   offset and length
+ * @param words
+ *	 A buffer that holds data read from plugin module eeprom
+ * @return
+ *   - (0) if successful.
+ *   - (-ENOTSUP) if hardware doesn't support.
+ *   - (-ENODEV) if *port_id* invalid.
+ *   - others depends on the specific operations implementation.
+ */
+int rte_ethtool_get_module_eeprom(uint16_t port_id,
+				  struct ethtool_eeprom *eeprom, void *words);
+
+/**
  * Retrieve the Ethernet device pause frame configuration according to
  * parameter attributes desribed by ethtool data structure,
  * ethtool_pauseparam.
@@ -226,7 +260,7 @@ int rte_ethtool_net_stop(uint16_t port_id);
  *   - (0) if successful.
  *   - (-ENODEV) if *port_id* invalid.
  */
-int rte_ethtool_net_get_mac_addr(uint16_t port_id, struct ether_addr *addr);
+int rte_ethtool_net_get_mac_addr(uint16_t port_id, struct rte_ether_addr *addr);
 
 /**
  * Setting the Ethernet device MAC address.
@@ -242,7 +276,7 @@ int rte_ethtool_net_get_mac_addr(uint16_t port_id, struct ether_addr *addr);
  *   - (-EINVAL) if parameters invalid.
  *   - others depends on the specific operations implementation.
  */
-int rte_ethtool_net_set_mac_addr(uint16_t port_id, struct ether_addr *addr);
+int rte_ethtool_net_set_mac_addr(uint16_t port_id, struct rte_ether_addr *addr);
 
 /**
  * Validate if the provided MAC address is valid unicast address
@@ -258,7 +292,8 @@ int rte_ethtool_net_set_mac_addr(uint16_t port_id, struct ether_addr *addr);
  *   - (-EINVAL) if parameters invalid.
  *   - others depends on the specific operations implementation.
  */
-int rte_ethtool_net_validate_addr(uint16_t port_id, struct ether_addr *addr);
+int rte_ethtool_net_validate_addr(uint16_t port_id,
+				struct rte_ether_addr *addr);
 
 /**
  * Setting the Ethernet device maximum Tx unit.

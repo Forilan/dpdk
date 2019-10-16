@@ -18,15 +18,10 @@
 #include <rte_dpaa_logs.h>
 #include <netcfg.h>
 
-/* Structure contains information about all the interfaces given by user
- * on command line.
- */
-struct netcfg_interface *netcfg_interface;
-
 /* This data structure contaings all configurations information
  * related to usages of DPA devices.
  */
-struct netcfg_info *netcfg;
+static struct netcfg_info *netcfg;
 /* fd to open a socket for making ioctl request to disable/enable shared
  *  interfaces.
  */
@@ -119,7 +114,7 @@ netcfg_acquire(void)
 	size = sizeof(*netcfg) +
 		(num_ports * sizeof(struct fm_eth_port_cfg));
 
-	netcfg = calloc(1, size);
+	netcfg = rte_calloc(NULL, 1, size, 0);
 	if (unlikely(netcfg == NULL)) {
 		DPAA_BUS_LOG(ERR, "Unable to allocat mem for netcfg");
 		goto error;
@@ -146,7 +141,7 @@ netcfg_acquire(void)
 
 error:
 	if (netcfg) {
-		free(netcfg);
+		rte_free(netcfg);
 		netcfg = NULL;
 	}
 
@@ -156,7 +151,7 @@ error:
 void
 netcfg_release(struct netcfg_info *cfg_ptr)
 {
-	free(cfg_ptr);
+	rte_free(cfg_ptr);
 	/* Close socket for shared interfaces */
 	if (skfd >= 0) {
 		close(skfd);

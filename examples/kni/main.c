@@ -94,10 +94,6 @@ static struct kni_port_params *kni_port_params_array[RTE_MAX_ETHPORTS];
 
 /* Options for configuring ethernet port */
 static struct rte_eth_conf port_conf = {
-	.rxmode = {
-		.ignore_offload_bitfield = 1,
-		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
-	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
 	},
@@ -110,6 +106,8 @@ static struct rte_mempool * pktmbuf_pool = NULL;
 static uint32_t ports_mask = 0;
 /* Ports set in promiscuous mode off by default. */
 static int promiscuous_on = 0;
+/* Monitor link status continually. off by default. */
+static int monitor_links;
 
 /* Structure type for recording kni interface specific stats */
 struct kni_interface_stats {
@@ -134,6 +132,7 @@ static int kni_config_network_interface(uint16_t port_id, uint8_t if_up);
 static int kni_config_mac_address(uint16_t port_id, uint8_t mac_addr[]);
 
 static rte_atomic32_t kni_stop = RTE_ATOMIC32_INIT(0);
+static rte_atomic32_t kni_pause = RTE_ATOMIC32_INIT(0);
 
 /* Print out statistics on packets handled */
 static void
@@ -173,14 +172,13 @@ signal_handler(int signum)
 	/* When we receive a USR2 signal, reset stats */
 	if (signum == SIGUSR2) {
 		memset(&kni_stats, 0, sizeof(kni_stats));
-		printf("\n**Statistics have been reset**\n");
+		printf("\n** Statistics have been reset **\n");
 		return;
 	}
 
 	/* When we receive a RTMIN or SIGINT signal, stop kni processing */
 	if (signum == SIGRTMIN || signum == SIGINT){
-		printf("SIGRTMIN is received, and the KNI processing is "
-							"going to stop\n");
+		printf("\nSIGRTMIN/SIGINT received. KNI processing stopping.\n");
 		rte_atomic32_inc(&kni_stop);
 		return;
         }
@@ -226,7 +224,8 @@ kni_ingress(struct kni_port_params *p)
 		}
 		/* Burst tx to kni */
 		num = rte_kni_tx_burst(p->kni[i], pkts_burst, nb_rx);
-		kni_stats[port_id].rx_packets += num;
+		if (num)
+			kni_stats[port_id].rx_packets += num;
 
 		rte_kni_handle_request(p->kni[i]);
 		if (unlikely(num < nb_rx)) {
@@ -263,7 +262,8 @@ kni_egress(struct kni_port_params *p)
 		}
 		/* Burst tx to eth */
 		nb_tx = rte_eth_tx_burst(port_id, 0, pkts_burst, (uint16_t)num);
-		kni_stats[port_id].tx_packets += nb_tx;
+		if (nb_tx)
+			kni_stats[port_id].tx_packets += nb_tx;
 		if (unlikely(nb_tx < num)) {
 			/* Free mbufs not tx to NIC */
 			kni_burst_free_mbufs(&pkts_burst[nb_tx], num - nb_tx);
@@ -277,6 +277,7 @@ main_loop(__rte_unused void *arg)
 {
 	uint16_t i;
 	int32_t f_stop;
+	int32_t f_pause;
 	const unsigned lcore_id = rte_lcore_id();
 	enum lcore_rxtx {
 		LCORE_NONE,
@@ -305,8 +306,11 @@ main_loop(__rte_unused void *arg)
 					kni_port_params_array[i]->port_id);
 		while (1) {
 			f_stop = rte_atomic32_read(&kni_stop);
+			f_pause = rte_atomic32_read(&kni_pause);
 			if (f_stop)
 				break;
+			if (f_pause)
+				continue;
 			kni_ingress(kni_port_params_array[i]);
 		}
 	} else if (flag == LCORE_TX) {
@@ -315,8 +319,11 @@ main_loop(__rte_unused void *arg)
 					kni_port_params_array[i]->port_id);
 		while (1) {
 			f_stop = rte_atomic32_read(&kni_stop);
+			f_pause = rte_atomic32_read(&kni_pause);
 			if (f_stop)
 				break;
+			if (f_pause)
+				continue;
 			kni_egress(kni_port_params_array[i]);
 		}
 	} else
@@ -329,11 +336,12 @@ main_loop(__rte_unused void *arg)
 static void
 print_usage(const char *prgname)
 {
-	RTE_LOG(INFO, APP, "\nUsage: %s [EAL options] -- -p PORTMASK -P "
+	RTE_LOG(INFO, APP, "\nUsage: %s [EAL options] -- -p PORTMASK -P -m "
 		   "[--config (port,lcore_rx,lcore_tx,lcore_kthread...)"
 		   "[,(port,lcore_rx,lcore_tx,lcore_kthread...)]]\n"
 		   "    -p PORTMASK: hex bitmask of ports to use\n"
 		   "    -P : enable promiscuous mode\n"
+		   "    -m : enable monitoring of port carrier state\n"
 		   "    --config (port,lcore_rx,lcore_tx,lcore_kthread...): "
 		   "port and lcore configurations\n",
 	           prgname);
@@ -514,7 +522,7 @@ parse_args(int argc, char **argv)
 	opterr = 0;
 
 	/* Parse command line */
-	while ((opt = getopt_long(argc, argv, "p:P", longopts,
+	while ((opt = getopt_long(argc, argv, "p:Pm", longopts,
 						&longindex)) != EOF) {
 		switch (opt) {
 		case 'p':
@@ -522,6 +530,9 @@ parse_args(int argc, char **argv)
 			break;
 		case 'P':
 			promiscuous_on = 1;
+			break;
+		case 'm':
+			monitor_links = 1;
 			break;
 		case 0:
 			if (!strncmp(longopts[longindex].name,
@@ -584,7 +595,13 @@ init_port(uint16_t port)
 	/* Initialise device and RX/TX queues */
 	RTE_LOG(INFO, APP, "Initialising port %u ...\n", (unsigned)port);
 	fflush(stdout);
-	rte_eth_dev_info_get(port, &dev_info);
+
+	ret = rte_eth_dev_info_get(port, &dev_info);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			"Error during getting device (port %u) info: %s\n",
+			port, strerror(-ret));
+
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		local_port_conf.txmode.offloads |=
 			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
@@ -607,7 +624,6 @@ init_port(uint16_t port)
 				"port%u (%d)\n", (unsigned)port, ret);
 
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = local_port_conf.txmode.offloads;
 	ret = rte_eth_tx_queue_setup(port, 0, nb_txd,
 		rte_eth_dev_socket_id(port), &txq_conf);
@@ -620,8 +636,13 @@ init_port(uint16_t port)
 		rte_exit(EXIT_FAILURE, "Could not start port%u (%d)\n",
 						(unsigned)port, ret);
 
-	if (promiscuous_on)
-		rte_eth_promiscuous_enable(port);
+	if (promiscuous_on) {
+		ret = rte_eth_promiscuous_enable(port);
+		if (ret != 0)
+			rte_exit(EXIT_FAILURE,
+				"Could not enable promiscuous mode for port%u: %s\n",
+				port, rte_strerror(-ret));
+	}
 }
 
 /* Check the link status of all ports in up to 9s, and print them finally */
@@ -633,6 +654,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint16_t portid;
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
+	int ret;
 
 	printf("\nChecking link status\n");
 	fflush(stdout);
@@ -642,7 +664,14 @@ check_all_ports_link_status(uint32_t port_mask)
 			if ((port_mask & (1 << portid)) == 0)
 				continue;
 			memset(&link, 0, sizeof(link));
-			rte_eth_link_get_nowait(portid, &link);
+			ret = rte_eth_link_get_nowait(portid, &link);
+			if (ret < 0) {
+				all_ports_up = 0;
+				if (print_flag == 1)
+					printf("Port %u link get failed: %s\n",
+						portid, rte_strerror(-ret));
+				continue;
+			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status)
@@ -679,6 +708,62 @@ check_all_ports_link_status(uint32_t port_mask)
 	}
 }
 
+static void
+log_link_state(struct rte_kni *kni, int prev, struct rte_eth_link *link)
+{
+	if (kni == NULL || link == NULL)
+		return;
+
+	if (prev == ETH_LINK_DOWN && link->link_status == ETH_LINK_UP) {
+		RTE_LOG(INFO, APP, "%s NIC Link is Up %d Mbps %s %s.\n",
+			rte_kni_get_name(kni),
+			link->link_speed,
+			link->link_autoneg ?  "(AutoNeg)" : "(Fixed)",
+			link->link_duplex ?  "Full Duplex" : "Half Duplex");
+	} else if (prev == ETH_LINK_UP && link->link_status == ETH_LINK_DOWN) {
+		RTE_LOG(INFO, APP, "%s NIC Link is Down.\n",
+			rte_kni_get_name(kni));
+	}
+}
+
+/*
+ * Monitor the link status of all ports and update the
+ * corresponding KNI interface(s)
+ */
+static void *
+monitor_all_ports_link_status(void *arg)
+{
+	uint16_t portid;
+	struct rte_eth_link link;
+	unsigned int i;
+	struct kni_port_params **p = kni_port_params_array;
+	int prev;
+	(void) arg;
+	int ret;
+
+	while (monitor_links) {
+		rte_delay_ms(500);
+		RTE_ETH_FOREACH_DEV(portid) {
+			if ((ports_mask & (1 << portid)) == 0)
+				continue;
+			memset(&link, 0, sizeof(link));
+			ret = rte_eth_link_get_nowait(portid, &link);
+			if (ret < 0) {
+				RTE_LOG(ERR, APP,
+					"Get link failed (port %u): %s\n",
+					portid, rte_strerror(-ret));
+				continue;
+			}
+			for (i = 0; i < p[portid]->nb_kni; i++) {
+				prev = rte_kni_update_link(p[portid]->kni[i],
+						link.link_status);
+				log_link_state(p[portid]->kni[i], prev, &link);
+			}
+		}
+	}
+	return NULL;
+}
+
 /* Callback for request of changing MTU */
 static int
 kni_change_mtu(uint16_t port_id, unsigned int new_mtu)
@@ -701,7 +786,7 @@ kni_change_mtu(uint16_t port_id, unsigned int new_mtu)
 
 	memcpy(&conf, &port_conf, sizeof(conf));
 	/* Set new MTU */
-	if (new_mtu > ETHER_MAX_LEN)
+	if (new_mtu > RTE_ETHER_MAX_LEN)
 		conf.rxmode.offloads |= DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
 		conf.rxmode.offloads &= ~DEV_RX_OFFLOAD_JUMBO_FRAME;
@@ -721,7 +806,15 @@ kni_change_mtu(uint16_t port_id, unsigned int new_mtu)
 				"for port%u (%d)\n", (unsigned int)port_id,
 				ret);
 
-	rte_eth_dev_info_get(port_id, &dev_info);
+	ret = rte_eth_dev_info_get(port_id, &dev_info);
+	if (ret != 0) {
+		RTE_LOG(ERR, APP,
+			"Error during getting device (port %u) info: %s\n",
+			port_id, strerror(-ret));
+
+		return ret;
+	}
+
 	rxq_conf = dev_info.default_rxconf;
 	rxq_conf.offloads = conf.rxmode.offloads;
 	ret = rte_eth_rx_queue_setup(port_id, 0, nb_rxd,
@@ -756,11 +849,15 @@ kni_config_network_interface(uint16_t port_id, uint8_t if_up)
 	RTE_LOG(INFO, APP, "Configure network interface of %d %s\n",
 					port_id, if_up ? "up" : "down");
 
+	rte_atomic32_inc(&kni_pause);
+
 	if (if_up != 0) { /* Configure network interface up */
 		rte_eth_dev_stop(port_id);
 		ret = rte_eth_dev_start(port_id);
 	} else /* Configure network interface down */
 		rte_eth_dev_stop(port_id);
+
+	rte_atomic32_dec(&kni_pause);
 
 	if (ret < 0)
 		RTE_LOG(ERR, APP, "Failed to start port %d\n", port_id);
@@ -769,10 +866,10 @@ kni_config_network_interface(uint16_t port_id, uint8_t if_up)
 }
 
 static void
-print_ethaddr(const char *name, struct ether_addr *mac_addr)
+print_ethaddr(const char *name, struct rte_ether_addr *mac_addr)
 {
-	char buf[ETHER_ADDR_FMT_SIZE];
-	ether_format_addr(buf, ETHER_ADDR_FMT_SIZE, mac_addr);
+	char buf[RTE_ETHER_ADDR_FMT_SIZE];
+	rte_ether_format_addr(buf, RTE_ETHER_ADDR_FMT_SIZE, mac_addr);
 	RTE_LOG(INFO, APP, "\t%s%s\n", name, buf);
 }
 
@@ -788,10 +885,10 @@ kni_config_mac_address(uint16_t port_id, uint8_t mac_addr[])
 	}
 
 	RTE_LOG(INFO, APP, "Configure mac address of %d\n", port_id);
-	print_ethaddr("Address:", (struct ether_addr *)mac_addr);
+	print_ethaddr("Address:", (struct rte_ether_addr *)mac_addr);
 
 	ret = rte_eth_dev_default_mac_addr_set(port_id,
-					       (struct ether_addr *)mac_addr);
+					(struct rte_ether_addr *)mac_addr);
 	if (ret < 0)
 		RTE_LOG(ERR, APP, "Failed to config mac_addr for port %d\n",
 			port_id);
@@ -806,6 +903,7 @@ kni_alloc(uint16_t port_id)
 	struct rte_kni *kni;
 	struct rte_kni_conf conf;
 	struct kni_port_params **params = kni_port_params_array;
+	int ret;
 
 	if (port_id >= RTE_MAX_ETHPORTS || !params[port_id])
 		return -1;
@@ -834,22 +932,20 @@ kni_alloc(uint16_t port_id)
 		if (i == 0) {
 			struct rte_kni_ops ops;
 			struct rte_eth_dev_info dev_info;
-			const struct rte_pci_device *pci_dev;
-			const struct rte_bus *bus = NULL;
 
-			memset(&dev_info, 0, sizeof(dev_info));
-			rte_eth_dev_info_get(port_id, &dev_info);
+			ret = rte_eth_dev_info_get(port_id, &dev_info);
+			if (ret != 0)
+				rte_exit(EXIT_FAILURE,
+					"Error during getting device (port %u) info: %s\n",
+					port_id, strerror(-ret));
 
-			if (dev_info.device)
-				bus = rte_bus_find_by_device(dev_info.device);
-			if (bus && !strcmp(bus->name, "pci")) {
-				pci_dev = RTE_DEV_TO_PCI(dev_info.device);
-				conf.addr = pci_dev->addr;
-				conf.id = pci_dev->id;
-			}
 			/* Get the interface default mac address */
-			rte_eth_macaddr_get(port_id,
-					(struct ether_addr *)&conf.mac_addr);
+			ret = rte_eth_macaddr_get(port_id,
+				(struct rte_ether_addr *)&conf.mac_addr);
+			if (ret != 0)
+				rte_exit(EXIT_FAILURE,
+					"Failed to get MAC address (port %u): %s\n",
+					port_id, rte_strerror(-ret));
 
 			rte_eth_dev_get_mtu(port_id, &conf.mtu);
 
@@ -898,6 +994,9 @@ main(int argc, char** argv)
 	int ret;
 	uint16_t nb_sys_ports, port;
 	unsigned i;
+	void *retval;
+	pthread_t kni_link_tid;
+	int pid;
 
 	/* Associate signal_hanlder function with USR signals */
 	signal(SIGUSR1, signal_handler);
@@ -954,12 +1053,31 @@ main(int argc, char** argv)
 	}
 	check_all_ports_link_status(ports_mask);
 
+	pid = getpid();
+	RTE_LOG(INFO, APP, "========================\n");
+	RTE_LOG(INFO, APP, "KNI Running\n");
+	RTE_LOG(INFO, APP, "kill -SIGUSR1 %d\n", pid);
+	RTE_LOG(INFO, APP, "    Show KNI Statistics.\n");
+	RTE_LOG(INFO, APP, "kill -SIGUSR2 %d\n", pid);
+	RTE_LOG(INFO, APP, "    Zero KNI Statistics.\n");
+	RTE_LOG(INFO, APP, "========================\n");
+	fflush(stdout);
+
+	ret = rte_ctrl_thread_create(&kni_link_tid,
+				     "KNI link status check", NULL,
+				     monitor_all_ports_link_status, NULL);
+	if (ret < 0)
+		rte_exit(EXIT_FAILURE,
+			"Could not create link status thread!\n");
+
 	/* Launch per-lcore function on every lcore */
 	rte_eal_mp_remote_launch(main_loop, NULL, CALL_MASTER);
 	RTE_LCORE_FOREACH_SLAVE(i) {
 		if (rte_eal_wait_lcore(i) < 0)
 			return -1;
 	}
+	monitor_links = 0;
+	pthread_join(kni_link_tid, &retval);
 
 	/* Release resources */
 	RTE_ETH_FOREACH_DEV(port) {

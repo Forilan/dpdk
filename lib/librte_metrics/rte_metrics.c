@@ -77,6 +77,26 @@ rte_metrics_init(int socket_id)
 }
 
 int
+rte_metrics_deinit(void)
+{
+	struct rte_metrics_data_s *stats;
+	const struct rte_memzone *memzone;
+
+	if (rte_eal_process_type() != RTE_PROC_PRIMARY)
+		return -EINVAL;
+
+	memzone = rte_memzone_lookup(RTE_METRICS_MEMZONE_NAME);
+	if (memzone == NULL)
+		return -EIO;
+
+	stats = memzone->addr;
+	memset(stats, 0, sizeof(struct rte_metrics_data_s));
+
+	return rte_memzone_free(memzone);
+
+}
+
+int
 rte_metrics_reg_name(const char *name)
 {
 	const char * const list_names[] = {name};
@@ -96,6 +116,9 @@ rte_metrics_reg_names(const char * const *names, uint16_t cnt_names)
 	/* Some sanity checks */
 	if (cnt_names < 1 || names == NULL)
 		return -EINVAL;
+	for (idx_name = 0; idx_name < cnt_names; idx_name++)
+		if (names[idx_name] == NULL)
+			return -EINVAL;
 
 	memzone = rte_memzone_lookup(RTE_METRICS_MEMZONE_NAME);
 	if (memzone == NULL)
@@ -159,6 +182,11 @@ rte_metrics_update_values(int port_id,
 	stats = memzone->addr;
 
 	rte_spinlock_lock(&stats->lock);
+
+	if (key >= stats->cnt_stats) {
+		rte_spinlock_unlock(&stats->lock);
+		return -EINVAL;
+	}
 	idx_metric = key;
 	cnt_setsize = 1;
 	while (idx_metric < stats->cnt_stats) {
@@ -200,9 +228,8 @@ rte_metrics_get_names(struct rte_metric_name *names,
 	int return_value;
 
 	memzone = rte_memzone_lookup(RTE_METRICS_MEMZONE_NAME);
-	/* If not allocated, fail silently */
 	if (memzone == NULL)
-		return 0;
+		return -EIO;
 
 	stats = memzone->addr;
 	rte_spinlock_lock(&stats->lock);
@@ -238,9 +265,9 @@ rte_metrics_get_values(int port_id,
 		return -EINVAL;
 
 	memzone = rte_memzone_lookup(RTE_METRICS_MEMZONE_NAME);
-	/* If not allocated, fail silently */
 	if (memzone == NULL)
-		return 0;
+		return -EIO;
+
 	stats = memzone->addr;
 	rte_spinlock_lock(&stats->lock);
 

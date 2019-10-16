@@ -1,49 +1,25 @@
-#   BSD LICENSE
-#
-#   Copyright(c) 2016 6WIND S.A.
-#
-#   Redistribution and use in source and binary forms, with or without
-#   modification, are permitted provided that the following conditions
-#   are met:
-#
-#     * Redistributions of source code must retain the above copyright
-#       notice, this list of conditions and the following disclaimer.
-#     * Redistributions in binary form must reproduce the above copyright
-#       notice, this list of conditions and the following disclaimer in
-#       the documentation and/or other materials provided with the
-#       distribution.
-#     * Neither the name of 6WIND S.A. nor the names of its
-#       contributors may be used to endorse or promote products derived
-#       from this software without specific prior written permission.
-#
-#   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
-#   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
-#   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
-#   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
-#   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
-#   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
-#   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
-#   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
-#   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
-#   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-#   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright(c) 2016 6WIND S.A.
 
 ifeq ($(RTE_SDK),)
 $(error "Please define RTE_SDK environment variable")
 endif
 
-# Default target, can be overridden by command line or environment
-RTE_TARGET ?= x86_64-native-linuxapp-gcc
+# Default target, detect a build directory, by looking for a path with a .config
+RTE_TARGET ?= $(notdir $(abspath $(dir $(firstword $(wildcard $(RTE_SDK)/*/.config)))))
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
 DIRS-$(CONFIG_RTE_LIBRTE_BBDEV) += bbdev_app
 DIRS-$(CONFIG_RTE_LIBRTE_PMD_BOND) += bond
 DIRS-y += cmdline
+ifeq ($(CONFIG_RTE_LIBRTE_POWER),y)
 DIRS-$(CONFIG_RTE_LIBRTE_DISTRIBUTOR) += distributor
+endif
 DIRS-y += ethtool
 DIRS-y += exception_path
 DIRS-$(CONFIG_RTE_LIBRTE_EFD) += server_node_efd
+DIRS-$(CONFIG_RTE_LIBRTE_CRYPTODEV) += fips_validation
 DIRS-$(CONFIG_RTE_LIBRTE_FLOW_CLASSIFY) += flow_classify
 DIRS-y += flow_filtering
 DIRS-y += helloworld
@@ -77,6 +53,7 @@ DIRS-y += link_status_interrupt
 DIRS-$(CONFIG_RTE_LIBRTE_LPM) += load_balancer
 DIRS-y += multi_process
 DIRS-y += netmap_compat/bridge
+DIRS-y += ntb
 DIRS-$(CONFIG_RTE_LIBRTE_REORDER) += packet_ordering
 ifeq ($(CONFIG_RTE_ARCH_X86_64),y)
 DIRS-y += performance-thread
@@ -92,7 +69,7 @@ ifeq ($(CONFIG_RTE_LIBRTE_HASH),y)
 DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += tep_termination
 endif
 DIRS-$(CONFIG_RTE_LIBRTE_TIMER) += timer
-DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += vhost vhost_scsi
+DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += vhost vhost_scsi vdpa
 ifeq ($(CONFIG_RTE_LIBRTE_CRYPTODEV),y)
 DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += vhost_crypto
 endif

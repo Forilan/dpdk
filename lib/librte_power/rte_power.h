@@ -20,12 +20,14 @@ extern "C" {
 #endif
 
 /* Power Management Environment State */
-enum power_management_env {PM_ENV_NOT_SET, PM_ENV_ACPI_CPUFREQ, PM_ENV_KVM_VM};
+enum power_management_env {PM_ENV_NOT_SET, PM_ENV_ACPI_CPUFREQ, PM_ENV_KVM_VM,
+		PM_ENV_PSTATE_CPUFREQ};
 
 /**
  * Set the default power management implementation. If this is not called prior
  * to rte_power_init(), then auto-detect of the environment will take place.
- * It is not thread safe.
+ * It is thread safe. New env can be set only in unitialized state
+ * (thus rte_power_unset_env must be called if different env was already set).
  *
  * @param env
  *  env. The environment in which to initialise Power Management for.
@@ -247,6 +249,39 @@ extern rte_power_freq_change_t rte_power_freq_enable_turbo;
  */
 extern rte_power_freq_change_t rte_power_freq_disable_turbo;
 
+/**
+ * Power capabilities summary.
+ */
+struct rte_power_core_capabilities {
+	RTE_STD_C11
+	union {
+		uint64_t capabilities;
+		RTE_STD_C11
+		struct {
+			uint64_t turbo:1;	/**< Turbo can be enabled. */
+			uint64_t priority:1;	/**< SST-BF high freq core */
+		};
+	};
+};
+
+/**
+ * Returns power capabilities for a specific lcore.
+ * Function pointer definition. Review each environments
+ * specific documentation for usage.
+ *
+ * @param lcore_id
+ *  lcore id.
+ * @param caps
+ *  pointer to rte_power_core_capabilities object.
+ *
+ * @return
+ *  - 0 on success.
+ *  - Negative on error.
+ */
+typedef int (*rte_power_get_capabilities_t)(unsigned int lcore_id,
+		struct rte_power_core_capabilities *caps);
+
+extern rte_power_get_capabilities_t rte_power_get_capabilities;
 
 #ifdef __cplusplus
 }

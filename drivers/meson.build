@@ -1,15 +1,27 @@
 # SPDX-License-Identifier: BSD-3-Clause
-# Copyright(c) 2017 Intel Corporation
+# Copyright(c) 2017-2019 Intel Corporation
+
+if is_windows
+	subdir_done()
+endif
 
 # Defines the order in which the drivers are buit.
-driver_classes = ['common',
+dpdk_driver_classes = ['common',
 	       'bus',
 	       'mempool', # depends on common and bus.
 	       'net',     # depends on common, bus and mempool.
 	       'crypto',  # depends on common, bus and mempool (net in future).
-	       'event']   # depends on common, bus, mempool and net.
+	       'compress', # depends on common, bus, mempool.
+	       'event',   # depends on common, bus, mempool and net.
+	       'baseband', # depends on common and bus.
+	       'raw']     # depends on common, bus, mempool, net and event.
 
-foreach class:driver_classes
+default_cflags = machine_args
+if cc.has_argument('-Wno-format-truncation')
+	default_cflags += '-Wno-format-truncation'
+endif
+
+foreach class:dpdk_driver_classes
 	drivers = []
 	std_deps = []
 	config_flag_fmt = '' # format string used to set the value in dpdk_conf
@@ -18,33 +30,47 @@ foreach class:driver_classes
 	                     # version file for linking
 
 	subdir(class)
+	class_drivers = []
 
 	foreach drv:drivers
 		drv_path = join_paths(class, drv)
 
 		# set up empty variables used for build
 		build = true # set to false to disable, e.g. missing deps
+		reason = '<unknown reason>' # set if build == false to explain
 		name = drv
 		version = 1
 		allow_experimental_apis = false
 		sources = []
 		objs = []
-		cflags = machine_args
+		cflags = default_cflags
 		includes = [include_directories(drv_path)]
 		# set up internal deps. Drivers can append/override as necessary
 		deps = std_deps
 		# ext_deps: Stores external library dependency got
-		# using dependency() or cc.find_library(). For most cases, we
-		# probably also need to specify the "-l" flags in
-		# pkgconfig_extra_libs variable too, so that it can be reflected
-		# in the pkgconfig output for static builds
+		# using dependency() (preferred) or find_library().
+		# For the find_library() case (but not with dependency()) we also
+		# need to specify the "-l" flags in pkgconfig_extra_libs variable
+		# too, so that it can be reflected in the pkgconfig output for
+		# static builds.
 		ext_deps = []
 		pkgconfig_extra_libs = []
 
 		# pull in driver directory which should assign to each of the above
 		subdir(drv_path)
 
-		if build
+		if not build
+			# some driver directories are placeholders which
+			# are never built, so we allow suppression of the
+			# component disable printout in those cases
+			if reason != ''
+				dpdk_drvs_disabled += drv_path
+				set_variable(drv_path.underscorify() +
+						'_disable_reason', reason)
+			endif
+		else
+			class_drivers += name
+
 			dpdk_conf.set(config_flag_fmt.format(name.to_upper()),1)
 			lib_name = driver_name_fmt.format(name)
 
@@ -56,6 +82,10 @@ foreach class:driver_classes
 			shared_objs = []
 			static_objs = []
 			foreach d:deps
+				if not is_variable('shared_rte_' + d)
+					error('Missing dependency ' + d +
+						' for driver ' + lib_name)
+				endif
 				shared_objs += [get_variable('shared_rte_' + d)]
 				static_objs += [get_variable('static_rte_' + d)]
 			endforeach
@@ -84,10 +114,8 @@ foreach class:driver_classes
 				lib_version = '@0@.1'.format(version)
 				so_version = '@0@'.format(version)
 			else
-				pver = meson.project_version().split('.')
-				lib_version = '@0@.@1@'.format(pver.get(0),
-						pver.get(1))
-				so_version = lib_version
+				lib_version = major_version
+				so_version = major_version
 			endif
 
 			# now build the static driver
@@ -131,4 +159,6 @@ foreach class:driver_classes
 			set_variable('static_@0@'.format(lib_name), static_dep)
 		endif # build
 	endforeach
+
+	set_variable(class + '_drivers', class_drivers)
 endforeach

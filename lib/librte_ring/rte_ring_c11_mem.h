@@ -51,24 +51,31 @@ update_tail(struct rte_ring_headtail *ht, uint32_t old_val, uint32_t new_val,
  *   If behavior == RTE_RING_QUEUE_FIXED, this will be 0 or n only.
  */
 static __rte_always_inline unsigned int
-__rte_ring_move_prod_head(struct rte_ring *r, int is_sp,
+__rte_ring_move_prod_head(struct rte_ring *r, unsigned int is_sp,
 		unsigned int n, enum rte_ring_queue_behavior behavior,
 		uint32_t *old_head, uint32_t *new_head,
 		uint32_t *free_entries)
 {
 	const uint32_t capacity = r->capacity;
+	uint32_t cons_tail;
 	unsigned int max = n;
 	int success;
 
+	*old_head = __atomic_load_n(&r->prod.head, __ATOMIC_RELAXED);
 	do {
 		/* Reset n to the initial burst count */
 		n = max;
 
-		*old_head = __atomic_load_n(&r->prod.head,
+		/* Ensure the head is read before tail */
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+
+		/* load-acquire synchronize with store-release of ht->tail
+		 * in update_tail.
+		 */
+		cons_tail = __atomic_load_n(&r->cons.tail,
 					__ATOMIC_ACQUIRE);
-		const uint32_t cons_tail = r->cons.tail;
-		/*
-		 *  The subtraction is done between two unsigned 32bits value
+
+		/* The subtraction is done between two unsigned 32bits value
 		 * (the result is always modulo 32 bits even if we have
 		 * *old_head > cons_tail). So 'free_entries' is always between 0
 		 * and capacity (which is < size).
@@ -87,9 +94,10 @@ __rte_ring_move_prod_head(struct rte_ring *r, int is_sp,
 		if (is_sp)
 			r->prod.head = *new_head, success = 1;
 		else
+			/* on failure, *old_head is updated */
 			success = __atomic_compare_exchange_n(&r->prod.head,
 					old_head, *new_head,
-					0, __ATOMIC_ACQUIRE,
+					0, __ATOMIC_RELAXED,
 					__ATOMIC_RELAXED);
 	} while (unlikely(success == 0));
 	return n;
@@ -125,15 +133,24 @@ __rte_ring_move_cons_head(struct rte_ring *r, int is_sc,
 		uint32_t *entries)
 {
 	unsigned int max = n;
+	uint32_t prod_tail;
 	int success;
 
 	/* move cons.head atomically */
+	*old_head = __atomic_load_n(&r->cons.head, __ATOMIC_RELAXED);
 	do {
 		/* Restore n as it may change every loop */
 		n = max;
-		*old_head = __atomic_load_n(&r->cons.head,
+
+		/* Ensure the head is read before tail */
+		__atomic_thread_fence(__ATOMIC_ACQUIRE);
+
+		/* this load-acquire synchronize with store-release of ht->tail
+		 * in update_tail.
+		 */
+		prod_tail = __atomic_load_n(&r->prod.tail,
 					__ATOMIC_ACQUIRE);
-		const uint32_t prod_tail = r->prod.tail;
+
 		/* The subtraction is done between two unsigned 32bits value
 		 * (the result is always modulo 32 bits even if we have
 		 * cons_head > prod_tail). So 'entries' is always between 0
@@ -152,9 +169,10 @@ __rte_ring_move_cons_head(struct rte_ring *r, int is_sc,
 		if (is_sc)
 			r->cons.head = *new_head, success = 1;
 		else
+			/* on failure, *old_head will be updated */
 			success = __atomic_compare_exchange_n(&r->cons.head,
 							old_head, *new_head,
-							0, __ATOMIC_ACQUIRE,
+							0, __ATOMIC_RELAXED,
 							__ATOMIC_RELAXED);
 	} while (unlikely(success == 0));
 	return n;

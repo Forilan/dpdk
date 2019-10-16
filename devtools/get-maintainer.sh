@@ -5,7 +5,7 @@
 
 # Load config options:
 # - DPDK_GETMAINTAINER_PATH
-. $(dirname $(readlink -e $0))/load-devel-config
+. $(dirname $(readlink -f $0))/load-devel-config
 
 options="--no-git-fallback"
 options="$options --no-rolestats"
@@ -23,7 +23,8 @@ print_usage () {
 }
 
 # Requires DPDK_GETMAINTAINER_PATH devel config option set
-if [ ! -x "$DPDK_GETMAINTAINER_PATH" ] ; then
+if [ ! -f "$DPDK_GETMAINTAINER_PATH" ] ||
+   [ ! -x "$DPDK_GETMAINTAINER_PATH" ] ; then
 	print_usage >&2
 	echo
 	echo 'Cannot execute DPDK_GETMAINTAINER_PATH' >&2

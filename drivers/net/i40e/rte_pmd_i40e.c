@@ -2,6 +2,7 @@
  * Copyright(c) 2010-2017 Intel Corporation
  */
 
+#include <rte_string_fns.h>
 #include <rte_malloc.h>
 #include <rte_tailq.h>
 
@@ -338,7 +339,7 @@ i40e_vsi_set_tx_loopback(struct i40e_vsi *vsi, uint8_t on)
 	hw = I40E_VSI_TO_HW(vsi);
 
 	/* Use the FW API if FW >= v5.0 */
-	if (hw->aq.fw_maj_ver < 5) {
+	if (hw->aq.fw_maj_ver < 5 && hw->mac.type != I40E_MAC_X722) {
 		PMD_INIT_LOG(ERR, "FW < v5.0, cannot enable loopback");
 		return -ENOTSUP;
 	}
@@ -528,7 +529,7 @@ rte_pmd_i40e_set_vf_multicast_promisc(uint16_t port, uint16_t vf_id, uint8_t on)
 
 int
 rte_pmd_i40e_set_vf_mac_addr(uint16_t port, uint16_t vf_id,
-			     struct ether_addr *mac_addr)
+			     struct rte_ether_addr *mac_addr)
 {
 	struct i40e_mac_filter *f;
 	struct rte_eth_dev *dev;
@@ -559,7 +560,7 @@ rte_pmd_i40e_set_vf_mac_addr(uint16_t port, uint16_t vf_id,
 		return -EINVAL;
 	}
 
-	ether_addr_copy(mac_addr, &vf->mac_addr);
+	rte_ether_addr_copy(mac_addr, &vf->mac_addr);
 
 	/* Remove all existing mac */
 	TAILQ_FOREACH_SAFE(f, &vsi->mac_list, next, temp)
@@ -567,6 +568,51 @@ rte_pmd_i40e_set_vf_mac_addr(uint16_t port, uint16_t vf_id,
 				!= I40E_SUCCESS)
 			PMD_DRV_LOG(WARNING, "Delete MAC failed");
 
+	return 0;
+}
+
+static const struct rte_ether_addr null_mac_addr;
+
+int
+rte_pmd_i40e_remove_vf_mac_addr(uint16_t port, uint16_t vf_id,
+	struct rte_ether_addr *mac_addr)
+{
+	struct rte_eth_dev *dev;
+	struct i40e_pf_vf *vf;
+	struct i40e_vsi *vsi;
+	struct i40e_pf *pf;
+	int ret;
+
+	if (i40e_validate_mac_addr((u8 *)mac_addr) != I40E_SUCCESS)
+		return -EINVAL;
+
+	RTE_ETH_VALID_PORTID_OR_ERR_RET(port, -ENODEV);
+
+	dev = &rte_eth_devices[port];
+
+	if (!is_i40e_supported(dev))
+		return -ENOTSUP;
+
+	pf = I40E_DEV_PRIVATE_TO_PF(dev->data->dev_private);
+
+	if (vf_id >= pf->vf_num || !pf->vfs)
+		return -EINVAL;
+
+	vf = &pf->vfs[vf_id];
+	vsi = vf->vsi;
+	if (!vsi) {
+		PMD_DRV_LOG(ERR, "Invalid VSI.");
+		return -EINVAL;
+	}
+
+	if (rte_is_same_ether_addr(mac_addr, &vf->mac_addr))
+		/* Reset the mac with NULL address */
+		rte_ether_addr_copy(&null_mac_addr, &vf->mac_addr);
+
+	/* Remove the mac */
+	ret = i40e_vsi_delete_mac(vsi, mac_addr);
+	if (ret != I40E_SUCCESS)
+		return ret;
 	return 0;
 }
 
@@ -619,7 +665,7 @@ int rte_pmd_i40e_set_vf_vlan_insert(uint16_t port, uint16_t vf_id,
 
 	RTE_ETH_VALID_PORTID_OR_ERR_RET(port, -ENODEV);
 
-	if (vlan_id > ETHER_MAX_VLAN_ID) {
+	if (vlan_id > RTE_ETHER_MAX_VLAN_ID) {
 		PMD_DRV_LOG(ERR, "Invalid VLAN ID.");
 		return -EINVAL;
 	}
@@ -680,7 +726,7 @@ int rte_pmd_i40e_set_vf_broadcast(uint16_t port, uint16_t vf_id,
 	struct i40e_vsi *vsi;
 	struct i40e_hw *hw;
 	struct i40e_mac_filter_info filter;
-	struct ether_addr broadcast = {
+	struct rte_ether_addr broadcast = {
 		.addr_bytes = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff} };
 	int ret;
 
@@ -721,7 +767,7 @@ int rte_pmd_i40e_set_vf_broadcast(uint16_t port, uint16_t vf_id,
 	}
 
 	if (on) {
-		rte_memcpy(&filter.mac_addr, &broadcast, ETHER_ADDR_LEN);
+		rte_memcpy(&filter.mac_addr, &broadcast, RTE_ETHER_ADDR_LEN);
 		filter.filter_type = RTE_MACVLAN_PERFECT_MATCH;
 		ret = i40e_vsi_add_mac(vsi, &filter);
 	} else {
@@ -849,7 +895,7 @@ int rte_pmd_i40e_set_vf_vlan_filter(uint16_t port, uint16_t vlan_id,
 	if (!is_i40e_supported(dev))
 		return -ENOTSUP;
 
-	if (vlan_id > ETHER_MAX_VLAN_ID || !vlan_id) {
+	if (vlan_id > RTE_ETHER_MAX_VLAN_ID || !vlan_id) {
 		PMD_DRV_LOG(ERR, "Invalid VLAN ID.");
 		return -EINVAL;
 	}
@@ -1666,6 +1712,7 @@ rte_pmd_i40e_process_ddp_package(uint16_t port, uint8_t *buff,
 				PMD_DRV_LOG(ERR, "Profile of group 0 already exists.");
 			else if (is_exist == 3)
 				PMD_DRV_LOG(ERR, "Profile of different group already exists");
+			i40e_update_customized_info(dev, buff, size, op);
 			rte_free(profile_info_sec);
 			return -EEXIST;
 		}
@@ -1939,8 +1986,8 @@ int rte_pmd_i40e_get_ddp_info(uint8_t *pkg_buff, uint32_t pkg_size,
 		tlv = (struct i40e_profile_tlv_section_record *)&proto[1];
 		for (i = j = 0; i < nb_rec; j++) {
 			pinfo[j].proto_id = tlv->data[0];
-			snprintf(pinfo[j].name, I40E_DDP_NAME_SIZE, "%s",
-				 (const char *)&tlv->data[1]);
+			strlcpy(pinfo[j].name, (const char *)&tlv->data[1],
+				I40E_DDP_NAME_SIZE);
 			i += tlv->len;
 			tlv = &tlv[tlv->len];
 		}
@@ -2310,7 +2357,7 @@ int rte_pmd_i40e_ptype_mapping_replace(uint16_t port,
 
 int
 rte_pmd_i40e_add_vf_mac_addr(uint16_t port, uint16_t vf_id,
-			     struct ether_addr *mac_addr)
+			     struct rte_ether_addr *mac_addr)
 {
 	struct rte_eth_dev *dev;
 	struct i40e_pf_vf *vf;
@@ -2342,7 +2389,7 @@ rte_pmd_i40e_add_vf_mac_addr(uint16_t port, uint16_t vf_id,
 	}
 
 	mac_filter.filter_type = RTE_MACVLAN_PERFECT_MATCH;
-	ether_addr_copy(mac_addr, &mac_filter.mac_addr);
+	rte_ether_addr_copy(mac_addr, &mac_filter.mac_addr);
 	ret = i40e_vsi_add_mac(vsi, &mac_filter);
 	if (ret != I40E_SUCCESS) {
 		PMD_DRV_LOG(ERR, "Failed to add MAC filter.");
@@ -2360,7 +2407,8 @@ int rte_pmd_i40e_flow_type_mapping_reset(uint16_t port)
 
 	dev = &rte_eth_devices[port];
 
-	if (!is_i40e_supported(dev))
+	if (!is_i40e_supported(dev) &&
+	    !is_i40evf_supported(dev))
 		return -ENOTSUP;
 
 	i40e_set_default_pctype_table(dev);
@@ -2380,7 +2428,8 @@ int rte_pmd_i40e_flow_type_mapping_get(
 
 	dev = &rte_eth_devices[port];
 
-	if (!is_i40e_supported(dev))
+	if (!is_i40e_supported(dev) &&
+	    !is_i40evf_supported(dev))
 		return -ENOTSUP;
 
 	ad = I40E_DEV_PRIVATE_TO_ADAPTER(dev->data->dev_private);
@@ -2408,7 +2457,8 @@ rte_pmd_i40e_flow_type_mapping_update(
 
 	dev = &rte_eth_devices[port];
 
-	if (!is_i40e_supported(dev))
+	if (!is_i40e_supported(dev) &&
+	    !is_i40evf_supported(dev))
 		return -ENOTSUP;
 
 	if (count > I40E_FLOW_TYPE_MAX)
@@ -2447,10 +2497,11 @@ rte_pmd_i40e_flow_type_mapping_update(
 }
 
 int
-rte_pmd_i40e_query_vfid_by_mac(uint16_t port, const struct ether_addr *vf_mac)
+rte_pmd_i40e_query_vfid_by_mac(uint16_t port,
+			const struct rte_ether_addr *vf_mac)
 {
 	struct rte_eth_dev *dev;
-	struct ether_addr *mac;
+	struct rte_ether_addr *mac;
 	struct i40e_pf *pf;
 	int vf_id;
 	struct i40e_pf_vf *vf;
@@ -2469,7 +2520,7 @@ rte_pmd_i40e_query_vfid_by_mac(uint16_t port, const struct ether_addr *vf_mac)
 		vf = &pf->vfs[vf_id];
 		mac = &vf->mac_addr;
 
-		if (is_same_ether_addr(mac, vf_mac))
+		if (rte_is_same_ether_addr(mac, vf_mac))
 			return vf_id;
 	}
 
@@ -2774,12 +2825,22 @@ i40e_queue_region_dcb_configure(struct i40e_hw *hw,
 	struct i40e_dcbx_config *old_cfg = &hw->local_dcbx_config;
 	int32_t ret = -EINVAL;
 	uint16_t i, j, prio_index, region_index;
-	uint8_t tc_map, tc_bw, bw_lf;
+	uint8_t tc_map, tc_bw, bw_lf, dcb_flag = 0;
 
 	if (!info->queue_region_number) {
 		PMD_DRV_LOG(ERR, "No queue region been set before");
 		return ret;
 	}
+
+	for (i = 0; i < info->queue_region_number; i++) {
+		if (info->region[i].user_priority_num) {
+			dcb_flag = 1;
+			break;
+		}
+	}
+
+	if (dcb_flag == 0)
+		return 0;
 
 	dcb_cfg = &dcb_cfg_local;
 	memset(dcb_cfg, 0, sizeof(struct i40e_dcbx_config));
@@ -3119,8 +3180,6 @@ rte_pmd_i40e_inset_set(uint16_t port, uint8_t pctype,
 			i40e_check_write_global_reg(hw,
 						  I40E_GLQF_HASH_MSK(i, pctype),
 						  mask_reg[i]);
-		i40e_global_cfg_warning(I40E_WARNING_HASH_INSET);
-		i40e_global_cfg_warning(I40E_WARNING_HASH_MSK);
 		break;
 	case INSET_FDIR:
 		i40e_check_write_reg(hw, I40E_PRTQF_FD_INSET(pctype, 0),
@@ -3132,7 +3191,6 @@ rte_pmd_i40e_inset_set(uint16_t port, uint8_t pctype,
 			i40e_check_write_global_reg(hw,
 						    I40E_GLQF_FD_MSK(i, pctype),
 						    mask_reg[i]);
-		i40e_global_cfg_warning(I40E_WARNING_FD_MSK);
 		break;
 	case INSET_FDIR_FLX:
 		i40e_check_write_reg(hw, I40E_PRTQF_FD_FLXINSET(pctype),

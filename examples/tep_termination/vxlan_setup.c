@@ -48,8 +48,8 @@
 /* VXLAN device */
 struct vxlan_conf vxdev;
 
-struct ipv4_hdr app_ip_hdr[VXLAN_N_PORTS];
-struct ether_hdr app_l2_hdr[VXLAN_N_PORTS];
+struct rte_ipv4_hdr app_ip_hdr[VXLAN_N_PORTS];
+struct rte_ether_hdr app_l2_hdr[VXLAN_N_PORTS];
 
 /* local VTEP IP address */
 uint8_t vxlan_multicast_ips[2][4] = { {239, 1, 1, 1 }, {239, 1, 2, 1 } };
@@ -69,8 +69,6 @@ uint8_t tep_filter_type[] = {RTE_TUNNEL_FILTER_IMAC_TENID,
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.split_hdr_size = 0,
-		.ignore_offload_bitfield = 1,
-		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -121,7 +119,11 @@ vxlan_port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 
 	pconf->dst_port = udp_port;
 
-	rte_eth_dev_info_get(port, &dev_info);
+	retval = rte_eth_dev_info_get(port, &dev_info);
+	if (retval != 0)
+		rte_exit(EXIT_FAILURE,
+			"Error during getting device (port %u) info: %s\n",
+			port, strerror(-retval));
 
 	if (dev_info.max_rx_queues > MAX_QUEUES) {
 		rte_exit(EXIT_FAILURE,
@@ -131,7 +133,6 @@ vxlan_port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 
 	rxconf = &dev_info.default_rxconf;
 	txconf = &dev_info.default_txconf;
-	txconf->txq_flags = ETH_TXQ_FLAGS_IGNORE;
 
 	if (!rte_eth_dev_is_valid_port(port))
 		return -1;
@@ -181,7 +182,10 @@ vxlan_port_init(uint16_t port, struct rte_mempool *mbuf_pool)
 	retval = rte_eth_dev_udp_tunnel_port_add(port, &tunnel_udp);
 	if (retval < 0)
 		return retval;
-	rte_eth_macaddr_get(port, &ports_eth_addr[port]);
+	retval = rte_eth_macaddr_get(port, &ports_eth_addr[port]);
+	if (retval < 0)
+		return retval;
+
 	RTE_LOG(INFO, PORT, "Port %u MAC: %02"PRIx8" %02"PRIx8" %02"PRIx8
 			" %02"PRIx8" %02"PRIx8" %02"PRIx8"\n",
 			port,
@@ -230,9 +234,9 @@ int
 vxlan_link(struct vhost_dev *vdev, struct rte_mbuf *m)
 {
 	int i, ret;
-	struct ether_hdr *pkt_hdr;
+	struct rte_ether_hdr *pkt_hdr;
 	uint64_t portid = vdev->vid;
-	struct ipv4_hdr *ip;
+	struct rte_ipv4_hdr *ip;
 
 	struct rte_eth_tunnel_filter_conf tunnel_filter_conf;
 
@@ -245,8 +249,8 @@ vxlan_link(struct vhost_dev *vdev, struct rte_mbuf *m)
 	}
 
 	/* Learn MAC address of guest device from packet */
-	pkt_hdr = rte_pktmbuf_mtod(m, struct ether_hdr *);
-	if (is_same_ether_addr(&(pkt_hdr->s_addr), &vdev->mac_address)) {
+	pkt_hdr = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
+	if (rte_is_same_ether_addr(&(pkt_hdr->s_addr), &vdev->mac_address)) {
 		RTE_LOG(INFO, VHOST_DATA,
 			"(%d) WARNING: This device is using an existing"
 			" MAC address and has not been registered.\n",
@@ -254,7 +258,7 @@ vxlan_link(struct vhost_dev *vdev, struct rte_mbuf *m)
 		return -1;
 	}
 
-	for (i = 0; i < ETHER_ADDR_LEN; i++) {
+	for (i = 0; i < RTE_ETHER_ADDR_LEN; i++) {
 		vdev->mac_address.addr_bytes[i] =
 			vxdev.port[portid].vport_mac.addr_bytes[i] =
 			pkt_hdr->s_addr.addr_bytes[i];
@@ -264,11 +268,11 @@ vxlan_link(struct vhost_dev *vdev, struct rte_mbuf *m)
 	memset(&tunnel_filter_conf, 0,
 		sizeof(struct rte_eth_tunnel_filter_conf));
 
-	ether_addr_copy(&ports_eth_addr[0], &tunnel_filter_conf.outer_mac);
+	rte_ether_addr_copy(&ports_eth_addr[0], &tunnel_filter_conf.outer_mac);
 	tunnel_filter_conf.filter_type = tep_filter_type[filter_idx];
 
 	/* inner MAC */
-	ether_addr_copy(&vdev->mac_address, &tunnel_filter_conf.inner_mac);
+	rte_ether_addr_copy(&vdev->mac_address, &tunnel_filter_conf.inner_mac);
 
 	tunnel_filter_conf.queue_id = vdev->rx_q;
 	tunnel_filter_conf.tenant_id = tenant_id_conf[vdev->rx_q];
@@ -312,11 +316,11 @@ vxlan_link(struct vhost_dev *vdev, struct rte_mbuf *m)
 	}
 
 	vxdev.out_key = tenant_id_conf[vdev->rx_q];
-	ether_addr_copy(&vxdev.port[portid].peer_mac,
+	rte_ether_addr_copy(&vxdev.port[portid].peer_mac,
 			&app_l2_hdr[portid].d_addr);
-	ether_addr_copy(&ports_eth_addr[0],
+	rte_ether_addr_copy(&ports_eth_addr[0],
 			&app_l2_hdr[portid].s_addr);
-	app_l2_hdr[portid].ether_type = rte_cpu_to_be_16(ETHER_TYPE_IPv4);
+	app_l2_hdr[portid].ether_type = rte_cpu_to_be_16(RTE_ETHER_TYPE_IPV4);
 
 	ip = &app_ip_hdr[portid];
 	ip->version_ihl = IP_VHL_DEF;
@@ -352,8 +356,10 @@ vxlan_unlink(struct vhost_dev *vdev)
 		memset(&tunnel_filter_conf, 0,
 			sizeof(struct rte_eth_tunnel_filter_conf));
 
-		ether_addr_copy(&ports_eth_addr[0], &tunnel_filter_conf.outer_mac);
-		ether_addr_copy(&vdev->mac_address, &tunnel_filter_conf.inner_mac);
+		rte_ether_addr_copy(&ports_eth_addr[0],
+				&tunnel_filter_conf.outer_mac);
+		rte_ether_addr_copy(&vdev->mac_address,
+				&tunnel_filter_conf.inner_mac);
 		tunnel_filter_conf.tenant_id = tenant_id_conf[vdev->rx_q];
 		tunnel_filter_conf.filter_type = tep_filter_type[filter_idx];
 
@@ -374,7 +380,7 @@ vxlan_unlink(struct vhost_dev *vdev)
 				vdev->rx_q);
 			return;
 		}
-		for (i = 0; i < ETHER_ADDR_LEN; i++)
+		for (i = 0; i < RTE_ETHER_ADDR_LEN; i++)
 			vdev->mac_address.addr_bytes[i] = 0;
 
 		/* Clear out the receive buffers */

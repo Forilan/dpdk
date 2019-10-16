@@ -7,8 +7,10 @@
 
 #include <rte_alarm.h>
 #include <rte_errno.h>
+#include <rte_string_fns.h>
 
 #include "eal_memalloc.h"
+#include "eal_memcfg.h"
 
 #include "malloc_elem.h"
 #include "malloc_mp.h"
@@ -159,7 +161,7 @@ handle_sync(const struct rte_mp_msg *msg, const void *peer)
 	memset(&reply, 0, sizeof(reply));
 
 	reply.num_fds = 0;
-	snprintf(reply.name, sizeof(reply.name), "%s", msg->name);
+	strlcpy(reply.name, msg->name, sizeof(reply.name));
 	reply.len_param = sizeof(*resp);
 
 	ret = eal_memalloc_sync_with_primary();
@@ -193,13 +195,11 @@ handle_alloc_request(const struct malloc_mp_req *m,
 
 	/* we can't know in advance how many pages we'll need, so we malloc */
 	ms = malloc(sizeof(*ms) * n_segs);
-
-	memset(ms, 0, sizeof(*ms) * n_segs);
-
 	if (ms == NULL) {
 		RTE_LOG(ERR, EAL, "Couldn't allocate memory for request state\n");
 		goto fail;
 	}
+	memset(ms, 0, sizeof(*ms) * n_segs);
 
 	elem = alloc_pages_on_heap(heap, ar->page_sz, ar->elt_size, ar->socket,
 			ar->flags, ar->align, ar->bound, ar->contig, ms,
@@ -209,6 +209,8 @@ handle_alloc_request(const struct malloc_mp_req *m,
 		goto fail;
 
 	map_addr = ms[0]->addr;
+
+	eal_memalloc_mem_event_notify(RTE_MEM_EVENT_ALLOC, map_addr, alloc_sz);
 
 	/* we have succeeded in allocating memory, but we still need to sync
 	 * with other processes. however, since DPDK IPC is single-threaded, we
@@ -259,6 +261,9 @@ handle_request(const struct rte_mp_msg *msg, const void *peer __rte_unused)
 	if (m->t == REQ_TYPE_ALLOC) {
 		ret = handle_alloc_request(m, entry);
 	} else if (m->t == REQ_TYPE_FREE) {
+		eal_memalloc_mem_event_notify(RTE_MEM_EVENT_FREE,
+				m->free_req.addr, m->free_req.len);
+
 		ret = malloc_heap_free_pages(m->free_req.addr,
 				m->free_req.len);
 	} else {
@@ -274,8 +279,8 @@ handle_request(const struct rte_mp_msg *msg, const void *peer __rte_unused)
 		/* send failure message straight away */
 		resp_msg.num_fds = 0;
 		resp_msg.len_param = sizeof(*resp);
-		snprintf(resp_msg.name, sizeof(resp_msg.name), "%s",
-				MP_ACTION_RESPONSE);
+		strlcpy(resp_msg.name, MP_ACTION_RESPONSE,
+				sizeof(resp_msg.name));
 
 		resp->t = m->t;
 		resp->result = REQ_RESULT_FAIL;
@@ -298,8 +303,7 @@ handle_request(const struct rte_mp_msg *msg, const void *peer __rte_unused)
 		/* we can do something, so send sync request asynchronously */
 		sr_msg.num_fds = 0;
 		sr_msg.len_param = sizeof(*sr);
-		snprintf(sr_msg.name, sizeof(sr_msg.name), "%s",
-				MP_ACTION_SYNC);
+		strlcpy(sr_msg.name, MP_ACTION_SYNC, sizeof(sr_msg.name));
 
 		ts.tv_nsec = 0;
 		ts.tv_sec = MP_TIMEOUT_S;
@@ -393,7 +397,7 @@ handle_sync_response(const struct rte_mp_msg *request,
 		resp->id = entry->user_req.id;
 		msg.num_fds = 0;
 		msg.len_param = sizeof(*resp);
-		snprintf(msg.name, sizeof(msg.name), "%s", MP_ACTION_RESPONSE);
+		strlcpy(msg.name, MP_ACTION_RESPONSE, sizeof(msg.name));
 
 		if (rte_mp_sendmsg(&msg))
 			RTE_LOG(ERR, EAL, "Could not send message to secondary process\n");
@@ -417,7 +421,7 @@ handle_sync_response(const struct rte_mp_msg *request,
 		resp->id = entry->user_req.id;
 		msg.num_fds = 0;
 		msg.len_param = sizeof(*resp);
-		snprintf(msg.name, sizeof(msg.name), "%s", MP_ACTION_RESPONSE);
+		strlcpy(msg.name, MP_ACTION_RESPONSE, sizeof(msg.name));
 
 		if (rte_mp_sendmsg(&msg))
 			RTE_LOG(ERR, EAL, "Could not send message to secondary process\n");
@@ -438,14 +442,16 @@ handle_sync_response(const struct rte_mp_msg *request,
 		memset(&rb_msg, 0, sizeof(rb_msg));
 
 		/* we've failed to sync, so do a rollback */
+		eal_memalloc_mem_event_notify(RTE_MEM_EVENT_FREE,
+				state->map_addr, state->map_len);
+
 		rollback_expand_heap(state->ms, state->ms_len, state->elem,
 				state->map_addr, state->map_len);
 
 		/* send rollback request */
 		rb_msg.num_fds = 0;
 		rb_msg.len_param = sizeof(*rb);
-		snprintf(rb_msg.name, sizeof(rb_msg.name), "%s",
-				MP_ACTION_ROLLBACK);
+		strlcpy(rb_msg.name, MP_ACTION_ROLLBACK, sizeof(rb_msg.name));
 
 		ts.tv_nsec = 0;
 		ts.tv_sec = MP_TIMEOUT_S;
@@ -496,7 +502,7 @@ handle_rollback_response(const struct rte_mp_msg *request,
 	/* lock the request */
 	pthread_mutex_lock(&mp_request_list.lock);
 
-	memset(&msg, 0, sizeof(0));
+	memset(&msg, 0, sizeof(msg));
 
 	entry = find_request_by_id(mpreq->id);
 	if (entry == NULL) {
@@ -515,7 +521,7 @@ handle_rollback_response(const struct rte_mp_msg *request,
 	resp->id = mpreq->id;
 	msg.num_fds = 0;
 	msg.len_param = sizeof(*resp);
-	snprintf(msg.name, sizeof(msg.name), "%s", MP_ACTION_RESPONSE);
+	strlcpy(msg.name, MP_ACTION_RESPONSE, sizeof(msg.name));
 
 	if (rte_mp_sendmsg(&msg))
 		RTE_LOG(ERR, EAL, "Could not send message to secondary process\n");
@@ -568,7 +574,7 @@ request_sync(void)
 	struct rte_mp_reply reply;
 	struct malloc_mp_req *req = (struct malloc_mp_req *)msg.param;
 	struct timespec ts;
-	int i, ret;
+	int i, ret = -1;
 
 	memset(&msg, 0, sizeof(msg));
 	memset(&reply, 0, sizeof(reply));
@@ -577,7 +583,7 @@ request_sync(void)
 
 	msg.num_fds = 0;
 	msg.len_param = sizeof(*req);
-	snprintf(msg.name, sizeof(msg.name), "%s", MP_ACTION_SYNC);
+	strlcpy(msg.name, MP_ACTION_SYNC, sizeof(msg.name));
 
 	/* sync request carries no data */
 	req->t = REQ_TYPE_SYNC;
@@ -591,14 +597,16 @@ request_sync(void)
 		ret = rte_mp_request_sync(&msg, &reply, &ts);
 	} while (ret != 0 && rte_errno == EEXIST);
 	if (ret != 0) {
-		RTE_LOG(ERR, EAL, "Could not send sync request to secondary process\n");
-		ret = -1;
+		/* if IPC is unsupported, behave as if the call succeeded */
+		if (rte_errno != ENOTSUP)
+			RTE_LOG(ERR, EAL, "Could not send sync request to secondary process\n");
+		else
+			ret = 0;
 		goto out;
 	}
 
 	if (reply.nb_received != reply.nb_sent) {
 		RTE_LOG(ERR, EAL, "Not all secondaries have responded\n");
-		ret = -1;
 		goto out;
 	}
 
@@ -607,17 +615,14 @@ request_sync(void)
 				(struct malloc_mp_req *)reply.msgs[i].param;
 		if (resp->t != REQ_TYPE_SYNC) {
 			RTE_LOG(ERR, EAL, "Unexpected response from secondary\n");
-			ret = -1;
 			goto out;
 		}
 		if (resp->id != req->id) {
 			RTE_LOG(ERR, EAL, "Wrong request ID\n");
-			ret = -1;
 			goto out;
 		}
 		if (resp->result != REQ_RESULT_SUCCESS) {
 			RTE_LOG(ERR, EAL, "Secondary process failed to synchronize\n");
-			ret = -1;
 			goto out;
 		}
 	}
@@ -668,7 +673,7 @@ request_to_primary(struct malloc_mp_req *user_req)
 
 	msg.num_fds = 0;
 	msg.len_param = sizeof(*msg_req);
-	snprintf(msg.name, sizeof(msg.name), "%s", MP_ACTION_REQUEST);
+	strlcpy(msg.name, MP_ACTION_REQUEST, sizeof(msg.name));
 
 	/* (attempt to) get a unique id */
 	user_req->id = get_unique_id();
@@ -717,7 +722,9 @@ int
 register_mp_requests(void)
 {
 	if (rte_eal_process_type() == RTE_PROC_PRIMARY) {
-		if (rte_mp_action_register(MP_ACTION_REQUEST, handle_request)) {
+		/* it's OK for primary to not support IPC */
+		if (rte_mp_action_register(MP_ACTION_REQUEST, handle_request) &&
+				rte_errno != ENOTSUP) {
 			RTE_LOG(ERR, EAL, "Couldn't register '%s' action\n",
 				MP_ACTION_REQUEST);
 			return -1;

@@ -7,7 +7,7 @@
 
 #include "test_order_common.h"
 
-/* See http://dpdk.org/doc/guides/tools/testeventdev.html for test details */
+/* See http://doc.dpdk.org/guides/tools/testeventdev.html for test details */
 
 static inline __attribute__((always_inline)) void
 order_atq_process_stage_0(struct rte_event *const ev)
@@ -118,16 +118,7 @@ order_atq_eventdev_setup(struct evt_test *test, struct evt_options *opt)
 	/* number of active worker cores + 1 producer */
 	const uint8_t nb_ports = nb_workers + 1;
 
-	const struct rte_event_dev_config config = {
-			.nb_event_queues = NB_QUEUES,/* one all types queue */
-			.nb_event_ports = nb_ports,
-			.nb_events_limit  = 4096,
-			.nb_event_queue_flows = opt->nb_flows,
-			.nb_event_port_dequeue_depth = 128,
-			.nb_event_port_enqueue_depth = 128,
-	};
-
-	ret = rte_event_dev_configure(opt->dev_id, &config);
+	ret = evt_configure_eventdev(opt, NB_QUEUES, nb_ports);
 	if (ret) {
 		evt_err("failed to configure eventdev %d", opt->dev_id);
 		return ret;
@@ -151,10 +142,14 @@ order_atq_eventdev_setup(struct evt_test *test, struct evt_options *opt)
 	if (ret)
 		return ret;
 
-	ret = evt_service_setup(opt->dev_id);
-	if (ret) {
-		evt_err("No service lcore found to run event dev.");
-		return ret;
+	if (!evt_has_distributed_sched(opt->dev_id)) {
+		uint32_t service_id;
+		rte_event_dev_service_id_get(opt->dev_id, &service_id);
+		ret = evt_service_setup(service_id);
+		if (ret) {
+			evt_err("No service lcore found to run event dev.");
+			return ret;
+		}
 	}
 
 	ret = rte_event_dev_start(opt->dev_id);

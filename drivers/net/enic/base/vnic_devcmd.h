@@ -138,8 +138,26 @@ enum vnic_devcmd_cmd {
 	/* del VLAN id in (u16)a0 */
 	CMD_VLAN_DEL            = _CMDCNW(_CMD_DIR_WRITE, _CMD_VTYPE_ENET, 15),
 
-	/* nic_cfg in (u32)a0 */
+	/*
+	 * nic_cfg in (u32)a0
+	 *
+	 * Capability query:
+	 * out: (u64) a0= 1 if a1 is valid
+	 *      (u64) a1= (NIC_CFG bits supported) | (flags << 32)
+	 *                              (flags are CMD_NIC_CFG_CAPF_xxx)
+	 */
 	CMD_NIC_CFG             = _CMDCNW(_CMD_DIR_WRITE, _CMD_VTYPE_ALL, 16),
+
+	/*
+	 * nic_cfg_chk  (same as nic_cfg, but may return error)
+	 * in (u32)a0
+	 *
+	 * Capability query:
+	 * out: (u64) a0= 1 if a1 is valid
+	 *      (u64) a1= (NIC_CFG bits supported) | (flags << 32)
+	 *                              (flags are CMD_NIC_CFG_CAPF_xxx)
+	 */
+	CMD_NIC_CFG_CHK         = _CMDC(_CMD_DIR_WRITE, _CMD_VTYPE_ALL, 16),
 
 	/* union vnic_rss_key in mem: (u64)a0=paddr, (u16)a1=len */
 	CMD_RSS_KEY             = _CMDC(_CMD_DIR_WRITE, _CMD_VTYPE_ENET, 17),
@@ -605,6 +623,9 @@ enum filter_cap_mode {
 /* flags for CMD_INIT */
 #define CMD_INITF_DEFAULT_MAC	0x1	/* init with default mac addr */
 
+/* flags for CMD_NIC_CFG */
+#define CMD_NIC_CFG_CAPF_UDP_WEAK	(1ULL << 0) /* Bodega-style UDP RSS */
+
 /* flags for CMD_PACKET_FILTER */
 #define CMD_PFILTER_DIRECTED		0x01
 #define CMD_PFILTER_MULTICAST		0x02
@@ -854,7 +875,7 @@ struct filter_action_v2 {
 	u32 rq_idx;
 	u32 flags;                     /* use FILTER_ACTION_XXX_FLAG defines */
 	u16 filter_id;
-	u_int8_t reserved[32];         /* for future expansion */
+	uint8_t reserved[32];         /* for future expansion */
 } __attribute__((packed));
 
 /* Specifies the filter type. */
@@ -920,9 +941,9 @@ enum {
 };
 
 struct filter_tlv {
-	u_int32_t type;
-	u_int32_t length;
-	u_int32_t val[0];
+	uint32_t type;
+	uint32_t length;
+	uint32_t val[0];
 };
 
 /* Data for CMD_ADD_FILTER is 2 TLV and filter + action structs */
@@ -936,10 +957,10 @@ struct filter_tlv {
  * drivers should use this instead of "sizeof (struct filter_v2)" when
  * computing length for TLV.
  */
-static inline u_int32_t
+static inline uint32_t
 vnic_filter_size(struct filter_v2 *fp)
 {
-	u_int32_t size;
+	uint32_t size;
 
 	switch (fp->type) {
 	case FILTER_USNIC_ID:
@@ -978,10 +999,10 @@ enum {
  * drivers should use this instead of "sizeof (struct filter_action_v2)"
  * when computing length for TLV.
  */
-static inline u_int32_t
+static inline uint32_t
 vnic_action_size(struct filter_action_v2 *fap)
 {
-	u_int32_t size;
+	uint32_t size;
 
 	switch (fap->type) {
 	case FILTER_ACTION_RQ_STEERING:
@@ -1079,6 +1100,18 @@ typedef enum {
 	VIC_FEATURE_RDMA,
 	VIC_FEATURE_MAX,
 } vic_feature_t;
+
+/*
+ * These flags are used in args[1] of devcmd CMD_GET_SUPP_FEATURE_VER
+ * to indicate the host driver about the VxLAN and Multi WQ features
+ * supported
+ */
+#define FEATURE_VXLAN_IPV6_INNER	(1 << 0)
+#define FEATURE_VXLAN_IPV6_OUTER	(1 << 1)
+#define FEATURE_VXLAN_MULTI_WQ		(1 << 2)
+
+#define FEATURE_VXLAN_IPV6		(FEATURE_VXLAN_IPV6_INNER | \
+					 FEATURE_VXLAN_IPV6_OUTER)
 
 /*
  * CMD_CONFIG_GRPINTR subcommands

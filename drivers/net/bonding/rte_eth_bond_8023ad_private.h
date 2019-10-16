@@ -109,6 +109,13 @@ struct port {
 	uint16_t sm_flags;
 	enum rte_bond_8023ad_selection selected;
 
+	/** Indicates if either allmulti or promisc has been enforced on the
+	 * slave so that we can receive lacp packets
+	 */
+#define BOND_8023AD_FORCED_ALLMULTI (1 << 0)
+#define BOND_8023AD_FORCED_PROMISC (1 << 1)
+	uint8_t forced_rx_flags;
+
 	uint64_t current_while_timer;
 	uint64_t periodic_timer;
 	uint64_t wait_while_timer;
@@ -150,6 +157,7 @@ struct mode8023ad_private {
 	uint64_t update_timeout_us;
 	rte_eth_bond_8023ad_ext_slowrx_fn slowrx_cb;
 	uint8_t external_sm;
+	struct rte_ether_addr mac_addr;
 
 	struct rte_eth_link slave_link;
 	/***< slave link properties */
@@ -174,7 +182,7 @@ struct mode8023ad_private {
  * The pool of *port* structures. The size of the pool
  * is configured at compile-time in the <rte_eth_bond_8023ad.c> file.
  */
-extern struct port mode_8023ad_ports[];
+extern struct port bond_mode_8023ad_ports[];
 
 /* Forward declaration */
 struct bond_dev_private;

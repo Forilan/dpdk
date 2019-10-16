@@ -16,11 +16,12 @@
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 
-#include <exec-env/rte_kni_common.h>
+#include <rte_kni_common.h>
 
 #include "compat.h"
 #include "kni_dev.h"
 
+MODULE_VERSION(KNI_VERSION);
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Intel Corporation");
 MODULE_DESCRIPTION("Kernel Module for managing kni devices");
@@ -29,15 +30,16 @@ MODULE_DESCRIPTION("Kernel Module for managing kni devices");
 
 #define KNI_MAX_DEVICES 32
 
-extern const struct pci_device_id ixgbe_pci_tbl[];
-extern const struct pci_device_id igb_pci_tbl[];
-
 /* loopback mode */
 static char *lo_mode;
 
 /* Kernel thread mode */
 static char *kthread_mode;
 static uint32_t multiple_kthread_on;
+
+/* Default carrier state for created KNI network interfaces */
+static char *carrier;
+uint32_t dflt_carrier;
 
 #define KNI_DEV_IN_USE_BIT_NUM 0 /* Bit number for device in use */
 
@@ -178,19 +180,12 @@ kni_dev_remove(struct kni_dev *dev)
 	if (!dev)
 		return -ENODEV;
 
-#ifdef RTE_KNI_KMOD_ETHTOOL
-	if (dev->pci_dev) {
-		if (pci_match_id(ixgbe_pci_tbl, dev->pci_dev))
-			ixgbe_kni_remove(dev->pci_dev);
-		else if (pci_match_id(igb_pci_tbl, dev->pci_dev))
-			igb_kni_remove(dev->pci_dev);
-	}
-#endif
-
 	if (dev->net_dev) {
 		unregister_netdev(dev->net_dev);
 		free_netdev(dev->net_dev);
 	}
+
+	kni_net_release_fifo_phy(dev);
 
 	return 0;
 }
@@ -300,11 +295,6 @@ kni_ioctl_create(struct net *net, uint32_t ioctl_num,
 	struct rte_kni_device_info dev_info;
 	struct net_device *net_dev = NULL;
 	struct kni_dev *kni, *dev, *n;
-#ifdef RTE_KNI_KMOD_ETHTOOL
-	struct pci_dev *found_pci = NULL;
-	struct net_device *lad_dev = NULL;
-	struct pci_dev *pci = NULL;
-#endif
 
 	pr_info("Creating kni...\n");
 	/* Check the buffer size, to avoid warning */
@@ -312,11 +302,8 @@ kni_ioctl_create(struct net *net, uint32_t ioctl_num,
 		return -EINVAL;
 
 	/* Copy kni info from user space */
-	ret = copy_from_user(&dev_info, (void *)ioctl_param, sizeof(dev_info));
-	if (ret) {
-		pr_err("copy_from_user in kni_ioctl_create");
-		return -EIO;
-	}
+	if (copy_from_user(&dev_info, (void *)ioctl_param, sizeof(dev_info)))
+		return -EFAULT;
 
 	/* Check if name is zero-ended */
 	if (strnlen(dev_info.name, sizeof(dev_info.name)) == sizeof(dev_info.name)) {
@@ -357,7 +344,6 @@ kni_ioctl_create(struct net *net, uint32_t ioctl_num,
 	kni = netdev_priv(net_dev);
 
 	kni->net_dev = net_dev;
-	kni->group_id = dev_info.group_id;
 	kni->core_id = dev_info.core_id;
 	strncpy(kni->name, dev_info.name, RTE_KNI_NAMESIZE);
 
@@ -388,71 +374,21 @@ kni_ioctl_create(struct net *net, uint32_t ioctl_num,
 		(unsigned long long) dev_info.resp_phys, kni->resp_q);
 	pr_debug("mbuf_size:    %u\n", kni->mbuf_size);
 
-	pr_debug("PCI: %02x:%02x.%02x %04x:%04x\n",
-					dev_info.bus,
-					dev_info.devid,
-					dev_info.function,
-					dev_info.vendor_id,
-					dev_info.device_id);
-#ifdef RTE_KNI_KMOD_ETHTOOL
-	pci = pci_get_device(dev_info.vendor_id, dev_info.device_id, NULL);
-
-	/* Support Ethtool */
-	while (pci) {
-		pr_debug("pci_bus: %02x:%02x:%02x\n",
-					pci->bus->number,
-					PCI_SLOT(pci->devfn),
-					PCI_FUNC(pci->devfn));
-
-		if ((pci->bus->number == dev_info.bus) &&
-			(PCI_SLOT(pci->devfn) == dev_info.devid) &&
-			(PCI_FUNC(pci->devfn) == dev_info.function)) {
-			found_pci = pci;
-
-			if (pci_match_id(ixgbe_pci_tbl, found_pci))
-				ret = ixgbe_kni_probe(found_pci, &lad_dev);
-			else if (pci_match_id(igb_pci_tbl, found_pci))
-				ret = igb_kni_probe(found_pci, &lad_dev);
-			else
-				ret = -1;
-
-			pr_debug("PCI found: pci=0x%p, lad_dev=0x%p\n",
-							pci, lad_dev);
-			if (ret == 0) {
-				kni->lad_dev = lad_dev;
-				kni_set_ethtool_ops(kni->net_dev);
-			} else {
-				pr_err("Device not supported by ethtool");
-				kni->lad_dev = NULL;
-			}
-
-			kni->pci_dev = found_pci;
-			kni->device_id = dev_info.device_id;
-			break;
-		}
-		pci = pci_get_device(dev_info.vendor_id,
-				dev_info.device_id, pci);
-	}
-	if (pci)
-		pci_dev_put(pci);
-#endif
-
-	if (kni->lad_dev)
-		ether_addr_copy(net_dev->dev_addr, kni->lad_dev->dev_addr);
-	else {
-		/* if user has provided a valid mac address */
-		if (is_valid_ether_addr((unsigned char *)(dev_info.mac_addr)))
-			memcpy(net_dev->dev_addr, dev_info.mac_addr, ETH_ALEN);
-		else
-			/*
-			 * Generate random mac address. eth_random_addr() is the
-			 * newer version of generating mac address in kernel.
-			 */
-			random_ether_addr(net_dev->dev_addr);
-	}
+	/* if user has provided a valid mac address */
+	if (is_valid_ether_addr(dev_info.mac_addr))
+		memcpy(net_dev->dev_addr, dev_info.mac_addr, ETH_ALEN);
+	else
+		/*
+		 * Generate random mac address. eth_random_addr() is the
+		 * newer version of generating mac address in kernel.
+		 */
+		random_ether_addr(net_dev->dev_addr);
 
 	if (dev_info.mtu)
 		net_dev->mtu = dev_info.mtu;
+#ifdef HAVE_MAX_MTU_PARAM
+	net_dev->max_mtu = net_dev->mtu;
+#endif
 
 	ret = register_netdev(net_dev);
 	if (ret) {
@@ -463,6 +399,8 @@ kni_ioctl_create(struct net *net, uint32_t ioctl_num,
 		free_netdev(net_dev);
 		return -ENODEV;
 	}
+
+	netif_carrier_off(net_dev);
 
 	ret = kni_run_thread(knet, kni, dev_info.force_bind);
 	if (ret != 0)
@@ -487,15 +425,12 @@ kni_ioctl_release(struct net *net, uint32_t ioctl_num,
 	if (_IOC_SIZE(ioctl_num) > sizeof(dev_info))
 		return -EINVAL;
 
-	ret = copy_from_user(&dev_info, (void *)ioctl_param, sizeof(dev_info));
-	if (ret) {
-		pr_err("copy_from_user in kni_ioctl_release");
-		return -EIO;
-	}
+	if (copy_from_user(&dev_info, (void *)ioctl_param, sizeof(dev_info)))
+		return -EFAULT;
 
 	/* Release the network device according to its name */
 	if (strlen(dev_info.name) == 0)
-		return ret;
+		return -EINVAL;
 
 	down_write(&knet->kni_list_lock);
 	list_for_each_entry_safe(dev, n, &knet->kni_list_head, list) {
@@ -589,6 +524,24 @@ kni_parse_kthread_mode(void)
 }
 
 static int __init
+kni_parse_carrier_state(void)
+{
+	if (!carrier) {
+		dflt_carrier = 0;
+		return 0;
+	}
+
+	if (strcmp(carrier, "off") == 0)
+		dflt_carrier = 0;
+	else if (strcmp(carrier, "on") == 0)
+		dflt_carrier = 1;
+	else
+		return -1;
+
+	return 0;
+}
+
+static int __init
 kni_init(void)
 {
 	int rc;
@@ -602,6 +555,16 @@ kni_init(void)
 		pr_debug("Single kernel thread for all KNI devices\n");
 	else
 		pr_debug("Multiple kernel thread mode enabled\n");
+
+	if (kni_parse_carrier_state() < 0) {
+		pr_err("Invalid parameter for carrier\n");
+		return -EINVAL;
+	}
+
+	if (dflt_carrier == 0)
+		pr_debug("Default carrier state set to off.\n");
+	else
+		pr_debug("Default carrier state set to on.\n");
 
 #ifdef HAVE_SIMPLIFIED_PERNET_OPERATIONS
 	rc = register_pernet_subsys(&kni_net_ops);
@@ -645,19 +608,27 @@ kni_exit(void)
 module_init(kni_init);
 module_exit(kni_exit);
 
-module_param(lo_mode, charp, S_IRUGO | S_IWUSR);
+module_param(lo_mode, charp, 0644);
 MODULE_PARM_DESC(lo_mode,
 "KNI loopback mode (default=lo_mode_none):\n"
-"    lo_mode_none        Kernel loopback disabled\n"
-"    lo_mode_fifo        Enable kernel loopback with fifo\n"
-"    lo_mode_fifo_skb    Enable kernel loopback with fifo and skb buffer\n"
-"\n"
+"\t\tlo_mode_none        Kernel loopback disabled\n"
+"\t\tlo_mode_fifo        Enable kernel loopback with fifo\n"
+"\t\tlo_mode_fifo_skb    Enable kernel loopback with fifo and skb buffer\n"
+"\t\t"
 );
 
-module_param(kthread_mode, charp, S_IRUGO);
+module_param(kthread_mode, charp, 0644);
 MODULE_PARM_DESC(kthread_mode,
 "Kernel thread mode (default=single):\n"
-"    single    Single kernel thread mode enabled.\n"
-"    multiple  Multiple kernel thread mode enabled.\n"
-"\n"
+"\t\tsingle    Single kernel thread mode enabled.\n"
+"\t\tmultiple  Multiple kernel thread mode enabled.\n"
+"\t\t"
+);
+
+module_param(carrier, charp, 0644);
+MODULE_PARM_DESC(carrier,
+"Default carrier state for KNI interface (default=off):\n"
+"\t\toff   Interfaces will be created with carrier state set to off.\n"
+"\t\ton    Interfaces will be created with carrier state set to on.\n"
+"\t\t"
 );

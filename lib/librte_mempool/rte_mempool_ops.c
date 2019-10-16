@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <rte_string_fns.h>
 #include <rte_mempool.h>
 #include <rte_errno.h>
 #include <rte_dev.h>
@@ -51,7 +52,7 @@ rte_mempool_register_ops(const struct rte_mempool_ops *h)
 
 	ops_index = rte_mempool_ops_table.num_ops++;
 	ops = &rte_mempool_ops_table.ops[ops_index];
-	snprintf(ops->name, sizeof(ops->name), "%s", h->name);
+	strlcpy(ops->name, h->name, sizeof(ops->name));
 	ops->alloc = h->alloc;
 	ops->free = h->free;
 	ops->enqueue = h->enqueue;
@@ -59,6 +60,8 @@ rte_mempool_register_ops(const struct rte_mempool_ops *h)
 	ops->get_count = h->get_count;
 	ops->calc_mem_size = h->calc_mem_size;
 	ops->populate = h->populate;
+	ops->get_info = h->get_info;
+	ops->dequeue_contig_blocks = h->dequeue_contig_blocks;
 
 	rte_spinlock_unlock(&rte_mempool_ops_table.sl);
 
@@ -133,6 +136,20 @@ rte_mempool_ops_populate(struct rte_mempool *mp, unsigned int max_objs,
 	return ops->populate(mp, max_objs, vaddr, iova, len, obj_cb,
 			     obj_cb_arg);
 }
+
+/* wrapper to get additional mempool info */
+int
+rte_mempool_ops_get_info(const struct rte_mempool *mp,
+			 struct rte_mempool_info *info)
+{
+	struct rte_mempool_ops *ops;
+
+	ops = rte_mempool_get_ops(mp->ops_index);
+
+	RTE_FUNC_PTR_OR_ERR_RET(ops->get_info, -ENOTSUP);
+	return ops->get_info(mp, info);
+}
+
 
 /* sets mempool ops previously registered by rte_mempool_register_ops. */
 int

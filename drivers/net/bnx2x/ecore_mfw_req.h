@@ -1,20 +1,17 @@
-/*-
- * Copyright (c) 2007-2013 QLogic Corporation. All rights reserved.
+/* SPDX-License-Identifier: BSD-3-Clause
+ * Copyright (c) 2007-2013 Broadcom Corporation.
  *
  * Eric Davis        <edavis@broadcom.com>
  * David Christensen <davidch@broadcom.com>
  * Gary Zambrano     <zambrano@broadcom.com>
  *
- * Copyright (c) 2014-2015 QLogic Corporation.
+ * Copyright (c) 2014-2018 Cavium Inc.
  * All rights reserved.
- * www.qlogic.com
- *
- * See LICENSE.bnx2x_pmd for copyright and licensing details.
+ * www.cavium.com
  */
 
 #ifndef ECORE_MFW_REQ_H
 #define ECORE_MFW_REQ_H
-
 
 
 #define PORT_0              0
@@ -145,6 +142,15 @@ struct iscsi_stats_info {
 	uint8_t mac_add1[8];		/* Additional Programmed MAC Addr 1. */
 	/* QoS Priority (per 802.1p). 0-7255 */
 	uint32_t qos_priority;
+#define ISCSI_QOS_PRIORITY_OFFSET	0
+#define ISCSI_QOS_PRIORITY_MASK		(0xffff)
+
+#define ISCSI_IP_ADDRESS_TYPE_OFFSET	30
+#define ISCSI_IP_ADDRESS_TYPE_MASK	(3 << 30)
+/* Driver does not have the IP address and type populated */
+#define ISCSI_IP_ADDRESS_TYPE_NOT_SET	(0 << 30)
+#define ISCSI_IP_ADDRESS_TYPE_IPV4	(1 << 30) /* IPV4 IP address set */
+#define ISCSI_IP_ADDRESS_TYPE_IPV6	(2 << 30) /* IPV6 IP address set */
 
 	uint8_t initiator_name[64];	/* iSCSI Boot Initiator Node name. */
 
@@ -182,6 +188,5 @@ union drv_info_to_mcp {
 	struct fcoe_stats_info		fcoe_stat;
 	struct iscsi_stats_info		iscsi_stat;
 };
-
 
 #endif /* ECORE_MFW_REQ_H */

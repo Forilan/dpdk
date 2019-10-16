@@ -21,7 +21,7 @@ The bbdevice drivers PMD which should be tested can be enabled by setting
 
    ``CONFIG_RTE_LIBRTE_PMD_<name>=y``
 
-Setting example for (*turbo_sw*) PMD
+Setting example for (*baseband_turbo_sw*) PMD
 
    ``CONFIG_RTE_LIBRTE_PMD_BBDEV_TURBO_SW=y``
 
@@ -62,37 +62,14 @@ The following are the command-line options:
 
 ``-e EAL_PARAMS, --eal_params EAL_PARAMS``
  Specifies EAL arguments which are passed to the test app. For more details,
- refer to DPDK documentation at http://dpdk.org/doc.
+ refer to DPDK documentation at
+ http://doc.dpdk.org/guides/linux_gsg/linux_eal_parameters.html.
 
 ``-t TIMEOUT, --timeout TIMEOUT``
  Specifies timeout in seconds. If not specified timeout is set to 300 seconds.
 
 ``-c TEST_CASE [TEST_CASE ...], --test_cases TEST_CASE [TEST_CASE ...]``
  Defines test cases to run. If not specified all available tests are run.
-
- The following tests can be run:
-
- * unittest
-     Small unit tests witch check basic functionality of bbdev library.
- * latency
-     Test calculates three latency metrics:
-
-     * offload_latency_tc
-         measures the cost of offloading enqueue and dequeue operations.
-     * offload_latency_empty_q_tc
-         measures the cost of offloading a dequeue operation from an empty queue.
-         checks how long last dequeueing if there is no operations to dequeue
-     * operation_latency_tc
-         measures the time difference from the first attempt to enqueue till the
-         first successful dequeue.
- * validation
-     Test do enqueue on given vector and compare output after dequeueing.
- * throughput
-     Test measures the achieved throughput on the available lcores.
-     Results are printed in million operations per second and million bits per second.
- * interrupt
-     The same test as 'throughput' but uses interrupts instead of PMD to perform
-     the dequeue.
 
  **Example usage:**
 
@@ -105,18 +82,18 @@ The following are the command-line options:
 ``-v TEST_VECTOR [TEST_VECTOR ...], --test_vector TEST_VECTOR [TEST_VECTOR ...]``
  Specifies paths to the test vector files. If not specified path is set based
  on *$RTE_SDK* environment variable concatenated with
- "*/app/test-bbdev/test_vectors/bbdev_vector_null.data*" and indicates default
+ "*/app/test-bbdev/test_vectors/bbdev_null.data*" and indicates default
  data file.
 
  **Example usage:**
 
- ``./test-bbdev.py -v app/test-bbdev/test_vectors/bbdev_vector_td_test1.data``
-  Fills vector based on bbdev_vector_td_test1.data file and runs all tests
+ ``./test-bbdev.py -v app/test-bbdev/test_vectors/turbo_dec_test1.data``
+  Fills vector based on turbo_dec_test1.data file and runs all tests
 
- ``./test-bbdev.py -v bbdev_vector_td_test1.data bbdev_vector_te_test2.data``
+ ``./test-bbdev.py -v turbo_dec_test1.data turbo_enc_test2.data``
   The bbdev test app is executed twice. First time vector is filled based on
-  *bbdev_vector_td_test1.data* file and second time based on
-  *bbdev_vector_te_test2.data* file. For both executions all tests are run.
+  *turbo_dec_test1.data* file and second time based on
+  *turb_enc_test2.data* file. For both executions all tests are run.
 
 ``-n NUM_OPS, --num_ops NUM_OPS``
  Specifies number of operations to process on device. If not specified num_ops
@@ -130,8 +107,54 @@ The following are the command-line options:
  Specifies operations enqueue/dequeue burst size. If not specified burst_size is
  set to 32. Maximum is 512.
 
+Test Cases
+~~~~~~~~~~
 
-Parameter globbing
+There are 6 main test cases that can be executed using testbbdev tool:
+
+* Sanity checks [-c unittest]
+    - Performs sanity checks on BBDEV interface, validating basic functionality
+
+* Validation tests [-c validation]
+    - Performs full operation of enqueue and dequeue
+    - Compares the dequeued data buffer with a expected values in the test
+      vector (TV) being used
+    - Fails if any dequeued value does not match the data in the TV
+
+* Offload Cost measurement [-c offload]
+    - Measures the CPU cycles consumed from the receipt of a user enqueue
+      until it is put on the device queue
+    - The test measures 4 metrics
+        (a) *SW Enq Offload Cost*: Software only enqueue offload cost, the cycle
+            counts and time (us) from the point the enqueue API is called until
+            the point the operation is put on the accelerator queue.
+        (b) *Acc Enq Offload Cost*: The cycle count and time (us) from the
+            point the operation is put on the accelerator queue until the return
+            from enqueue.
+        (c) *SW Deq Offload Cost*: Software dequeue cost, the cycle counts and
+            time (us) consumed to dequeue one operation.
+        (d) *Empty Queue Enq Offload Cost*: The cycle count and time (us)
+            consumed to dequeue from an empty queue.
+
+* Latency measurement [-c latency]
+    - Measures the time consumed from the first enqueue until the first
+      appearance of a dequeued result
+    - This measurement represents the full latency of a bbdev operation
+      (encode or decode) to execute
+
+* Poll-mode Throughput measurement [-c throughput]
+    - Performs full operation of enqueue and dequeue
+    - Executes in poll mode
+    - Measures the achieved throughput on a subset or all available CPU cores
+    - Dequeued data is not validated against expected values stored in TV
+    - Results are printed in million operations per second and million bits
+      per second
+
+* Interrupt-mode Throughput [-c interrupt]
+    - Similar to Throughput test case, but using interrupts. No polling.
+
+
+Parameter Globbing
 ~~~~~~~~~~~~~~~~~~
 
 Thanks to the globbing functionality in python test-bbdev.py script allows to
@@ -141,44 +164,99 @@ run tests with different set of vector files without giving all of them explicit
 
 .. code-block:: console
 
-  ./test-bbdev.py -v app/test-bbdev/test_vectors/bbdev_vector_*.data
+  ./test-bbdev.py -v app/test-bbdev/test_vectors/turbo_<enc/dec>_c<c>_k<k>_r<r>_e<e>_<extra-info>.data
 
 It runs all tests with following vectors:
 
-- ``bbdev_vector_null.data``
+- ``bbdev_null.data``
 
-- ``bbdev_vector_td_default.data``
+- ``turbo_dec_c1_k6144_r0_e34560_sbd_negllr.data``
 
-- ``bbdev_vector_te_default.data``
+- ``turbo_enc_c1_k40_r0_e1196_rm.data``
 
+- ``turbo_enc_c2_k5952_r0_e17868_crc24b.data``
+
+- ``turbo_dec_c1_k40_r0_e17280_sbd_negllr.data``
+
+- ``turbo_dec_c1_k6144_r0_e34560_sbd_posllr.data``
+
+- ``turbo_enc_c1_k40_r0_e272_rm.data``
+
+- ``turbo_enc_c3_k4800_r2_e14412_crc24b.data``
+
+- ``turbo_dec_c1_k6144_r0_e10376_crc24b_sbd_negllr_high_snr.data``
+
+- ``turbo_dec_c2_k3136_r0_e4920_sbd_negllr_crc24b.data``
+
+- ``turbo_enc_c1_k6144_r0_e120_rm_rvidx.data``
+
+- ``turbo_enc_c4_k4800_r2_e14412_crc24b.data``
+
+- ``turbo_dec_c1_k6144_r0_e10376_crc24b_sbd_negllr_low_snr.data``
+
+- ``turbo_dec_c2_k3136_r0_e4920_sbd_negllr.data``
+
+- ``turbo_enc_c1_k6144_r0_e18444.data``
+
+- ``turbo_dec_c1_k6144_r0_e34560_negllr.data``
+
+- ``turbo_enc_c1_k40_r0_e1190_rm.data``
+
+- ``turbo_enc_c1_k6144_r0_e18448_crc24a.data``
+
+- ``turbo_dec_c1_k6144_r0_e34560_posllr.data``
+
+- ``turbo_enc_c1_k40_r0_e1194_rm.data``
+
+- ``turbo_enc_c1_k6144_r0_e32256_crc24b_rm.data``
 
 .. code-block:: console
 
-  ./test-bbdev.py -v app/test-bbdev/test_vectors/bbdev_vector_t?_default.data
+  ./test-bbdev.py -v app/test-bbdev/turbo_*_default.data
 
-It runs all tests with "default" vectors:
+It runs all tests with "default" vectors.
 
-- ``bbdev_vector_te_default.data``
+* ``turbo_dec_default.data`` is a soft link to
+  ``turbo_dec_c1_k6144_r0_e10376_crc24b_sbd_negllr_high_snr.data``
 
-- ``bbdev_vector_td_default.data``
+* ``turbo_enc_default.data`` is a soft link to
+  ``turbo_enc_c1_k6144_r0_e32256_crc24b_rm.data``
 
 
 Running Tests
 -------------
 
 Shortened tree of isg_cid-wireless_dpdk_ae with dpdk compiled for
-x86_64-native-linuxapp-icc target:
+x86_64-native-linux-icc target:
 
 ::
 
  |-- app
      |-- test-bbdev
          |-- test_vectors
-             |-- bbdev_vector_null.data
-             |-- bbdev_vector_td_default.data
-             |-- bbdev_vector_te_default.data
+             |-- bbdev_null.data
+             |-- turbo_dec_c1_k6144_r0_e34560_sbd_negllr.data
+             |-- turbo_enc_c1_k40_r0_e1196_rm.data
+             |-- turbo_enc_c2_k5952_r0_e17868_crc24b.data
+             |-- turbo_dec_c1_k40_r0_e17280_sbd_negllr.data
+             |-- turbo_dec_c1_k6144_r0_e34560_sbd_posllr.data
+             |-- turbo_enc_c1_k40_r0_e272_rm.data
+             |-- turbo_enc_c3_k4800_r2_e14412_crc24b.data
+             |-- turbo_dec_c1_k6144_r0_e10376_crc24b_sbd_negllr_high_snr.data
+             |-- turbo_dec_c2_k3136_r0_e4920_sbd_negllr_crc24b.data
+             |-- turbo_enc_c1_k6144_r0_e120_rm_rvidx.data
+             |-- turbo_enc_c4_k4800_r2_e14412_crc24b.data
+             |-- turbo_dec_c1_k6144_r0_e10376_crc24b_sbd_negllr_low_snr.data
+             |-- turbo_dec_c2_k3136_r0_e4920_sbd_negllr.data
+             |-- turbo_enc_c1_k6144_r0_e18444.data
+             |-- turbo_dec_c1_k6144_r0_e34560_negllr.data
+             |-- turbo_enc_c1_k40_r0_e1190_rm.data
+             |-- turbo_enc_c1_k6144_r0_e18448_crc24a.data
+             |-- turbo_dec_c1_k6144_r0_e34560_posllr.data
+             |-- turbo_enc_c1_k40_r0_e1194_rm.data
+             |-- turbo_enc_c1_k6144_r0_e32256_crc24b_rm.data
 
- |-- x86_64-native-linuxapp-icc
+ |-- x86_64-native-linux-icc
      |-- app
          |-- testbbdev
 
@@ -187,49 +265,49 @@ All bbdev devices
 
 .. code-block:: console
 
-  ./test-bbdev.py -p ../../x86_64-native-linuxapp-icc/app/testbbdev
-  -v ./test_vectors/bbdev_vector_td_default.data
+  ./test-bbdev.py -p ../../x86_64-native-linux-icc/app/testbbdev
+  -v turbo_dec_default.data
 
 It runs all available tests using the test vector filled based on
-*bbdev_vector_td_default.data* file.
+*turbo_dec_default.data* file.
 By default number of operations to process on device is set to 32, timeout is
 set to 300s and operations enqueue/dequeue burst size is set to 32.
-Moreover a bbdev (*bbdev_null*) device will be created.
+Moreover a bbdev (*baseband_null*) device will be created.
 
-bbdev turbo_sw device
-~~~~~~~~~~~~~~~~~~~~~
+baseband turbo_sw device
+~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. code-block:: console
 
-  ./test-bbdev.py -p ../../x86_64-native-linuxapp-icc/app/testbbdev
-  -e="--vdev=turbo_sw" -t 120 -c validation
-  -v ./test_vectors/bbdev_vector_t?_default.data -n 64 -b 8 32
+  ./test-bbdev.py -p ../../x86_64-native-linux-icc/app/testbbdev
+  -e="--vdev=baseband_turbo_sw" -t 120 -c validation
+  -v ./test_vectors/turbo_* -n 64 -b 8 32
 
 It runs **validation** test for each vector file that matches the given pattern.
 Number of operations to process on device is set to 64 and operations timeout is
 set to 120s and enqueue/dequeue burst size is set to 8 and to 32.
-Moreover a bbdev (*turbo_sw*) device will be created.
+Moreover a bbdev (*baseband_turbo_sw*) device will be created.
 
 
 bbdev null device
 ~~~~~~~~~~~~~~~~~
 
-Executing bbdev null device with *bbdev_vector_null.data* helps in measuring the
+Executing bbdev null device with *bbdev_null.data* helps in measuring the
 overhead introduced by the bbdev framework.
 
 .. code-block:: console
 
-  ./test-bbdev.py -e="--vdev=bbdev_null0"
-  -v ./test_vectors/bbdev_vector_null.data
+  ./test-bbdev.py -e="--vdev=baseband_null0"
+  -v ./test_vectors/bbdev_null.data
 
 **Note:**
 
-bbdev_null device does not have to be defined explicitly as it is created by default.
+baseband_null device does not have to be defined explicitly as it is created by default.
 
 
 
 Test Vector files
-=================
+-----------------
 
 Test Vector files contain the data which is used to set turbo decoder/encoder
 parameters and buffers for validation purpose. New test vector files should be
@@ -238,7 +316,7 @@ the syntax of the test vector files is in the following section.
 
 
 Basic principles for test vector files
---------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 Line started with ``#`` is treated as a comment and is ignored.
 
 If variable is a chain of values, values should be separated by a comma. If
@@ -273,7 +351,7 @@ documented in *rte_bbdev_op.h*
 
 
 Turbo decoder test vectors template
------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For turbo decoder it has to be always set to ``RTE_BBDEV_OP_TURBO_DEC``
 
@@ -450,7 +528,7 @@ Following statuses can be used:
 
 
 Turbo encoder test vectors template
------------------------------------
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For turbo encoder it has to be always set to ``RTE_BBDEV_OP_TURBO_ENC``
 

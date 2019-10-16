@@ -90,5 +90,45 @@ DPDK_18.02 {
 	rte_dpaa_portal_fq_close;
 	rte_dpaa_portal_fq_init;
 
-	local: *;
 } DPDK_17.11;
+
+DPDK_18.08 {
+	global:
+
+	fman_if_get_sg_enable;
+	fman_if_set_sg;
+	of_get_mac_address;
+
+} DPDK_18.02;
+
+DPDK_18.11 {
+	global:
+
+	bman_thread_irq;
+	fman_if_get_sg_enable;
+	fman_if_set_sg;
+	qman_clear_irq;
+
+	qman_irqsource_add;
+	qman_irqsource_remove;
+	qman_thread_fd;
+	qman_thread_irq;
+
+} DPDK_18.08;
+
+DPDK_19.05 {
+	global:
+
+	qman_set_fq_lookup_table;
+
+} DPDK_18.11;
+
+DPDK_19.11 {
+	global:
+
+	fsl_qman_fq_portal_create;
+	qman_fq_portal_irqsource_add;
+	qman_fq_portal_irqsource_remove;
+	qman_fq_portal_thread_irq;
+
+} DPDK_19.05;

@@ -54,11 +54,9 @@ static struct rte_mempool *pool = NULL;
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.mq_mode	= ETH_MQ_RX_RSS,
-		.max_rx_pkt_len = ETHER_MAX_LEN,
+		.max_rx_pkt_len = RTE_ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.ignore_offload_bitfield = 1,
-		.offloads = (DEV_RX_OFFLOAD_CHECKSUM |
-			     DEV_RX_OFFLOAD_CRC_STRIP),
+		.offloads = DEV_RX_OFFLOAD_CHECKSUM,
 	},
 	.rx_adv_conf = {
 		.rss_conf = {
@@ -147,7 +145,8 @@ app_pkt_handle(struct rte_mbuf *pkt, uint64_t time)
 {
 	uint8_t input_color, output_color;
 	uint8_t *pkt_data = rte_pktmbuf_mtod(pkt, uint8_t *);
-	uint32_t pkt_len = rte_pktmbuf_pkt_len(pkt) - sizeof(struct ether_hdr);
+	uint32_t pkt_len = rte_pktmbuf_pkt_len(pkt) -
+		sizeof(struct rte_ether_hdr);
 	uint8_t flow_id = (uint8_t)(pkt_data[APP_PKT_FLOW_POS] & (APP_FLOWS_MAX - 1));
 	input_color = pkt_data[APP_PKT_COLOR_POS];
 	enum policer_action action;
@@ -157,7 +156,7 @@ app_pkt_handle(struct rte_mbuf *pkt, uint64_t time)
 		&PROFILE,
 		time,
 		pkt_len,
-		(enum rte_meter_color) input_color);
+		(enum rte_color) input_color);
 
 	/* Apply policing and set the output color */
 	action = policer_table[input_color][output_color];
@@ -330,9 +329,26 @@ main(int argc, char **argv)
 
 	/* NIC init */
 	conf = port_conf;
-	rte_eth_dev_info_get(port_rx, &dev_info);
+
+	ret = rte_eth_dev_info_get(port_rx, &dev_info);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			"Error during getting device (port %u) info: %s\n",
+			port_rx, strerror(-ret));
+
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		conf.txmode.offloads |= DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	conf.rx_adv_conf.rss_conf.rss_hf &= dev_info.flow_type_rss_offloads;
+	if (conf.rx_adv_conf.rss_conf.rss_hf !=
+			port_conf.rx_adv_conf.rss_conf.rss_hf) {
+		printf("Port %u modified RSS hash function based on hardware support,"
+			"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+			port_rx,
+			port_conf.rx_adv_conf.rss_conf.rss_hf,
+			conf.rx_adv_conf.rss_conf.rss_hf);
+	}
+
 	ret = rte_eth_dev_configure(port_rx, 1, 1, &conf);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Port %d configuration error (%d)\n", port_rx, ret);
@@ -351,7 +367,6 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Port %d RX queue setup error (%d)\n", port_rx, ret);
 
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = conf.txmode.offloads;
 	ret = rte_eth_tx_queue_setup(port_rx, NIC_TX_QUEUE, nb_txd,
 				rte_eth_dev_socket_id(port_rx),
@@ -360,9 +375,26 @@ main(int argc, char **argv)
 	rte_exit(EXIT_FAILURE, "Port %d TX queue setup error (%d)\n", port_rx, ret);
 
 	conf = port_conf;
-	rte_eth_dev_info_get(port_tx, &dev_info);
+
+	ret = rte_eth_dev_info_get(port_tx, &dev_info);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			"Error during getting device (port %u) info: %s\n",
+			port_tx, strerror(-ret));
+
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		conf.txmode.offloads |= DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	conf.rx_adv_conf.rss_conf.rss_hf &= dev_info.flow_type_rss_offloads;
+	if (conf.rx_adv_conf.rss_conf.rss_hf !=
+			port_conf.rx_adv_conf.rss_conf.rss_hf) {
+		printf("Port %u modified RSS hash function based on hardware support,"
+			"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+			port_tx,
+			port_conf.rx_adv_conf.rss_conf.rss_hf,
+			conf.rx_adv_conf.rss_conf.rss_hf);
+	}
+
 	ret = rte_eth_dev_configure(port_tx, 1, 1, &conf);
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Port %d configuration error (%d)\n", port_tx, ret);
@@ -383,7 +415,6 @@ main(int argc, char **argv)
 		rte_exit(EXIT_FAILURE, "Port %d RX queue setup error (%d)\n", port_tx, ret);
 
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = conf.txmode.offloads;
 	ret = rte_eth_tx_queue_setup(port_tx, NIC_TX_QUEUE, nb_txd,
 				rte_eth_dev_socket_id(port_tx),
@@ -408,9 +439,17 @@ main(int argc, char **argv)
 	if (ret < 0)
 		rte_exit(EXIT_FAILURE, "Port %d start error (%d)\n", port_tx, ret);
 
-	rte_eth_promiscuous_enable(port_rx);
+	ret = rte_eth_promiscuous_enable(port_rx);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			"Port %d promiscuous mode enable error (%s)\n",
+			port_rx, rte_strerror(-ret));
 
-	rte_eth_promiscuous_enable(port_tx);
+	ret = rte_eth_promiscuous_enable(port_tx);
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			"Port %d promiscuous mode enable error (%s)\n",
+			port_rx, rte_strerror(-ret));
 
 	/* App configuration */
 	ret = app_configure_flow_table();

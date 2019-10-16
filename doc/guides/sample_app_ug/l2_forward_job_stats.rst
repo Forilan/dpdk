@@ -91,7 +91,7 @@ where,
 
 *   l: Use locale thousands separator when formatting big numbers.
 
-To run the application in linuxapp environment with 4 lcores, 16 ports, 8 RX queues per lcore and
+To run the application in linux environment with 4 lcores, 16 ports, 8 RX queues per lcore and
 thousands  separator printing, issue the command:
 
 .. code-block:: console
@@ -217,25 +217,6 @@ The rte_eth_dev_configure() function is used to configure the number of queues f
         rte_exit(EXIT_FAILURE, "Cannot configure device: "
             "err=%d, port=%u\n",
             ret, portid);
-
-The global configuration is stored in a static structure:
-
-.. code-block:: c
-
-    static const struct rte_eth_conf port_conf = {
-        .rxmode = {
-            .split_hdr_size = 0,
-            .header_split = 0,   /**< Header Split disabled */
-            .hw_ip_checksum = 0, /**< IP checksum offload disabled */
-            .hw_vlan_filter = 0, /**< VLAN filtering disabled */
-            .jumbo_frame = 0,    /**< Jumbo Frame Support disabled */
-            .hw_strip_crc= 0,    /**< CRC stripped by hardware */
-        },
-
-        .txmode = {
-            .mq_mode = ETH_DCB_NONE
-        },
-    };
 
 RX Queue Initialization
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -470,13 +451,13 @@ Naturally, the number of ports in the portmask must be even, otherwise, the appl
     static void
     l2fwd_simple_forward(struct rte_mbuf *m, unsigned portid)
     {
-        struct ether_hdr *eth;
+        struct rte_ether_hdr *eth;
         void *tmp;
         unsigned dst_port;
 
         dst_port = l2fwd_dst_ports[portid];
 
-        eth = rte_pktmbuf_mtod(m, struct ether_hdr *);
+        eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
         /* 02:00:00:00:00:xx */
 
@@ -486,7 +467,7 @@ Naturally, the number of ports in the portmask must be even, otherwise, the appl
 
         /* src addr */
 
-        ether_addr_copy(&l2fwd_ports_eth_addr[dst_port], &eth->s_addr);
+        rte_ether_addr_copy(&l2fwd_ports_eth_addr[dst_port], &eth->s_addr);
 
         l2fwd_send_packet(m, (uint8_t) dst_port);
     }

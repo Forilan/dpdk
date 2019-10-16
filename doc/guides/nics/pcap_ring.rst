@@ -71,10 +71,18 @@ The different stream types are:
         tx_pcap=/path/to/file.pcap
 
 *   rx_iface: Defines a reception stream based on a network interface name.
-    The driver reads packets coming from the given interface using the Linux kernel driver for that interface.
+    The driver reads packets from the given interface using the Linux kernel driver for that interface.
+    The driver captures both the incoming and outgoing packets on that interface.
     The value is an interface name.
 
         rx_iface=eth0
+
+*   rx_iface_in: Defines a reception stream based on a network interface name.
+    The driver reads packets from the given interface using the Linux kernel driver for that interface.
+    The driver captures only the incoming packets on that interface.
+    The value is an interface name.
+
+        rx_iface_in=eth0
 
 *   tx_iface: Defines a transmission stream based on a network interface name.
     The driver sends packets to the given interface using the Linux kernel driver for that interface.
@@ -87,6 +95,44 @@ The different stream types are:
     The value is an interface name.
 
         iface=eth0
+
+Runtime Config Options
+^^^^^^^^^^^^^^^^^^^^^^
+
+- Use PCAP interface physical MAC
+
+ In case ``iface=`` configuration is set, user may want to use the selected interface's physical MAC
+ address. This can be done with a ``devarg`` ``phy_mac``, for example::
+
+   --vdev 'net_pcap0,iface=eth0,phy_mac=1'
+
+- Use the RX PCAP file to infinitely receive packets
+
+ In case ``rx_pcap=`` configuration is set, user may want to use the selected PCAP file for rudimental
+ performance testing. This can be done with a ``devarg`` ``infinite_rx``, for example::
+
+   --vdev 'net_pcap0,rx_pcap=file_rx.pcap,infinite_rx=1'
+
+ When this mode is used, it is recommended to drop all packets on transmit by not providing a tx_pcap or tx_iface.
+
+ This option is device wide, so all queues on a device will either have this enabled or disabled.
+ This option should only be provided once per device.
+
+- Drop all packets on transmit
+
+ The user may want to drop all packets on tx for a device. This can be done by not providing a tx_pcap or tx_iface, for example::
+
+   --vdev 'net_pcap0,rx_pcap=file_rx.pcap'
+
+ In this case, one tx drop queue is created for each rxq on that device.
+
+ - Receive no packets on Rx
+
+ The user may want to run without receiving any packets on Rx. This can be done by not providing a rx_pcap or rx_iface, for example::
+
+   --vdev 'net_pcap0,tx_pcap=file_tx.pcap'
+
+In this case, one dummy rx queue is created for each tx queue argument passed
 
 Examples of Usage
 ^^^^^^^^^^^^^^^^^
@@ -121,6 +167,21 @@ Forward packets through two network interfaces:
 
     $RTE_TARGET/app/testpmd -l 0-3 -n 4 \
         --vdev 'net_pcap0,iface=eth0' --vdev='net_pcap1;iface=eth1'
+
+Enable 2 tx queues on a network interface:
+
+.. code-block:: console
+
+    $RTE_TARGET/app/testpmd -l 0-3 -n 4 \
+        --vdev 'net_pcap0,rx_iface=eth1,tx_iface=eth1,tx_iface=eth1' \
+        -- --txq 2
+
+Read only incoming packets from a network interface and write them back to the same network interface:
+
+.. code-block:: console
+
+    $RTE_TARGET/app/testpmd -l 0-3 -n 4 \
+        --vdev 'net_pcap0,rx_iface_in=eth1,tx_iface=eth1'
 
 Using libpcap-based PMD with the testpmd Application
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

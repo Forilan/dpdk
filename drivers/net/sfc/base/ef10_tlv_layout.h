@@ -4,6 +4,14 @@
  * All rights reserved.
  */
 
+/*
+ * This is NOT the original source file. Do NOT edit it.
+ * To update the tlv layout, please edit the copy in
+ * the sfregistry repo and then, in that repo,
+ * "make tlv_headers" or "make export" to
+ * regenerate and export all types of headers.
+ */
+
 /* These structures define the layouts for the TLV items stored in static and
  * dynamic configuration partitions in NVRAM for EF10 (Huntington etc.).
  *
@@ -33,6 +41,7 @@
  *        2: firmware internal use
  *        3: license partition
  *        4: tsa configuration
+ *        5: bundle update
  *
  *   -  TTT is a type, which is just a unique value.  The same type value
  *      might appear in both locations, indicating a relationship between
@@ -77,6 +86,30 @@
 #define TLV_TAG_SKIP                    (0x00000000)
 #define TLV_TAG_INVALID                 (0xFFFFFFFF)
 
+
+/* TLV start.
+ *
+ * Marks the start of a TLV layout within a partition that may/may-not be
+ * a TLV partition. i.e. if a portion of data (at any offset) within a
+ * partition is expected to be in TLV format, then the first tag in this
+ * layout is expected to be TLV_TAG_START.
+ *
+ * This tag is not used in TLV layouts where the entire partition is TLV.
+ * Please continue using TLV_TAG_PARTITION_HEADER to indicate the start
+ * of TLV layout in such cases.
+ */
+
+#define TLV_TAG_START                   (0xEF10BA5E)
+
+struct tlv_start {
+  uint32_t tag;
+  uint32_t length;
+  /* Length of the TLV structure following this tag - includes length of all tags
+   * within the TLV layout starting with this TLV_TAG_START.
+   * Includes TLV_TAG_END. Does not include TLV_TAG_START
+   */
+  uint32_t tlv_layout_len;
+};
 
 /* TLV partition header.
  *
@@ -409,6 +442,7 @@ struct tlv_firmware_options {
                                              MC_CMD_FW_PACKED_STREAM_HASH_MODE_1
 #define TLV_FIRMWARE_VARIANT_RULES_ENGINE    MC_CMD_FW_RULES_ENGINE
 #define TLV_FIRMWARE_VARIANT_DPDK            MC_CMD_FW_DPDK
+#define TLV_FIRMWARE_VARIANT_L3XUDP          MC_CMD_FW_L3XUDP
 };
 
 /* Voltage settings
@@ -502,6 +536,16 @@ struct tlv_pcie_tx_amp_config {
   uint8_t lane_amp[16];
 };
 
+/* Enum to select an OEM and enable additional functionality related to this OEM
+ * (e.g. vendor extensions to VPD, NC-SI etc.) */
+#define TLV_TAG_OEM  (0x00230000)
+struct tlv_oem {
+  uint32_t tag;
+  uint32_t length;
+  uint8_t oem;
+};
+#define TLV_OEM_NONE 0
+#define TLV_OEM_DELL 1
 
 /* Global PCIe configuration, second revision. This represents the visible PFs
  * by a bitmap rather than having the number of the highest visible one. As such
@@ -984,6 +1028,36 @@ struct tlv_fastpd_mode {
 #define TLV_FASTPD_MODE_SOFT_ALL       0  /* All packets to the SoftPD */
 #define TLV_FASTPD_MODE_FAST_ALL       1  /* All packets to the FastPD */
 #define TLV_FASTPD_MODE_FAST_SUPPORTED 2  /* Supported packet types to the FastPD; everything else to the SoftPD  */
+};
+
+/* L3xUDP datapath firmware UDP port configuration
+ *
+ * Sets the list of UDP ports on which the encapsulation will be handled.
+ * The number of ports in the list is implied by the length of the TLV item.
+ */
+#define TLV_TAG_L3XUDP_PORTS            (0x102a0000)
+struct tlv_l3xudp_ports {
+  uint32_t tag;
+  uint32_t length;
+  uint16_t ports[];
+#define TLV_TAG_L3XUDP_PORTS_MAX_NUM_PORTS 16
+};
+
+/* Wake on LAN setting
+ *
+ * Enables the Wake On Lan (WoL) functionality on the given port. This will be
+ * a persistent setting for manageability firmware. Drivers have direct access
+ * to WoL using MCDI.
+ */
+#define TLV_TAG_WAKE_ON_LAN(port)       (0x102b0000 + (port))
+struct tlv_wake_on_lan {
+  uint32_t tag;
+  uint32_t length;
+  uint8_t  mode;
+  uint8_t  bytes[];
+#define TLV_WAKE_ON_LAN_MODE_DISABLED      0
+#define TLV_WAKE_ON_LAN_MODE_MAGIC_PACKET  1
+#define TLV_WAKE_ON_LAN_MAX_NUM_BYTES    255
 };
 
 #endif /* CI_MGMT_TLV_LAYOUT_H */

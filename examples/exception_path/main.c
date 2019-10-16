@@ -14,7 +14,7 @@
 
 #include <netinet/in.h>
 #include <net/if.h>
-#ifdef RTE_EXEC_ENV_LINUXAPP
+#ifdef RTE_EXEC_ENV_LINUX
 #include <linux/if_tun.h>
 #endif
 #include <fcntl.h>
@@ -87,10 +87,6 @@
 
 /* Options for configuring ethernet port */
 static struct rte_eth_conf port_conf = {
-	.rxmode = {
-		.ignore_offload_bitfield = 1,
-		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
-	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
 	},
@@ -132,6 +128,9 @@ print_stats(void)
 	       " Lcore    Port            RX            TX    Dropped on TX\n"
 	       "-------  ------  ------------  ------------  ---------------\n");
 	RTE_LCORE_FOREACH(i) {
+		/* limit ourselves to application supported cores only */
+		if (i >= APP_MAX_LCORE)
+			break;
 		printf("%6u %7u %13"PRIu64" %13"PRIu64" %16"PRIu64"\n",
 		       i, (unsigned)port_ids[i],
 		       lcore_stats[i].rx, lcore_stats[i].tx,
@@ -157,7 +156,7 @@ signal_handler(int signum)
 	}
 }
 
-#ifdef RTE_EXEC_ENV_LINUXAPP
+#ifdef RTE_EXEC_ENV_LINUX
 /*
  * Create a tap network interface, or use existing one with same name.
  * If name[0]='\0' then a name is automatically assigned and returned in name.
@@ -177,7 +176,7 @@ static int tap_create(char *name)
 	ifr.ifr_flags = IFF_TAP | IFF_NO_PI;
 
 	if (name && *name)
-		snprintf(ifr.ifr_name, IFNAMSIZ, "%s", name);
+		strlcpy(ifr.ifr_name, name, IFNAMSIZ);
 
 	ret = ioctl(fd, TUNSETIFF, (void *) &ifr);
 	if (ret < 0) {
@@ -186,7 +185,7 @@ static int tap_create(char *name)
 	}
 
 	if (name)
-		snprintf(name, IFNAMSIZ, "%s", ifr.ifr_name);
+		strlcpy(name, ifr.ifr_name, IFNAMSIZ);
 
 	return fd;
 }
@@ -433,7 +432,12 @@ init_port(uint16_t port)
 	/* Initialise device and RX/TX queues */
 	PRINT_INFO("Initialising port %u ...", port);
 	fflush(stdout);
-	rte_eth_dev_info_get(port, &dev_info);
+
+	ret = rte_eth_dev_info_get(port, &dev_info);
+	if (ret != 0)
+		FATAL_ERROR("Error during getting device (port %u) info: %s\n",
+			port, strerror(-ret));
+
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		local_port_conf.txmode.offloads |=
 			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
@@ -457,7 +461,6 @@ init_port(uint16_t port)
 				port, ret);
 
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = local_port_conf.txmode.offloads;
 	ret = rte_eth_tx_queue_setup(port, 0, nb_txd,
 				rte_eth_dev_socket_id(port),
@@ -470,7 +473,10 @@ init_port(uint16_t port)
 	if (ret < 0)
 		FATAL_ERROR("Could not start port%u (%d)", port, ret);
 
-	rte_eth_promiscuous_enable(port);
+	ret = rte_eth_promiscuous_enable(port);
+	if (ret != 0)
+		FATAL_ERROR("Could not enable promiscuous mode for port%u (%s)",
+			    port, rte_strerror(-ret));
 }
 
 /* Check the link status of all ports in up to 9s, and print them finally */
@@ -482,6 +488,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint16_t portid;
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
+	int ret;
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -491,7 +498,14 @@ check_all_ports_link_status(uint32_t port_mask)
 			if ((port_mask & (1 << portid)) == 0)
 				continue;
 			memset(&link, 0, sizeof(link));
-			rte_eth_link_get_nowait(portid, &link);
+			ret = rte_eth_link_get_nowait(portid, &link);
+			if (ret < 0) {
+				all_ports_up = 0;
+				if (print_flag == 1)
+					printf("Port %u link get failed: %s\n",
+						portid, rte_strerror(-ret));
+				continue;
+			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status)

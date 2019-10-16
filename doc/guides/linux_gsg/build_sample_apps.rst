@@ -15,7 +15,7 @@ It also provides a pointer to where sample applications are stored.
 Compiling a Sample Application
 ------------------------------
 
-Once an DPDK target environment directory has been created (such as ``x86_64-native-linuxapp-gcc``),
+Once an DPDK target environment directory has been created (such as ``x86_64-native-linux-gcc``),
 it contains all libraries and header files required to build an application.
 
 When compiling an application in the Linux* environment on the DPDK, the following variables must be exported:
@@ -36,7 +36,7 @@ By default, the binary is generated in the build directory.
 
     cd examples/helloworld/
     export RTE_SDK=$HOME/DPDK
-    export RTE_TARGET=x86_64-native-linuxapp-gcc
+    export RTE_TARGET=x86_64-native-linux-gcc
 
     make
         CC main.o
@@ -58,7 +58,7 @@ By default, the binary is generated in the build directory.
        export RTE_SDK=/home/user/DPDK
        cp -r $(RTE_SDK)/examples/helloworld my_rte_app
        cd my_rte_app/
-       export RTE_TARGET=x86_64-native-linuxapp-gcc
+       export RTE_TARGET=x86_64-native-linux-gcc
 
        make
          CC main.o
@@ -110,7 +110,13 @@ The EAL options are as follows:
   ``[domain:]bus:devid.func`` values. Cannot be used with ``-b`` option.
 
 * ``--socket-mem``:
-  Memory to allocate from hugepages on specific sockets.
+  Memory to allocate from hugepages on specific sockets. In dynamic memory mode,
+  this memory will also be pinned (i.e. not released back to the system until
+  application closes).
+
+* ``--socket-limit``:
+  Limit maximum memory available for allocation on each socket. Does not support
+  legacy memory mode.
 
 * ``-d``:
   Add a driver or driver directory to be loaded.
@@ -147,6 +153,14 @@ The EAL options are as follows:
 
 * ``--vfio-intr``:
   Specify interrupt type to be used by VFIO (has no effect if VFIO is not used).
+
+* ``--legacy-mem``:
+  Run DPDK in legacy memory mode (disable memory reserve/unreserve at runtime,
+  but provide more IOVA-contiguous memory).
+
+* ``--single-file-segments``:
+  Store memory segments in fewer files (dynamic memory mode only - does not
+  affect legacy memory mode).
 
 The ``-c`` or ``-l`` and option is mandatory; the others are optional.
 

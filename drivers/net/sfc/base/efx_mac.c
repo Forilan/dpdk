@@ -39,7 +39,7 @@ static const efx_mac_ops_t	__efx_mac_siena_ops = {
 };
 #endif	/* EFSYS_OPT_SIENA */
 
-#if EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2
+#if EFX_OPTS_EF10()
 static const efx_mac_ops_t	__efx_mac_ef10_ops = {
 	ef10_mac_poll,				/* emo_poll */
 	ef10_mac_up,				/* emo_up */
@@ -62,7 +62,7 @@ static const efx_mac_ops_t	__efx_mac_ef10_ops = {
 	ef10_mac_stats_update			/* emo_stats_update */
 #endif	/* EFSYS_OPT_MAC_STATS */
 };
-#endif	/* EFSYS_OPT_HUNTINGTON || EFSYS_OPT_MEDFORD || EFSYS_OPT_MEDFORD2 */
+#endif	/* EFX_OPTS_EF10() */
 
 	__checkReturn			efx_rc_t
 efx_mac_pdu_set(
@@ -492,7 +492,7 @@ efx_mac_filter_default_rxq_clear(
 
 #if EFSYS_OPT_NAMES
 
-/* START MKCONFIG GENERATED EfxMacStatNamesBlock 3cfa8780abd28993 */
+/* START MKCONFIG GENERATED EfxMacStatNamesBlock 1a45a82fcfb30c1b */
 static const char * const __efx_mac_stat_name[] = {
 	"rx_octets",
 	"rx_pkts",
@@ -597,6 +597,9 @@ static const char * const __efx_mac_stat_name[] = {
 	"ctpio_fallback",
 	"ctpio_poison",
 	"ctpio_erase",
+	"rxdp_scatter_disabled_trunc",
+	"rxdp_hlb_idle",
+	"rxdp_hlb_timeout",
 };
 /* END MKCONFIG GENERATED EfxMacStatNamesBlock */
 

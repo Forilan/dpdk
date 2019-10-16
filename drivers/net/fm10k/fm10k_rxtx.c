@@ -39,6 +39,8 @@ static inline void dump_rxd(union fm10k_rx_desc *rxd)
 
 #define FM10K_TX_OFFLOAD_MASK (  \
 		PKT_TX_VLAN_PKT |        \
+		PKT_TX_IPV6 |            \
+		PKT_TX_IPV4 |            \
 		PKT_TX_IP_CKSUM |        \
 		PKT_TX_L4_MASK |         \
 		PKT_TX_TCP_SEG)
@@ -132,7 +134,7 @@ fm10k_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		 * So, always PKT_RX_VLAN flag is set and vlan_tci
 		 * is valid for each RX packet's mbuf.
 		 */
-		mbuf->ol_flags |= PKT_RX_VLAN;
+		mbuf->ol_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
 		mbuf->vlan_tci = desc.w.vlan;
 		/**
 		 * mbuf->vlan_tci_outer is an idle field in fm10k driver,
@@ -293,7 +295,7 @@ fm10k_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 		 * So, always PKT_RX_VLAN flag is set and vlan_tci
 		 * is valid for each RX packet's mbuf.
 		 */
-		first_seg->ol_flags |= PKT_RX_VLAN;
+		first_seg->ol_flags |= PKT_RX_VLAN | PKT_RX_VLAN_STRIPPED;
 		first_seg->vlan_tci = desc.w.vlan;
 		/**
 		 * mbuf->vlan_tci_outer is an idle field in fm10k driver,
@@ -364,6 +366,33 @@ fm10k_recv_scattered_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 	return nb_rcv;
 }
 
+uint32_t
+fm10k_dev_rx_queue_count(struct rte_eth_dev *dev, uint16_t rx_queue_id)
+{
+#define FM10K_RXQ_SCAN_INTERVAL 4
+	volatile union fm10k_rx_desc *rxdp;
+	struct fm10k_rx_queue *rxq;
+	uint16_t desc = 0;
+
+	rxq = dev->data->rx_queues[rx_queue_id];
+	rxdp = &rxq->hw_ring[rxq->next_dd];
+	while ((desc < rxq->nb_desc) &&
+		rxdp->w.status & rte_cpu_to_le_16(FM10K_RXD_STATUS_DD)) {
+		/**
+		 * Check the DD bit of a rx descriptor of each group of 4 desc,
+		 * to avoid checking too frequently and downgrading performance
+		 * too much.
+		 */
+		desc += FM10K_RXQ_SCAN_INTERVAL;
+		rxdp += FM10K_RXQ_SCAN_INTERVAL;
+		if (rxq->next_dd + desc >= rxq->nb_desc)
+			rxdp = &rxq->hw_ring[rxq->next_dd + desc -
+				rxq->nb_desc];
+	}
+
+	return desc;
+}
+
 int
 fm10k_dev_rx_descriptor_done(void *rx_queue, uint16_t offset)
 {
@@ -387,6 +416,84 @@ fm10k_dev_rx_descriptor_done(void *rx_queue, uint16_t offset)
 			rte_cpu_to_le_16(FM10K_RXD_STATUS_DD));
 
 	return ret;
+}
+
+int
+fm10k_dev_rx_descriptor_status(void *rx_queue, uint16_t offset)
+{
+	volatile union fm10k_rx_desc *rxdp;
+	struct fm10k_rx_queue *rxq = rx_queue;
+	uint16_t nb_hold, trigger_last;
+	uint16_t desc;
+	int ret;
+
+	if (unlikely(offset >= rxq->nb_desc)) {
+		PMD_DRV_LOG(ERR, "Invalid RX descriptor offset %u", offset);
+		return 0;
+	}
+
+	if (rxq->next_trigger < rxq->alloc_thresh)
+		trigger_last = rxq->next_trigger +
+					rxq->nb_desc - rxq->alloc_thresh;
+	else
+		trigger_last = rxq->next_trigger - rxq->alloc_thresh;
+
+	if (rxq->next_dd < trigger_last)
+		nb_hold = rxq->next_dd + rxq->nb_desc - trigger_last;
+	else
+		nb_hold = rxq->next_dd - trigger_last;
+
+	if (offset >= rxq->nb_desc - nb_hold)
+		return RTE_ETH_RX_DESC_UNAVAIL;
+
+	desc = rxq->next_dd + offset;
+	if (desc >= rxq->nb_desc)
+		desc -= rxq->nb_desc;
+
+	rxdp = &rxq->hw_ring[desc];
+
+	ret = !!(rxdp->w.status &
+			rte_cpu_to_le_16(FM10K_RXD_STATUS_DD));
+
+	return ret;
+}
+
+int
+fm10k_dev_tx_descriptor_status(void *tx_queue, uint16_t offset)
+{
+	volatile struct fm10k_tx_desc *txdp;
+	struct fm10k_tx_queue *txq = tx_queue;
+	uint16_t desc;
+	uint16_t next_rs = txq->nb_desc;
+	struct fifo rs_tracker = txq->rs_tracker;
+	struct fifo *r = &rs_tracker;
+
+	if (unlikely(offset >= txq->nb_desc))
+		return -EINVAL;
+
+	desc = txq->next_free + offset;
+	/* go to next desc that has the RS bit */
+	desc = (desc / txq->rs_thresh + 1) *
+		txq->rs_thresh - 1;
+
+	if (desc >= txq->nb_desc) {
+		desc -= txq->nb_desc;
+		if (desc >= txq->nb_desc)
+			desc -= txq->nb_desc;
+	}
+
+	r->head = r->list;
+	for ( ; r->head != r->endp; ) {
+		if (*r->head >= desc && *r->head < next_rs)
+			next_rs = *r->head;
+		++r->head;
+	}
+
+	txdp = &txq->hw_ring[next_rs];
+	if (txdp->flags & FM10K_TXD_FLAG_DONE)
+		return RTE_ETH_TX_DESC_DONE;
+
+	return RTE_ETH_TX_DESC_FULL;
 }
 
 /*
@@ -512,8 +619,9 @@ static inline void tx_xmit_pkt(struct fm10k_tx_queue *q, struct rte_mbuf *mb)
 			rte_cpu_to_le_16(rte_pktmbuf_data_len(mb));
 
 	if (mb->ol_flags & PKT_TX_TCP_SEG) {
-		hdrlen = mb->outer_l2_len + mb->outer_l3_len + mb->l2_len +
-			mb->l3_len + mb->l4_len;
+		hdrlen = mb->l2_len + mb->l3_len + mb->l4_len;
+		hdrlen += (mb->ol_flags & PKT_TX_TUNNEL_MASK) ?
+			  mb->outer_l2_len + mb->outer_l3_len : 0;
 		if (q->hw_ring[q->next_free].flags & FM10K_TXD_FLAG_FTAG)
 			hdrlen += sizeof(struct fm10k_ftag);
 
@@ -591,25 +699,25 @@ fm10k_prep_pkts(__rte_unused void *tx_queue, struct rte_mbuf **tx_pkts,
 
 		if ((m->ol_flags & PKT_TX_TCP_SEG) &&
 				(m->tso_segsz < FM10K_TSO_MINMSS)) {
-			rte_errno = -EINVAL;
+			rte_errno = EINVAL;
 			return i;
 		}
 
 		if (m->ol_flags & FM10K_TX_OFFLOAD_NOTSUP_MASK) {
-			rte_errno = -ENOTSUP;
+			rte_errno = ENOTSUP;
 			return i;
 		}
 
 #ifdef RTE_LIBRTE_ETHDEV_DEBUG
 		ret = rte_validate_tx_offload(m);
 		if (ret != 0) {
-			rte_errno = ret;
+			rte_errno = -ret;
 			return i;
 		}
 #endif
 		ret = rte_net_intel_cksum_prepare(m);
 		if (ret != 0) {
-			rte_errno = ret;
+			rte_errno = -ret;
 			return i;
 		}
 	}

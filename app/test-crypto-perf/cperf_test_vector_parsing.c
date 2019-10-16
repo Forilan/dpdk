@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright(c) 2016-2017 Intel Corporation
  */
-#ifdef RTE_EXEC_ENV_BSDAPP
+#ifdef RTE_EXEC_ENV_FREEBSD
 	#define _WITH_GETLINE
 #endif
 #include <stdio.h>
@@ -506,8 +506,7 @@ parse_file(struct cperf_test_vector *vector, struct cperf_options *opts)
 		if (entry == NULL)
 			return -1;
 
-		memset(entry, 0, strlen(line) + 1);
-		strncpy(entry, line, strlen(line));
+		strcpy(entry, line);
 
 		/* check if entry ends with , or = */
 		if (entry[strlen(entry) - 1] == ','
@@ -524,8 +523,8 @@ parse_file(struct cperf_test_vector *vector, struct cperf_options *opts)
 				if (entry_extended == NULL)
 					goto err;
 				entry = entry_extended;
-
-				strncat(entry, line, strlen(line));
+				/* entry has been allocated accordingly */
+				strcpy(&entry[strlen(entry)], line);
 
 				if (entry[strlen(entry) - 1] != ',')
 					break;

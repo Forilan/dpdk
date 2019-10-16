@@ -60,7 +60,7 @@ some minor changes.
 
     .. code-block:: console
 
-        make install RTE_SDK=`pwd` T=x86_64-native-linuxapp-gcc
+        make install RTE_SDK=`pwd` T=x86_64-native-linux-gcc
 
 #. Write a Dockerfile like below.
 
@@ -70,7 +70,7 @@ some minor changes.
 	FROM ubuntu:latest
 	WORKDIR /usr/src/dpdk
 	COPY . /usr/src/dpdk
-	ENV PATH "$PATH:/usr/src/dpdk/x86_64-native-linuxapp-gcc/app/"
+	ENV PATH "$PATH:/usr/src/dpdk/x86_64-native-linux-gcc/app/"
 	EOT
 
 #. Build a Docker image.
@@ -96,7 +96,7 @@ some minor changes.
             dpdk-app-testpmd testpmd -l 6-7 -n 4 -m 1024 --no-pci \
             --vdev=virtio_user0,path=/var/run/usvhost \
             --file-prefix=container \
-            -- -i --txqflags=0xf00 --disable-hw-vlan
+            -- -i
 
 Note: If we run all above setup on the host, it's a shm-based IPC.
 
@@ -109,7 +109,8 @@ We have below limitations in this solution:
  * Cannot work with --no-huge option. Currently, DPDK uses anonymous mapping
    under this option which cannot be reopened to share with vhost backend.
  * Cannot work when there are more than VHOST_MEMORY_MAX_NREGIONS(8) hugepages.
-   In another word, do not use 2MB hugepage so far.
+   If you have more regions (especially when 2MB hugepages are used), the option,
+   --single-file-segments, can help to reduce the number of shared files.
  * Applications should not use file name like HUGEFILE_FMT ("%smap_%d"). That
    will bring confusion when sharing hugepage files with backend by name.
  * Root privilege is a must. DPDK resolves physical addresses of hugepages

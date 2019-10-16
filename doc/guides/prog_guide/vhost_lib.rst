@@ -63,16 +63,20 @@ The following is an overview of some key Vhost API functions:
       512).
 
     * zero copy is really good for VM2VM case. For iperf between two VMs, the
-      boost could be above 70% (when TSO is enableld).
+      boost could be above 70% (when TSO is enabled).
 
-    * for VM2NIC case, the ``nb_tx_desc`` has to be small enough: <= 64 if virtio
-      indirect feature is not enabled and <= 128 if it is enabled.
+    * For zero copy in VM2NIC case, guest Tx used vring may be starved if the
+      PMD driver consume the mbuf but not release them timely.
 
-      This is because when dequeue zero copy is enabled, guest Tx used vring will
-      be updated only when corresponding mbuf is freed. Thus, the nb_tx_desc
-      has to be small enough so that the PMD driver will run out of available
-      Tx descriptors and free mbufs timely. Otherwise, guest Tx vring would be
-      starved.
+      For example, i40e driver has an optimization to maximum NIC pipeline which
+      postpones returning transmitted mbuf until only tx_free_threshold free
+      descs left. The virtio TX used ring will be starved if the formula
+      (num_i40e_tx_desc - num_virtio_tx_desc > tx_free_threshold) is true, since
+      i40e will not return back mbuf.
+
+      A performance tip for tuning zero copy in VM2NIC case is to adjust the
+      frequency of mbuf free (i.e. adjust tx_free_threshold of i40e driver) to
+      balance consumer and producer.
 
     * Guest memory should be backended with huge pages to achieve better
       performance. Using 1G page size is the best.
@@ -88,6 +92,9 @@ The following is an overview of some key Vhost API functions:
       to use vfio-pci driver, please insert vfio-pci kernel module in noiommu
       mode.
 
+    * The consumer of zero copy mbufs should consume these mbufs as soon as
+      possible, otherwise it may block the operations in vhost.
+
   - ``RTE_VHOST_USER_IOMMU_SUPPORT``
 
     IOMMU support will be enabled when this flag is set. It is disabled by
@@ -101,6 +108,14 @@ The following is an overview of some key Vhost API functions:
     which implementation is buggy in Qemu v2.7.0-v2.9.0 when doing multiqueue.
     Enabling this flag with these Qemu version results in Qemu being blocked
     when multiple queue pairs are declared.
+
+  - ``RTE_VHOST_USER_POSTCOPY_SUPPORT``
+
+    Postcopy live-migration support will be enabled when this flag is set.
+    It is disabled by default.
+
+    Enabling this flag should only be done when the calling application does
+    not pre-fault the guest shared memory, otherwise migration would fail.
 
 * ``rte_vhost_driver_set_features(path, features)``
 
@@ -270,3 +285,62 @@ Vhost supported vSwitch reference
 
 For more vhost details and how to support vhost in vSwitch, please refer to
 the vhost example in the DPDK Sample Applications Guide.
+
+Vhost data path acceleration (vDPA)
+-----------------------------------
+
+vDPA supports selective datapath in vhost-user lib by enabling virtio ring
+compatible devices to serve virtio driver directly for datapath acceleration.
+
+``rte_vhost_driver_attach_vdpa_device`` is used to configure the vhost device
+with accelerated backend.
+
+Also vhost device capabilities are made configurable to adopt various devices.
+Such capabilities include supported features, protocol features, queue number.
+
+Finally, a set of device ops is defined for device specific operations:
+
+* ``get_queue_num``
+
+  Called to get supported queue number of the device.
+
+* ``get_features``
+
+  Called to get supported features of the device.
+
+* ``get_protocol_features``
+
+  Called to get supported protocol features of the device.
+
+* ``dev_conf``
+
+  Called to configure the actual device when the virtio device becomes ready.
+
+* ``dev_close``
+
+  Called to close the actual device when the virtio device is stopped.
+
+* ``set_vring_state``
+
+  Called to change the state of the vring in the actual device when vring state
+  changes.
+
+* ``set_features``
+
+  Called to set the negotiated features to device.
+
+* ``migration_done``
+
+  Called to allow the device to response to RARP sending.
+
+* ``get_vfio_group_fd``
+
+   Called to get the VFIO group fd of the device.
+
+* ``get_vfio_device_fd``
+
+  Called to get the VFIO device fd of the device.
+
+* ``get_notify_area``
+
+  Called to get the notify area info of the queue.

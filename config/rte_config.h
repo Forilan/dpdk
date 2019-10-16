@@ -18,9 +18,24 @@
 
 #include <rte_build_config.h>
 
+/* legacy defines */
+#ifdef RTE_EXEC_ENV_LINUX
+#define RTE_EXEC_ENV_LINUXAPP 1
+#endif
+#ifdef RTE_EXEC_ENV_FREEBSD
+#define RTE_EXEC_ENV_BSDAPP 1
+#endif
+
+/* String that appears before the version number */
+#define RTE_VER_PREFIX "DPDK"
+
 /****** library defines ********/
 
+/* compat defines */
+#define RTE_BUILD_SHARED_LIB
+
 /* EAL defines */
+#define RTE_MAX_HEAPS 32
 #define RTE_MAX_MEMSEG_LISTS 128
 #define RTE_MAX_MEMSEG_PER_LIST 8192
 #define RTE_MAX_MEM_MB_PER_LIST 32768
@@ -31,7 +46,7 @@
 #define RTE_MAX_TAILQ 32
 #define RTE_LOG_DP_LEVEL RTE_LOG_INFO
 #define RTE_BACKTRACE 1
-#define RTE_EAL_VFIO 1
+#define RTE_MAX_VFIO_CONTAINERS 64
 
 /* bsd module defines */
 #define RTE_CONTIGMEM_MAX_NUM_BUFS 64
@@ -47,7 +62,6 @@
 #define RTE_PKTMBUF_HEADROOM 128
 
 /* ether defines */
-#define RTE_MAX_ETHPORTS 32
 #define RTE_MAX_QUEUES_PER_PORT 1024
 #define RTE_ETHDEV_QUEUE_STAT_CNTRS 16
 #define RTE_ETHDEV_RXTX_CALLBACKS 1
@@ -56,13 +70,19 @@
 #define RTE_CRYPTO_MAX_DEVS 64
 #define RTE_CRYPTODEV_NAME_LEN 64
 
+/* compressdev defines */
+#define RTE_COMPRESS_MAX_DEVS 64
+
 /* eventdev defines */
 #define RTE_EVENT_MAX_DEVS 16
 #define RTE_EVENT_MAX_QUEUES_PER_DEV 64
 #define RTE_EVENT_TIMER_ADAPTER_NUM_MAX 32
+#define RTE_EVENT_ETH_INTR_RING_SIZE 1024
+#define RTE_EVENT_CRYPTO_ADAPTER_MAX_INSTANCE 32
+#define RTE_EVENT_ETH_TX_ADAPTER_MAX_INSTANCE 32
 
 /* rawdev defines */
-#define RTE_RAWDEV_MAX_DEVS 10
+#define RTE_RAWDEV_MAX_DEVS 64
 
 /* ip_fragmentation defines */
 #define RTE_LIBRTE_IP_FRAG_MAX_FRAG 4
@@ -80,22 +100,14 @@
 
 /****** driver defines ********/
 
-/*
- * Number of sessions to create in the session memory pool
- * on a single instance of crypto HW device.
- */
 /* QuickAssist device */
-#define RTE_QAT_PMD_MAX_NB_SESSIONS 2048
+/* Max. number of QuickAssist devices which can be attached */
+#define RTE_PMD_QAT_MAX_PCI_DEVICES 48
+#define RTE_PMD_QAT_COMP_SGL_MAX_SEGMENTS 16
+#define RTE_PMD_QAT_COMP_IM_BUFFER_SIZE 65536
 
 /* virtio crypto defines */
-#define RTE_VIRTIO_CRYPTO_PMD_MAX_NB_SESSIONS 1024
 #define RTE_MAX_VIRTIO_CRYPTO 32
-
-/* DPAA2_SEC */
-#define RTE_DPAA2_SEC_PMD_MAX_NB_SESSIONS 2048
-
-/* DPAA_SEC */
-#define RTE_DPAA_SEC_PMD_MAX_NB_SESSIONS 2048
 
 /* DPAA SEC max cryptodev devices*/
 #define RTE_LIBRTE_DPAA_MAX_CRYPTODEV	4
@@ -109,11 +121,12 @@
 #define RTE_LIBRTE_I40E_QUEUE_NUM_PER_PF 64
 #define RTE_LIBRTE_I40E_QUEUE_NUM_PER_VF 4
 #define RTE_LIBRTE_I40E_QUEUE_NUM_PER_VM 4
-/* interval up to 8160 us, aligned to 2 (or default value) */
-#define RTE_LIBRTE_I40E_ITR_INTERVAL -1
 
 /* Ring net PMD settings */
 #define RTE_PMD_RING_MAX_RX_RINGS 16
 #define RTE_PMD_RING_MAX_TX_RINGS 16
+
+/* QEDE PMD defines */
+#define RTE_LIBRTE_QEDE_FW ""
 
 #endif /* _RTE_CONFIG_H_ */

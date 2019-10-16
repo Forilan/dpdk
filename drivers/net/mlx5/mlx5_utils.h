@@ -15,6 +15,16 @@
 
 #include "mlx5_defs.h"
 
+/*
+ * Compilation workaround for PPC64 when AltiVec is fully enabled, e.g. std=c11.
+ * Otherwise there would be a type conflict between stdbool and altivec.
+ */
+#if defined(__PPC64__) && !defined(__APPLE_ALTIVEC__)
+#undef bool
+/* redefine as in stdbool.h */
+#define bool _Bool
+#endif
+
 /* Bit-field manipulation. */
 #define BITFIELD_DECLARE(bf, type, size) \
 	type bf[(((size_t)(size) / (sizeof(type) * CHAR_BIT)) + \
@@ -103,15 +113,21 @@ extern int mlx5_logtype;
 /* claim_zero() does not perform any check when debugging is disabled. */
 #ifndef NDEBUG
 
+#define DEBUG(...) DRV_LOG(DEBUG, __VA_ARGS__)
 #define claim_zero(...) assert((__VA_ARGS__) == 0)
 #define claim_nonzero(...) assert((__VA_ARGS__) != 0)
 
 #else /* NDEBUG */
 
+#define DEBUG(...) (void)0
 #define claim_zero(...) (__VA_ARGS__)
 #define claim_nonzero(...) (__VA_ARGS__)
 
 #endif /* NDEBUG */
+
+#define INFO(...) DRV_LOG(INFO, __VA_ARGS__)
+#define WARN(...) DRV_LOG(WARNING, __VA_ARGS__)
+#define ERROR(...) DRV_LOG(ERR, __VA_ARGS__)
 
 /* Convenience macros for accessing mbuf fields. */
 #define NEXT(m) ((m)->next)

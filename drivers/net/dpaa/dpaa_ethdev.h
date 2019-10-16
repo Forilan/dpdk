@@ -18,12 +18,9 @@
 #include <of.h>
 #include <netcfg.h>
 
+#define MAX_DPAA_CORES			4
 #define DPAA_MBUF_HW_ANNOTATION		64
 #define DPAA_FD_PTA_SIZE		64
-
-#if (DPAA_MBUF_HW_ANNOTATION + DPAA_FD_PTA_SIZE) > RTE_PKTMBUF_HEADROOM
-#error "Annotation requirement is more than RTE_PKTMBUF_HEADROOM"
-#endif
 
 /* mbuf->seqn will be used to store event entry index for
  * driver specific usage. For parallel mode queues, invalid
@@ -39,8 +36,9 @@
 /* Alignment to use for cpu-local structs to avoid coherency problems. */
 #define MAX_CACHELINE			64
 
-#define DPAA_MIN_RX_BUF_SIZE 512
 #define DPAA_MAX_RX_PKT_LEN  10240
+
+#define DPAA_SGT_MAX_ENTRIES 16 /* maximum number of entries in SG Table */
 
 /* RX queue tail drop threshold (CGR Based) in frame count */
 #define CGR_RX_PERFQ_THRESH 256
@@ -51,6 +49,10 @@
 /*Maximum number of slots available in TX ring*/
 #define DPAA_TX_BURST_SIZE	7
 
+/* Optimal burst size for RX and TX as default */
+#define DPAA_DEF_RX_BURST_SIZE 7
+#define DPAA_DEF_TX_BURST_SIZE DPAA_TX_BURST_SIZE
+
 #ifndef VLAN_TAG_SIZE
 #define VLAN_TAG_SIZE   4 /** < Vlan Header Length */
 #endif
@@ -59,7 +61,7 @@
 #define DPAA_PCD_FQID_START		0x400
 #define DPAA_PCD_FQID_MULTIPLIER	0x100
 #define DPAA_DEFAULT_NUM_PCD_QUEUES	1
-#define DPAA_MAX_NUM_PCD_QUEUES		32
+#define DPAA_MAX_NUM_PCD_QUEUES		4
 
 #define DPAA_IF_TX_PRIORITY		3
 #define DPAA_IF_RX_PRIORITY		0
@@ -160,12 +162,14 @@ struct dpaa_if_stats {
 	uint64_t tund;		/**<Tx Undersized */
 };
 
-int __rte_experimental dpaa_eth_eventq_attach(const struct rte_eth_dev *dev,
-			   int eth_rx_queue_id,
+int
+dpaa_eth_eventq_attach(const struct rte_eth_dev *dev,
+		int eth_rx_queue_id,
 		u16 ch_id,
 		const struct rte_event_eth_rx_adapter_queue_conf *queue_conf);
 
-int __rte_experimental dpaa_eth_eventq_detach(const struct rte_eth_dev *dev,
+int
+dpaa_eth_eventq_detach(const struct rte_eth_dev *dev,
 			   int eth_rx_queue_id);
 
 enum qman_cb_dqrr_result

@@ -6,6 +6,7 @@
 #define _VIRTIO_PCI_H_
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include <rte_pci.h>
 #include <rte_bus_pci.h>
@@ -112,6 +113,7 @@ struct virtnet_ctl;
 
 #define VIRTIO_F_VERSION_1		32
 #define VIRTIO_F_IOMMU_PLATFORM	33
+#define VIRTIO_F_RING_PACKED		34
 
 /*
  * Some VirtIO feature bits (currently bits 28 through 31) are
@@ -120,6 +122,18 @@ struct virtnet_ctl;
  */
 #define VIRTIO_TRANSPORT_F_START 28
 #define VIRTIO_TRANSPORT_F_END   34
+
+/*
+ * Inorder feature indicates that all buffers are used by the device
+ * in the same order in which they have been made available.
+ */
+#define VIRTIO_F_IN_ORDER 35
+
+/*
+ * This feature indicates that memory accesses by the driver and the device
+ * are ordered in a way described by the platform.
+ */
+#define VIRTIO_F_ORDER_PLATFORM 36
 
 /* The Guest publishes the used index for which it expects an interrupt
  * at the end of the avail ring. Host should ignore the avail->flags field. */
@@ -197,7 +211,6 @@ struct virtio_pci_ops {
 			     void *dst, int len);
 	void (*write_dev_cfg)(struct virtio_hw *hw, size_t offset,
 			      const void *src, int len);
-	void (*reset)(struct virtio_hw *hw);
 
 	uint8_t (*get_status)(struct virtio_hw *hw);
 	void    (*set_status)(struct virtio_hw *hw, uint8_t status);
@@ -225,16 +238,20 @@ struct virtio_hw {
 	uint64_t    req_guest_features;
 	uint64_t    guest_features;
 	uint32_t    max_queue_pairs;
-	uint16_t    started;
+	bool        started;
 	uint16_t	max_mtu;
 	uint16_t    vtnet_hdr_size;
 	uint8_t	    vlan_strip;
 	uint8_t	    use_msix;
 	uint8_t     modern;
 	uint8_t     use_simple_rx;
-	uint8_t     use_simple_tx;
+	uint8_t     use_inorder_rx;
+	uint8_t     use_inorder_tx;
+	uint8_t     weak_barriers;
+	bool        has_tx_offload;
+	bool        has_rx_offload;
 	uint16_t    port_id;
-	uint8_t     mac_addr[ETHER_ADDR_LEN];
+	uint8_t     mac_addr[RTE_ETHER_ADDR_LEN];
 	uint32_t    notify_off_multiplier;
 	uint8_t     *isr;
 	uint16_t    *notify_base;
@@ -248,6 +265,7 @@ struct virtio_hw {
 	 */
 	rte_spinlock_t state_lock;
 	struct rte_mbuf **inject_pkts;
+	bool        opened;
 
 	struct virtqueue **vqs;
 };
@@ -276,7 +294,7 @@ extern struct virtio_hw_internal virtio_hw_internal[RTE_MAX_ETHPORTS];
  */
 struct virtio_net_config {
 	/* The config defining mac address (if VIRTIO_NET_F_MAC) */
-	uint8_t    mac[ETHER_ADDR_LEN];
+	uint8_t    mac[RTE_ETHER_ADDR_LEN];
 	/* See VIRTIO_NET_F_STATUS and VIRTIO_NET_S_* above */
 	uint16_t   status;
 	uint16_t   max_virtqueue_pairs;
@@ -302,6 +320,12 @@ static inline int
 vtpci_with_feature(struct virtio_hw *hw, uint64_t bit)
 {
 	return (hw->guest_features & (1ULL << bit)) != 0;
+}
+
+static inline int
+vtpci_packed_queue(struct virtio_hw *hw)
+{
+	return vtpci_with_feature(hw, VIRTIO_F_RING_PACKED);
 }
 
 /*

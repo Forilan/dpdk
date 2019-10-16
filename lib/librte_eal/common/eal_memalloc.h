@@ -8,7 +8,6 @@
 #include <stdbool.h>
 
 #include <rte_memory.h>
-#include <rte_eal_memconfig.h>
 
 /*
  * Allocate segment of specified page size.
@@ -57,10 +56,10 @@ eal_memalloc_sync_with_primary(void);
 
 int
 eal_memalloc_mem_event_callback_register(const char *name,
-		rte_mem_event_callback_t clb);
+		rte_mem_event_callback_t clb, void *arg);
 
 int
-eal_memalloc_mem_event_callback_unregister(const char *name);
+eal_memalloc_mem_event_callback_unregister(const char *name, void *arg);
 
 void
 eal_memalloc_mem_event_notify(enum rte_mem_event event, const void *start,
@@ -75,5 +74,23 @@ eal_memalloc_mem_alloc_validator_unregister(const char *name, int socket_id);
 
 int
 eal_memalloc_mem_alloc_validate(int socket_id, size_t new_len);
+
+/* returns fd or -errno */
+int
+eal_memalloc_get_seg_fd(int list_idx, int seg_idx);
+
+/* returns 0 or -errno */
+int
+eal_memalloc_set_seg_fd(int list_idx, int seg_idx, int fd);
+
+/* returns 0 or -errno */
+int
+eal_memalloc_set_seg_list_fd(int list_idx, int fd);
+
+int
+eal_memalloc_get_seg_fd_offset(int list_idx, int seg_idx, size_t *offset);
+
+int
+eal_memalloc_init(void);
 
 #endif /* EAL_MEMALLOC_H */

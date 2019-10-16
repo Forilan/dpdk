@@ -71,12 +71,24 @@ ifeq ($(shell test $(GCC_VERSION) -lt 47 && echo 1), 1)
 WERROR_FLAGS += -Wno-uninitialized
 endif
 
+HOST_WERROR_FLAGS := $(WERROR_FLAGS)
+
+ifeq ($(shell test $(HOST_GCC_VERSION) -gt 70 && echo 1), 1)
+# Tell GCC only to error for switch fallthroughs without a suitable comment
+HOST_WERROR_FLAGS += -Wimplicit-fallthrough=2
+# Ignore errors for snprintf truncation
+HOST_WERROR_FLAGS += -Wno-format-truncation
+endif
+
 ifeq ($(shell test $(GCC_VERSION) -gt 70 && echo 1), 1)
 # Tell GCC only to error for switch fallthroughs without a suitable comment
 WERROR_FLAGS += -Wimplicit-fallthrough=2
 # Ignore errors for snprintf truncation
 WERROR_FLAGS += -Wno-format-truncation
 endif
+
+# disable packed member unalign warnings
+WERROR_FLAGS += -Wno-address-of-packed-member
 
 export CC AS AR LD OBJCOPY OBJDUMP STRIP READELF
 export TOOLCHAIN_CFLAGS TOOLCHAIN_LDFLAGS TOOLCHAIN_ASFLAGS

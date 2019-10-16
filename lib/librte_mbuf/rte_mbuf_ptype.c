@@ -19,6 +19,8 @@ const char *rte_get_ptype_l2_name(uint32_t ptype)
 	case RTE_PTYPE_L2_ETHER_VLAN: return "L2_ETHER_VLAN";
 	case RTE_PTYPE_L2_ETHER_QINQ: return "L2_ETHER_QINQ";
 	case RTE_PTYPE_L2_ETHER_PPPOE: return "L2_ETHER_PPPOE";
+	case RTE_PTYPE_L2_ETHER_FCOE: return "L2_ETHER_FCOE";
+	case RTE_PTYPE_L2_ETHER_MPLS: return "L2_ETHER_MPLS";
 	default: return "L2_UNKNOWN";
 	}
 }
@@ -47,6 +49,7 @@ const char *rte_get_ptype_l4_name(uint32_t ptype)
 	case RTE_PTYPE_L4_SCTP: return "L4_SCTP";
 	case RTE_PTYPE_L4_ICMP: return "L4_ICMP";
 	case RTE_PTYPE_L4_NONFRAG: return "L4_NONFRAG";
+	case RTE_PTYPE_L4_IGMP: return "L4_IGMP";
 	default: return "L4_UNKNOWN";
 	}
 }
@@ -65,6 +68,9 @@ const char *rte_get_ptype_tunnel_name(uint32_t ptype)
 	case RTE_PTYPE_TUNNEL_GTPU: return "TUNNEL_GTPU";
 	case RTE_PTYPE_TUNNEL_ESP: return "TUNNEL_ESP";
 	case RTE_PTYPE_TUNNEL_L2TP: return "TUNNEL_L2TP";
+	case RTE_PTYPE_TUNNEL_VXLAN_GPE: return "TUNNEL_VXLAN_GPE";
+	case RTE_PTYPE_TUNNEL_MPLS_IN_UDP: return "TUNNEL_MPLS_IN_UDP";
+	case RTE_PTYPE_TUNNEL_MPLS_IN_GRE: return "TUNNEL_MPLS_IN_GRE";
 	default: return "TUNNEL_UNKNOWN";
 	}
 }

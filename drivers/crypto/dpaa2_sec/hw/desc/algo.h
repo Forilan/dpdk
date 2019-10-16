@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
  *
  * Copyright 2008-2016 Freescale Semiconductor Inc.
- * Copyright 2016 NXP
+ * Copyright 2016,2019 NXP
  *
  */
 
@@ -18,37 +18,25 @@
  */
 
 /**
- * cnstr_shdsc_snow_f8 - SNOW/f8 (UEA2) as a shared descriptor
+ * cnstr_shdsc_zuce - ZUC Enc (EEA2) as a shared descriptor
  * @descbuf: pointer to descriptor-under-construction buffer
  * @ps: if 36/40bit addressing is desired, this parameter must be true
  * @swap: must be true when core endianness doesn't match SEC endianness
  * @cipherdata: pointer to block cipher transform definitions
  * @dir: Cipher direction (DIR_ENC/DIR_DEC)
- * @count: UEA2 count value (32 bits)
- * @bearer: UEA2 bearer ID (5 bits)
- * @direction: UEA2 direction (1 bit)
  *
  * Return: size of descriptor written in words or negative number on error
  */
 static inline int
-cnstr_shdsc_snow_f8(uint32_t *descbuf, bool ps, bool swap,
-		    struct alginfo *cipherdata, uint8_t dir,
-		    uint32_t count, uint8_t bearer, uint8_t direction)
+cnstr_shdsc_zuce(uint32_t *descbuf, bool ps, bool swap,
+		    struct alginfo *cipherdata, uint8_t dir)
 {
 	struct program prg;
 	struct program *p = &prg;
-	uint32_t ct = count;
-	uint8_t br = bearer;
-	uint8_t dr = direction;
-	uint32_t context[2] = {ct, (br << 27) | (dr << 26)};
 
 	PROGRAM_CNTXT_INIT(p, descbuf, 0);
-	if (swap) {
+	if (swap)
 		PROGRAM_SET_BSWAP(p);
-
-		context[0] = swab32(context[0]);
-		context[1] = swab32(context[1]);
-	}
 
 	if (ps)
 		PROGRAM_SET_36BIT_ADDR(p);
@@ -56,15 +44,176 @@ cnstr_shdsc_snow_f8(uint32_t *descbuf, bool ps, bool swap,
 
 	KEY(p, KEY1, cipherdata->key_enc_flags, cipherdata->key,
 	    cipherdata->keylen, INLINE_KEY(cipherdata));
+
+	SEQLOAD(p, CONTEXT1, 0, 16, 0);
+
 	MATHB(p, SEQINSZ, SUB, MATH2, VSEQINSZ, 4, 0);
 	MATHB(p, SEQINSZ, SUB, MATH2, VSEQOUTSZ, 4, 0);
-	ALG_OPERATION(p, OP_ALG_ALGSEL_SNOW_F8, OP_ALG_AAI_F8,
+	ALG_OPERATION(p, OP_ALG_ALGSEL_ZUCE, OP_ALG_AAI_F8,
 		      OP_ALG_AS_INITFINAL, 0, dir);
-	LOAD(p, (uintptr_t)context, CONTEXT1, 0, 8, IMMED | COPY);
 	SEQFIFOLOAD(p, MSG1, 0, VLF | LAST1);
 	SEQFIFOSTORE(p, MSG, 0, 0, VLF);
 
 	return PROGRAM_FINALIZE(p);
+}
+
+/**
+ * cnstr_shdsc_zuca - ZUC Auth (EIA2) as a shared descriptor
+ * @descbuf: pointer to descriptor-under-construction buffer
+ * @ps: if 36/40bit addressing is desired, this parameter must be true
+ * @swap: must be true when core endianness doesn't match SEC endianness
+ * @authdata: pointer to authentication transform definitions
+ * @chk_icv: Whether to compare and verify ICV (true/false)
+ * @authlen: size of digest
+ *
+ * The IV prepended before hmac payload must be 8 bytes consisting
+ * of COUNT||BEAERER||DIR. The COUNT is of 32-bits, bearer is of 5 bits and
+ * direction is of 1 bit - totalling to 38 bits.
+ *
+ * Return: size of descriptor written in words or negative number on error
+ */
+static inline int
+cnstr_shdsc_zuca(uint32_t *descbuf, bool ps, bool swap,
+		 struct alginfo *authdata, uint8_t chk_icv,
+		 uint32_t authlen)
+{
+	struct program prg;
+	struct program *p = &prg;
+	int dir = chk_icv ? DIR_DEC : DIR_ENC;
+
+	PROGRAM_CNTXT_INIT(p, descbuf, 0);
+	if (swap)
+		PROGRAM_SET_BSWAP(p);
+
+	if (ps)
+		PROGRAM_SET_36BIT_ADDR(p);
+	SHR_HDR(p, SHR_ALWAYS, 1, 0);
+
+	KEY(p, KEY2, authdata->key_enc_flags, authdata->key,
+	    authdata->keylen, INLINE_KEY(authdata));
+
+	SEQLOAD(p, CONTEXT2, 0, 8, 0);
+
+	if (chk_icv == ICV_CHECK_ENABLE)
+		MATHB(p, SEQINSZ, SUB, authlen, VSEQINSZ, 4, IMMED2);
+	else
+		MATHB(p, SEQINSZ, SUB, ZERO, VSEQINSZ, 4, 0);
+
+	ALG_OPERATION(p, OP_ALG_ALGSEL_ZUCA, OP_ALG_AAI_F9,
+		      OP_ALG_AS_INITFINAL, chk_icv, dir);
+
+	SEQFIFOLOAD(p, MSG2, 0, VLF | CLASS2 | LAST2);
+
+	if (chk_icv == ICV_CHECK_ENABLE)
+		SEQFIFOLOAD(p, ICV2, authlen, LAST2);
+	else
+		/* Save lower half of MAC out into a 32-bit sequence */
+		SEQSTORE(p, CONTEXT2, 0, authlen, 0);
+
+	return PROGRAM_FINALIZE(p);
+}
+
+
+/**
+ * cnstr_shdsc_snow_f8 - SNOW/f8 (UEA2) as a shared descriptor
+ * @descbuf: pointer to descriptor-under-construction buffer
+ * @ps: if 36/40bit addressing is desired, this parameter must be true
+ * @swap: must be true when core endianness doesn't match SEC endianness
+ * @cipherdata: pointer to block cipher transform definitions
+ * @dir: Cipher direction (DIR_ENC/DIR_DEC)
+ *
+ * Return: size of descriptor written in words or negative number on error
+ */
+static inline int
+cnstr_shdsc_snow_f8(uint32_t *descbuf, bool ps, bool swap,
+		    struct alginfo *cipherdata, uint8_t dir)
+{
+	struct program prg;
+	struct program *p = &prg;
+
+	PROGRAM_CNTXT_INIT(p, descbuf, 0);
+	if (swap)
+		PROGRAM_SET_BSWAP(p);
+
+	if (ps)
+		PROGRAM_SET_36BIT_ADDR(p);
+	SHR_HDR(p, SHR_ALWAYS, 1, 0);
+
+	KEY(p, KEY1, cipherdata->key_enc_flags, cipherdata->key,
+	    cipherdata->keylen, INLINE_KEY(cipherdata));
+
+	SEQLOAD(p, CONTEXT1, 0, 16, 0);
+
+	MATHB(p, SEQINSZ, SUB, MATH2, VSEQINSZ, 4, 0);
+	MATHB(p, SEQINSZ, SUB, MATH2, VSEQOUTSZ, 4, 0);
+	ALG_OPERATION(p, OP_ALG_ALGSEL_SNOW_F8, OP_ALG_AAI_F8,
+		      OP_ALG_AS_INITFINAL, 0, dir);
+	SEQFIFOLOAD(p, MSG1, 0, VLF | LAST1);
+	SEQFIFOSTORE(p, MSG, 0, 0, VLF);
+
+	return PROGRAM_FINALIZE(p);
+}
+
+/**
+ * conv_to_zuc_eia_iv - ZUCA IV 16-byte to 8-byte convert
+ * function for 3G.
+ * @iv: 16 bytes of original IV data.
+ *
+ * From the original IV, we extract 32-bits of COUNT,
+ * 5-bits of bearer and 1-bit of direction.
+ * Refer to CAAM refman for ZUCA IV format. Then these values are
+ * appended as COUNT||BEARER||DIR continuously to make a 38-bit block.
+ * This 38-bit block is copied left justified into 8-byte array used as
+ * converted IV.
+ *
+ * Return: 8-bytes of IV data as understood by SEC HW
+ */
+
+static inline uint8_t *conv_to_zuc_eia_iv(uint8_t *iv)
+{
+	uint8_t dir = (iv[14] & 0x80) ? 4 : 0;
+
+	iv[12] = iv[4] | dir;
+	iv[13] = 0;
+	iv[14] = 0;
+	iv[15] = 0;
+
+	iv[8] = iv[0];
+	iv[9] = iv[1];
+	iv[10] = iv[2];
+	iv[11] = iv[3];
+
+	return (iv + 8);
+}
+
+/**
+ * conv_to_snow_f9_iv - SNOW/f9 (UIA2) IV 16 byte to 12 byte convert
+ * function for 3G.
+ * @iv: 16 byte original IV data
+ *
+ * Return: 12 byte IV data as understood by SEC HW
+ */
+
+static inline uint8_t *conv_to_snow_f9_iv(uint8_t *iv)
+{
+	uint8_t temp = (iv[8] == iv[0]) ? 0 : 4;
+
+	iv[12] = iv[4];
+	iv[13] = iv[5];
+	iv[14] = iv[6];
+	iv[15] = iv[7];
+
+	iv[8] = temp;
+	iv[9] = 0x00;
+	iv[10] = 0x00;
+	iv[11] = 0x00;
+
+	iv[4] = iv[0];
+	iv[5] = iv[1];
+	iv[6] = iv[2];
+	iv[7] = iv[3];
+
+	return (iv + 4);
 }
 
 /**
@@ -73,49 +222,49 @@ cnstr_shdsc_snow_f8(uint32_t *descbuf, bool ps, bool swap,
  * @ps: if 36/40bit addressing is desired, this parameter must be true
  * @swap: must be true when core endianness doesn't match SEC endianness
  * @authdata: pointer to authentication transform definitions
- * @dir: cipher direction (DIR_ENC/DIR_DEC)
- * @count: UEA2 count value (32 bits)
- * @fresh: UEA2 fresh value ID (32 bits)
- * @direction: UEA2 direction (1 bit)
- * @datalen: size of data
+ * @chk_icv: check or generate ICV value
+ * @authlen: size of digest
  *
  * Return: size of descriptor written in words or negative number on error
  */
 static inline int
 cnstr_shdsc_snow_f9(uint32_t *descbuf, bool ps, bool swap,
-		    struct alginfo *authdata, uint8_t dir, uint32_t count,
-		    uint32_t fresh, uint8_t direction, uint32_t datalen)
+		    struct alginfo *authdata, uint8_t chk_icv,
+		    uint32_t authlen)
 {
 	struct program prg;
 	struct program *p = &prg;
-	uint64_t ct = count;
-	uint64_t fr = fresh;
-	uint64_t dr = direction;
-	uint64_t context[2];
-
-	context[0] = (ct << 32) | (dr << 26);
-	context[1] = fr << 32;
+	int dir = chk_icv ? DIR_DEC : DIR_ENC;
 
 	PROGRAM_CNTXT_INIT(p, descbuf, 0);
-	if (swap) {
+	if (swap)
 		PROGRAM_SET_BSWAP(p);
 
-		context[0] = swab64(context[0]);
-		context[1] = swab64(context[1]);
-	}
 	if (ps)
 		PROGRAM_SET_36BIT_ADDR(p);
+
 	SHR_HDR(p, SHR_ALWAYS, 1, 0);
 
-	KEY(p, KEY2, authdata->key_enc_flags, authdata->key, authdata->keylen,
-	    INLINE_KEY(authdata));
-	MATHB(p, SEQINSZ, SUB, MATH2, VSEQINSZ, 4, 0);
+	KEY(p, KEY2, authdata->key_enc_flags, authdata->key,
+	    authdata->keylen, INLINE_KEY(authdata));
+
+	SEQLOAD(p, CONTEXT2, 0, 12, 0);
+
+	if (chk_icv == ICV_CHECK_ENABLE)
+		MATHB(p, SEQINSZ, SUB, authlen, VSEQINSZ, 4, IMMED2);
+	else
+		MATHB(p, SEQINSZ, SUB, ZERO, VSEQINSZ, 4, 0);
+
 	ALG_OPERATION(p, OP_ALG_ALGSEL_SNOW_F9, OP_ALG_AAI_F9,
-		      OP_ALG_AS_INITFINAL, 0, dir);
-	LOAD(p, (uintptr_t)context, CONTEXT2, 0, 16, IMMED | COPY);
-	SEQFIFOLOAD(p, BIT_DATA, datalen, CLASS2 | LAST2);
-	/* Save lower half of MAC out into a 32-bit sequence */
-	SEQSTORE(p, CONTEXT2, 0, 4, 0);
+		      OP_ALG_AS_INITFINAL, chk_icv, dir);
+
+	SEQFIFOLOAD(p, MSG2, 0, VLF | CLASS2 | LAST2);
+
+	if (chk_icv == ICV_CHECK_ENABLE)
+		SEQFIFOLOAD(p, ICV2, authlen, LAST2);
+	else
+		/* Save lower half of MAC out into a 32-bit sequence */
+		SEQSTORE(p, CONTEXT2, 0, authlen, 0);
 
 	return PROGRAM_FINALIZE(p);
 }
@@ -125,6 +274,7 @@ cnstr_shdsc_snow_f9(uint32_t *descbuf, bool ps, bool swap,
  * @descbuf: pointer to descriptor-under-construction buffer
  * @ps: if 36/40bit addressing is desired, this parameter must be true
  * @swap: must be true when core endianness doesn't match SEC endianness
+ * @share: sharing type of shared descriptor
  * @cipherdata: pointer to block cipher transform definitions
  *              Valid algorithm values one of OP_ALG_ALGSEL_* {DES, 3DES, AES}
  *              Valid modes for:
@@ -138,6 +288,7 @@ cnstr_shdsc_snow_f9(uint32_t *descbuf, bool ps, bool swap,
  */
 static inline int
 cnstr_shdsc_blkcipher(uint32_t *descbuf, bool ps, bool swap,
+		      enum rta_share_type share,
 		      struct alginfo *cipherdata, uint8_t *iv,
 		      uint32_t ivlen, uint8_t dir)
 {
@@ -157,7 +308,7 @@ cnstr_shdsc_blkcipher(uint32_t *descbuf, bool ps, bool swap,
 		PROGRAM_SET_BSWAP(p);
 	if (ps)
 		PROGRAM_SET_36BIT_ADDR(p);
-	SHR_HDR(p, SHR_SERIAL, 1, SC);
+	SHR_HDR(p, share, 1, SC);
 
 	pkeyjmp = JUMP(p, keyjmp, LOCAL_JUMP, ALL_TRUE, SHRD);
 	/* Insert Key */
@@ -211,6 +362,7 @@ cnstr_shdsc_blkcipher(uint32_t *descbuf, bool ps, bool swap,
  * @descbuf: pointer to descriptor-under-construction buffer
  * @ps: if 36/40bit addressing is desired, this parameter must be true
  * @swap: must be true when core endianness doesn't match SEC endianness
+ * @share: sharing type of shared descriptor
  * @authdata: pointer to authentication transform definitions;
  *            message digest algorithm: OP_ALG_ALGSEL_MD5/ SHA1-512.
  * @do_icv: 0 if ICV checking is not desired, any other value if ICV checking
@@ -225,6 +377,7 @@ cnstr_shdsc_blkcipher(uint32_t *descbuf, bool ps, bool swap,
  */
 static inline int
 cnstr_shdsc_hmac(uint32_t *descbuf, bool ps, bool swap,
+		 enum rta_share_type share,
 		 struct alginfo *authdata, uint8_t do_icv,
 		 uint8_t trunc_len)
 {
@@ -270,7 +423,7 @@ cnstr_shdsc_hmac(uint32_t *descbuf, bool ps, bool swap,
 		PROGRAM_SET_BSWAP(p);
 	if (ps)
 		PROGRAM_SET_36BIT_ADDR(p);
-	SHR_HDR(p, SHR_SERIAL, 1, SC);
+	SHR_HDR(p, share, 1, SC);
 
 	pkeyjmp = JUMP(p, keyjmp, LOCAL_JUMP, ALL_TRUE, SHRD);
 	KEY(p, KEY2, authdata->key_enc_flags, authdata->key, authdata->keylen,
@@ -324,34 +477,25 @@ cnstr_shdsc_hmac(uint32_t *descbuf, bool ps, bool swap,
  */
 static inline int
 cnstr_shdsc_kasumi_f8(uint32_t *descbuf, bool ps, bool swap,
-		      struct alginfo *cipherdata, uint8_t dir,
-		      uint32_t count, uint8_t bearer, uint8_t direction)
+		      struct alginfo *cipherdata, uint8_t dir)
 {
 	struct program prg;
 	struct program *p = &prg;
-	uint64_t ct = count;
-	uint64_t br = bearer;
-	uint64_t dr = direction;
-	uint32_t context[2] = { ct, (br << 27) | (dr << 26) };
 
 	PROGRAM_CNTXT_INIT(p, descbuf, 0);
-	if (swap) {
+	if (swap)
 		PROGRAM_SET_BSWAP(p);
-
-		context[0] = swab32(context[0]);
-		context[1] = swab32(context[1]);
-	}
 	if (ps)
 		PROGRAM_SET_36BIT_ADDR(p);
 	SHR_HDR(p, SHR_ALWAYS, 1, 0);
 
 	KEY(p, KEY1, cipherdata->key_enc_flags, cipherdata->key,
 	    cipherdata->keylen, INLINE_KEY(cipherdata));
+	SEQLOAD(p, CONTEXT1, 0, 8, 0);
 	MATHB(p, SEQINSZ, SUB, MATH2, VSEQINSZ, 4, 0);
 	MATHB(p, SEQINSZ, SUB, MATH2, VSEQOUTSZ, 4, 0);
 	ALG_OPERATION(p, OP_ALG_ALGSEL_KASUMI, OP_ALG_AAI_F8,
 		      OP_ALG_AS_INITFINAL, 0, dir);
-	LOAD(p, (uintptr_t)context, CONTEXT1, 0, 8, IMMED | COPY);
 	SEQFIFOLOAD(p, MSG1, 0, VLF | LAST1);
 	SEQFIFOSTORE(p, MSG, 0, 0, VLF);
 
@@ -365,46 +509,78 @@ cnstr_shdsc_kasumi_f8(uint32_t *descbuf, bool ps, bool swap,
  * @ps: if 36/40bit addressing is desired, this parameter must be true
  * @swap: must be true when core endianness doesn't match SEC endianness
  * @authdata: pointer to authentication transform definitions
- * @dir: cipher direction (DIR_ENC/DIR_DEC)
- * @count: count value (32 bits)
- * @fresh: fresh value ID (32 bits)
- * @direction: direction (1 bit)
- * @datalen: size of data
+ * @chk_icv: check or generate ICV value
+ * @authlen: size of digest
  *
  * Return: size of descriptor written in words or negative number on error
  */
 static inline int
 cnstr_shdsc_kasumi_f9(uint32_t *descbuf, bool ps, bool swap,
-		      struct alginfo *authdata, uint8_t dir,
-		      uint32_t count, uint32_t fresh, uint8_t direction,
-		      uint32_t datalen)
+		    struct alginfo *authdata, uint8_t chk_icv,
+		    uint32_t authlen)
 {
 	struct program prg;
 	struct program *p = &prg;
-	uint16_t ctx_offset = 16;
-	uint32_t context[6] = {count, direction << 26, fresh, 0, 0, 0};
+	int dir = chk_icv ? DIR_DEC : DIR_ENC;
 
 	PROGRAM_CNTXT_INIT(p, descbuf, 0);
-	if (swap) {
+	if (swap)
 		PROGRAM_SET_BSWAP(p);
 
-		context[0] = swab32(context[0]);
-		context[1] = swab32(context[1]);
-		context[2] = swab32(context[2]);
-	}
 	if (ps)
 		PROGRAM_SET_36BIT_ADDR(p);
+
 	SHR_HDR(p, SHR_ALWAYS, 1, 0);
 
-	KEY(p, KEY1, authdata->key_enc_flags, authdata->key, authdata->keylen,
-	    INLINE_KEY(authdata));
-	MATHB(p, SEQINSZ, SUB, MATH2, VSEQINSZ, 4, 0);
+	KEY(p, KEY2, authdata->key_enc_flags, authdata->key,
+	    authdata->keylen, INLINE_KEY(authdata));
+
+	SEQLOAD(p, CONTEXT2, 0, 12, 0);
+
+	if (chk_icv == ICV_CHECK_ENABLE)
+		MATHB(p, SEQINSZ, SUB, authlen, VSEQINSZ, 4, IMMED2);
+	else
+		MATHB(p, SEQINSZ, SUB, ZERO, VSEQINSZ, 4, 0);
+
 	ALG_OPERATION(p, OP_ALG_ALGSEL_KASUMI, OP_ALG_AAI_F9,
-		      OP_ALG_AS_INITFINAL, 0, dir);
-	LOAD(p, (uintptr_t)context, CONTEXT1, 0, 24, IMMED | COPY);
-	SEQFIFOLOAD(p, BIT_DATA, datalen, CLASS1 | LAST1);
-	/* Save output MAC of DWORD 2 into a 32-bit sequence */
-	SEQSTORE(p, CONTEXT1, ctx_offset, 4, 0);
+		      OP_ALG_AS_INITFINAL, chk_icv, dir);
+
+	SEQFIFOLOAD(p, MSG2, 0, VLF | CLASS2 | LAST2);
+
+	if (chk_icv == ICV_CHECK_ENABLE)
+		SEQFIFOLOAD(p, ICV2, authlen, LAST2);
+	else
+		/* Save lower half of MAC out into a 32-bit sequence */
+		SEQSTORE(p, CONTEXT2, 0, authlen, 0);
+
+	return PROGRAM_FINALIZE(p);
+}
+
+/**
+ * cnstr_shdsc_crc - CRC32 Accelerator (IEEE 802 CRC32 protocol mode)
+ * @descbuf: pointer to descriptor-under-construction buffer
+ * @swap: must be true when core endianness doesn't match SEC endianness
+ *
+ * Return: size of descriptor written in words or negative number on error
+ */
+static inline int
+cnstr_shdsc_crc(uint32_t *descbuf, bool swap)
+{
+	struct program prg;
+	struct program *p = &prg;
+
+	PROGRAM_CNTXT_INIT(p, descbuf, 0);
+	if (swap)
+		PROGRAM_SET_BSWAP(p);
+
+	SHR_HDR(p, SHR_ALWAYS, 1, 0);
+
+	MATHB(p, SEQINSZ, SUB, MATH2, VSEQINSZ, 4, 0);
+	ALG_OPERATION(p, OP_ALG_ALGSEL_CRC,
+		      OP_ALG_AAI_802 | OP_ALG_AAI_DOC,
+		      OP_ALG_AS_FINALIZE, 0, DIR_ENC);
+	SEQFIFOLOAD(p, MSG2, 0, VLF | LAST2);
+	SEQSTORE(p, CONTEXT2, 0, 4, 0);
 
 	return PROGRAM_FINALIZE(p);
 }
@@ -414,6 +590,7 @@ cnstr_shdsc_kasumi_f9(uint32_t *descbuf, bool ps, bool swap,
  * @descbuf: pointer to descriptor-under-construction buffer
  * @ps: if 36/40bit addressing is desired, this parameter must be true
  * @swap: must be true when core endianness doesn't match SEC endianness
+ * @share: sharing type of shared descriptor
  * @cipherdata: pointer to block cipher transform definitions
  *		Valid algorithm values - OP_ALG_ALGSEL_AES ANDed with
  *		OP_ALG_AAI_GCM.
@@ -424,6 +601,7 @@ cnstr_shdsc_kasumi_f9(uint32_t *descbuf, bool ps, bool swap,
  */
 static inline int
 cnstr_shdsc_gcm_encap(uint32_t *descbuf, bool ps, bool swap,
+		      enum rta_share_type share,
 		      struct alginfo *cipherdata,
 		      uint32_t ivlen, uint32_t icvsize)
 {
@@ -446,7 +624,7 @@ cnstr_shdsc_gcm_encap(uint32_t *descbuf, bool ps, bool swap,
 	if (ps)
 		PROGRAM_SET_36BIT_ADDR(p);
 
-	SHR_HDR(p, SHR_SERIAL, 1, SC);
+	SHR_HDR(p, share, 1, SC);
 
 	pkeyjmp = JUMP(p, keyjmp, LOCAL_JUMP, ALL_TRUE, SELF | SHRD);
 	/* Insert Key */
@@ -527,6 +705,7 @@ cnstr_shdsc_gcm_encap(uint32_t *descbuf, bool ps, bool swap,
  * @descbuf: pointer to descriptor-under-construction buffer
  * @ps: if 36/40bit addressing is desired, this parameter must be true
  * @swap: must be true when core endianness doesn't match SEC endianness
+ * @share: sharing type of shared descriptor
  * @cipherdata: pointer to block cipher transform definitions
  *		Valid algorithm values - OP_ALG_ALGSEL_AES ANDed with
  *		OP_ALG_AAI_GCM.
@@ -536,6 +715,7 @@ cnstr_shdsc_gcm_encap(uint32_t *descbuf, bool ps, bool swap,
  */
 static inline int
 cnstr_shdsc_gcm_decap(uint32_t *descbuf, bool ps, bool swap,
+		      enum rta_share_type share,
 		      struct alginfo *cipherdata,
 		      uint32_t ivlen, uint32_t icvsize)
 {
@@ -556,7 +736,7 @@ cnstr_shdsc_gcm_decap(uint32_t *descbuf, bool ps, bool swap,
 	if (ps)
 		PROGRAM_SET_36BIT_ADDR(p);
 
-	SHR_HDR(p, SHR_SERIAL, 1, SC);
+	SHR_HDR(p, share, 1, SC);
 
 	pkeyjmp = JUMP(p, keyjmp, LOCAL_JUMP, ALL_TRUE, SELF | SHRD);
 	/* Insert Key */
@@ -610,35 +790,6 @@ cnstr_shdsc_gcm_decap(uint32_t *descbuf, bool ps, bool swap,
 	PATCH_JUMP(p, pkeyjmp, keyjmp);
 	PATCH_JUMP(p, pzeroassocjump1, zeroassocjump1);
 	PATCH_JUMP(p, pzeropayloadjump, zeropayloadjump);
-
-	return PROGRAM_FINALIZE(p);
-}
-
-/**
- * cnstr_shdsc_crc - CRC32 Accelerator (IEEE 802 CRC32 protocol mode)
- * @descbuf: pointer to descriptor-under-construction buffer
- * @swap: must be true when core endianness doesn't match SEC endianness
- *
- * Return: size of descriptor written in words or negative number on error
- */
-static inline int
-cnstr_shdsc_crc(uint32_t *descbuf, bool swap)
-{
-	struct program prg;
-	struct program *p = &prg;
-
-	PROGRAM_CNTXT_INIT(p, descbuf, 0);
-	if (swap)
-		PROGRAM_SET_BSWAP(p);
-
-	SHR_HDR(p, SHR_ALWAYS, 1, 0);
-
-	MATHB(p, SEQINSZ, SUB, MATH2, VSEQINSZ, 4, 0);
-	ALG_OPERATION(p, OP_ALG_ALGSEL_CRC,
-		      OP_ALG_AAI_802 | OP_ALG_AAI_DOC,
-		      OP_ALG_AS_FINALIZE, 0, DIR_ENC);
-	SEQFIFOLOAD(p, MSG2, 0, VLF | LAST2);
-	SEQSTORE(p, CONTEXT2, 0, 4, 0);
 
 	return PROGRAM_FINALIZE(p);
 }

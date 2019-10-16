@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2016-2017 Intel Corporation
+ * Copyright(c) 2016-2018 Intel Corporation
  */
 
 #ifndef _RTE_KASUMI_PMD_PRIVATE_H_
@@ -10,25 +10,13 @@
 #define CRYPTODEV_NAME_KASUMI_PMD	crypto_kasumi
 /**< KASUMI PMD device name */
 
-#define KASUMI_LOG_ERR(fmt, args...) \
-	RTE_LOG(ERR, CRYPTODEV, "[%s] %s() line %u: " fmt "\n",  \
-			RTE_STR(CRYPTODEV_NAME_KASUMI_PMD), \
-			__func__, __LINE__, ## args)
+/** KASUMI PMD LOGTYPE DRIVER */
+int kasumi_logtype_driver;
 
-#ifdef RTE_LIBRTE_KASUMI_DEBUG
-#define KASUMI_LOG_INFO(fmt, args...) \
-	RTE_LOG(INFO, CRYPTODEV, "[%s] %s() line %u: " fmt "\n", \
-			RTE_STR(CRYPTODEV_NAME_KASUMI_PMD), \
-			__func__, __LINE__, ## args)
-
-#define KASUMI_LOG_DBG(fmt, args...) \
-	RTE_LOG(DEBUG, CRYPTODEV, "[%s] %s() line %u: " fmt "\n", \
-			RTE_STR(CRYPTODEV_NAME_KASUMI_PMD), \
-			__func__, __LINE__, ## args)
-#else
-#define KASUMI_LOG_INFO(fmt, args...)
-#define KASUMI_LOG_DBG(fmt, args...)
-#endif
+#define KASUMI_LOG(level, fmt, ...)  \
+	rte_log(RTE_LOG_ ## level, kasumi_logtype_driver,  \
+			"%s() line %u: " fmt "\n", __func__, __LINE__,  \
+					## __VA_ARGS__)
 
 #define KASUMI_DIGEST_LENGTH 4
 
@@ -36,8 +24,6 @@
 struct kasumi_private {
 	unsigned max_nb_queue_pairs;
 	/**< Max number of queue pairs supported by device */
-	unsigned max_nb_sessions;
-	/**< Max number of sessions supported by device */
 };
 
 /** KASUMI buffer queue pair */
@@ -50,6 +36,8 @@ struct kasumi_qp {
 	/**< Ring for placing processed ops */
 	struct rte_mempool *sess_mp;
 	/**< Session Mempool */
+	struct rte_mempool *sess_mp_priv;
+	/**< Session Private Data Mempool */
 	struct rte_cryptodev_stats qp_stats;
 	/**< Queue pair statistics */
 	uint8_t temp_digest[KASUMI_DIGEST_LENGTH];

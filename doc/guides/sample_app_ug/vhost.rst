@@ -78,7 +78,7 @@ could be done by:
 .. code-block:: console
 
    modprobe uio_pci_generic
-   $RTE_SDK/usertools/dpdk-devbind.py -b=uio_pci_generic 0000:00:04.0
+   $RTE_SDK/usertools/dpdk-devbind.py -b uio_pci_generic 0000:00:04.0
 
 Then start testpmd for packet forwarding testing.
 
@@ -116,7 +116,7 @@ will create it. Put simply, it's the server to create the socket file.
 The vm2vm parameter sets the mode of packet switching between guests in
 the host.
 
-- 0 disables vm2vm, impling that VM's packets will always go to the NIC port.
+- 0 disables vm2vm, implying that VM's packets will always go to the NIC port.
 - 1 means a normal mac lookup packet routing.
 - 2 means hardware mode packet forwarding between guests, it allows packets
   go to the NIC port, hardware L2 switch will determine which guest the
@@ -148,7 +148,7 @@ default value is 15.
 
 **--dequeue-zero-copy**
 Dequeue zero copy will be enabled when this option is given. it is worth to
-note that if NIC is binded to driver with iommu enabled, dequeue zero copy
+note that if NIC is bound to driver with iommu enabled, dequeue zero copy
 cannot work at VM2NIC mode (vm2vm=0) due to currently we don't setup iommu
 dma mapping for guest memory.
 
@@ -157,6 +157,10 @@ VLAN strip option is removed, because different NICs have different behaviors
 when disabling VLAN strip. Such feature, which heavily depends on hardware,
 should be removed from this example to reduce confusion. Now, VLAN strip is
 enabled and cannot be disabled.
+
+**--builtin-net-driver**
+A very simple vhost-user net driver which demonstrates how to use the generic
+vhost APIs will be used when this option is given. It is disabled by default.
 
 Common Issues
 -------------
@@ -181,3 +185,19 @@ Common Issues
 * Failed to build DPDK in VM
 
   Make sure "-cpu host" QEMU option is given.
+
+* Device start fails if NIC's max queues > the default number of 128
+
+  mbuf pool size is dependent on the MAX_QUEUES configuration, if NIC's
+  max queue number is larger than 128, device start will fail due to
+  insufficient mbuf.
+
+  Change the default number to make it work as below, just set the number
+  according to the NIC's property. ::
+
+      make EXTRA_CFLAGS="-DMAX_QUEUES=320"
+
+* Option "builtin-net-driver" is incompatible with QEMU
+
+  QEMU vhost net device start will fail if protocol feature is not negotiated.
+  DPDK virtio-user pmd can be the replacement of QEMU.

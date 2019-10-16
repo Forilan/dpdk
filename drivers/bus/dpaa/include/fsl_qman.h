@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: (BSD-3-Clause OR GPL-2.0)
  *
  * Copyright 2008-2012 Freescale Semiconductor, Inc.
+ * Copyright 2019 NXP
  *
  */
 
@@ -284,20 +285,20 @@ static inline dma_addr_t qm_sg_addr(const struct qm_sg_entry *sg)
 	} while (0)
 
 /* See 1.5.8.1: "Enqueue Command" */
-struct qm_eqcr_entry {
+struct __rte_aligned(8) qm_eqcr_entry {
 	u8 __dont_write_directly__verb;
 	u8 dca;
 	u16 seqnum;
 	u32 orp;	/* 24-bit */
 	u32 fqid;	/* 24-bit */
 	u32 tag;
-	struct qm_fd fd;
+	struct qm_fd fd; /* this has alignment 8 */
 	u8 __reserved3[32];
 } __packed;
 
 
 /* "Frame Dequeue Response" */
-struct qm_dqrr_entry {
+struct __rte_aligned(8) qm_dqrr_entry {
 	u8 verb;
 	u8 stat;
 	u16 seqnum;	/* 15-bit */
@@ -305,7 +306,7 @@ struct qm_dqrr_entry {
 	u8 __reserved2[3];
 	u32 fqid;	/* 24-bit */
 	u32 contextB;
-	struct qm_fd fd;
+	struct qm_fd fd; /* this has alignment 8 */
 	u8 __reserved4[32];
 };
 
@@ -323,18 +324,19 @@ struct qm_dqrr_entry {
 /* "ERN Message Response" */
 /* "FQ State Change Notification" */
 struct qm_mr_entry {
-	u8 verb;
 	union {
 		struct {
+			u8 verb;
 			u8 dca;
 			u16 seqnum;
 			u8 rc;		/* Rejection Code */
 			u32 orp:24;
 			u32 fqid;	/* 24-bit */
 			u32 tag;
-			struct qm_fd fd;
-		} __packed ern;
+			struct qm_fd fd; /* this has alignment 8 */
+		} __packed __rte_aligned(8) ern;
 		struct {
+			u8 verb;
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 			u8 colour:2;	/* See QM_MR_DCERN_COLOUR_* */
 			u8 __reserved1:4;
@@ -349,18 +351,19 @@ struct qm_mr_entry {
 			u32 __reserved3:24;
 			u32 fqid;	/* 24-bit */
 			u32 tag;
-			struct qm_fd fd;
-		} __packed dcern;
+			struct qm_fd fd; /* this has alignment 8 */
+		} __packed __rte_aligned(8) dcern;
 		struct {
+			u8 verb;
 			u8 fqs;		/* Frame Queue Status */
 			u8 __reserved1[6];
 			u32 fqid;	/* 24-bit */
 			u32 contextB;
 			u8 __reserved2[16];
-		} __packed fq;		/* FQRN/FQRNI/FQRL/FQPN */
+		} __packed __rte_aligned(8) fq;	/* FQRN/FQRNI/FQRL/FQPN */
 	};
 	u8 __reserved2[32];
-} __packed;
+} __packed __rte_aligned(8);
 #define QM_MR_VERB_VBIT			0x80
 /*
  * ERNs originating from direct-connect portals ("dcern") use 0x20 as a verb
@@ -1212,9 +1215,13 @@ struct qman_fq {
 	struct qman_fq_cb cb;
 
 	u32 fqid_le;
+	u32 fqid;
+
+	int q_fd;
 	u16 ch_id;
 	u8 cgr_groupid;
-	u8 is_static;
+	u8 is_static:4;
+	u8 qp_initialized:4;
 
 	/* DPDK Interface */
 	void *dpaa_intf;
@@ -1222,15 +1229,16 @@ struct qman_fq {
 	struct rte_event ev;
 	/* affined portal in case of static queue */
 	struct qman_portal *qp;
+	struct dpaa_bp_info *bp_array;
 
 	volatile unsigned long flags;
 
 	enum qman_fq_state state;
-	u32 fqid;
 	spinlock_t fqlock;
 
 	struct rb_node node;
 #ifdef CONFIG_FSL_QMAN_FQ_LOOKUP
+	void **qman_fq_lookup_table;
 	u32 key;
 #endif
 };
@@ -1305,6 +1313,10 @@ struct qman_cgr {
 #define QMAN_CGR_FLAG_USE_INIT       0x00000001
 #define QMAN_CGR_MODE_FRAME          0x00000001
 
+#ifdef CONFIG_FSL_QMAN_FQ_LOOKUP
+void qman_set_fq_lookup_table(void **table);
+#endif
+
 /**
  * qman_get_portal_index - get portal configuration index
  */
@@ -1312,6 +1324,40 @@ int qman_get_portal_index(void);
 
 u32 qman_portal_dequeue(struct rte_event ev[], unsigned int poll_limit,
 			void **bufs);
+
+/**
+ * qman_irqsource_add - add processing sources to be interrupt-driven
+ * @bits: bitmask of QM_PIRQ_**I processing sources
+ *
+ * Adds processing sources that should be interrupt-driven (rather than
+ * processed via qman_poll_***() functions). Returns zero for success, or
+ * -EINVAL if the current CPU is sharing a portal hosted on another CPU.
+ */
+int qman_irqsource_add(u32 bits);
+
+/**
+ * qman_fq_portal_irqsource_add - samilar to qman_irqsource_add, but it
+ * takes portal (fq specific) as input rather than using the thread affined
+ * portal.
+ */
+int qman_fq_portal_irqsource_add(struct qman_portal *p, u32 bits);
+
+/**
+ * qman_irqsource_remove - remove processing sources from being interrupt-driven
+ * @bits: bitmask of QM_PIRQ_**I processing sources
+ *
+ * Removes processing sources from being interrupt-driven, so that they will
+ * instead be processed via qman_poll_***() functions. Returns zero for success,
+ * or -EINVAL if the current CPU is sharing a portal hosted on another CPU.
+ */
+int qman_irqsource_remove(u32 bits);
+
+/**
+ * qman_fq_portal_irqsource_remove - similar to qman_irqsource_remove, but it
+ * takes portal (fq specific) as input rather than using the thread affined
+ * portal.
+ */
+int qman_fq_portal_irqsource_remove(struct qman_portal *p, u32 bits);
 
 /**
  * qman_affine_channel - return the channel ID of an portal
@@ -1330,10 +1376,11 @@ unsigned int qman_portal_poll_rx(unsigned int poll_limit,
  * qman_set_vdq - Issue a volatile dequeue command
  * @fq: Frame Queue on which the volatile dequeue command is issued
  * @num: Number of Frames requested for volatile dequeue
+ * @vdqcr_flags: QM_VDQCR_EXACT flag to for VDQCR command
  *
  * This function will issue a volatile dequeue command to the QMAN.
  */
-int qman_set_vdq(struct qman_fq *fq, u16 num);
+int qman_set_vdq(struct qman_fq *fq, u16 num, uint32_t vdqcr_flags);
 
 /**
  * qman_dequeue - Get the DQRR entry after volatile dequeue command
@@ -1743,7 +1790,7 @@ int qman_enqueue_multi(struct qman_fq *fq, const struct qm_fd *fd, u32 *flags,
  */
 int
 qman_enqueue_multi_fq(struct qman_fq *fq[], const struct qm_fd *fd,
-		      int frames_to_send);
+		      u32 *flags, int frames_to_send);
 
 typedef int (*qman_cb_precommit) (void *arg);
 

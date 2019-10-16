@@ -204,6 +204,8 @@ ssows_flush_events(struct ssows *ws, uint8_t queue_id,
 	uint32_t reg_off;
 	struct rte_event ev;
 	uint64_t enable, aq_cnt = 1, cq_ds_cnt = 1;
+	uint64_t get_work0, get_work1;
+	uint64_t sched_type_queue;
 	uint8_t *base = ssovf_bar(OCTEONTX_SSO_GROUP, queue_id, 0);
 
 	enable = ssovf_read64(base + SSO_VHGRP_QCTL);
@@ -219,7 +221,20 @@ ssows_flush_events(struct ssows *ws, uint8_t queue_id,
 		cq_ds_cnt = ssovf_read64(base + SSO_VHGRP_INT_CNT);
 		/* Extract cq and ds count */
 		cq_ds_cnt &= 0x1FFF1FFF0000;
-		ssows_get_work(ws, &ev);
+
+		ssovf_load_pair(get_work0, get_work1, ws->base + reg_off);
+
+		sched_type_queue = (get_work0 >> 32) & 0xfff;
+		ws->cur_tt = sched_type_queue & 0x3;
+		ws->cur_grp = sched_type_queue >> 2;
+		sched_type_queue = sched_type_queue << 38;
+		ev.event = sched_type_queue | (get_work0 & 0xffffffff);
+		if (get_work1 && ev.event_type == RTE_EVENT_TYPE_ETHDEV)
+			ev.mbuf = ssovf_octeontx_wqe_to_pkt(get_work1,
+					(ev.event >> 20) & 0x7F);
+		else
+			ev.u64 = get_work1;
+
 		if (fn != NULL && ev.u64 != 0)
 			fn(arg, ev);
 	}
@@ -245,4 +260,48 @@ ssows_reset(struct ssows *ws)
 		if (tt == SSO_SYNC_ORDERED || tt == SSO_SYNC_ATOMIC)
 			ssows_swtag_untag(ws);
 	}
+}
+
+uint16_t
+sso_event_tx_adapter_enqueue(void *port,
+		struct rte_event ev[], uint16_t nb_events)
+{
+	uint16_t port_id;
+	uint16_t queue_id;
+	struct rte_mbuf *m;
+	struct rte_eth_dev *ethdev;
+	struct ssows *ws = port;
+	struct octeontx_txq *txq;
+	octeontx_dq_t *dq;
+
+	RTE_SET_USED(nb_events);
+	switch (ev->sched_type) {
+	case SSO_SYNC_ORDERED:
+		ssows_swtag_norm(ws, ev->event, SSO_SYNC_ATOMIC);
+		rte_cio_wmb();
+		ssows_swtag_wait(ws);
+		break;
+	case SSO_SYNC_UNTAGGED:
+		ssows_swtag_full(ws, ev->u64, ev->event, SSO_SYNC_ATOMIC,
+				ev->queue_id);
+		rte_cio_wmb();
+		ssows_swtag_wait(ws);
+		break;
+	case SSO_SYNC_ATOMIC:
+		rte_cio_wmb();
+		break;
+	}
+
+	m = ev[0].mbuf;
+	port_id = m->port;
+	queue_id = rte_event_eth_tx_adapter_txq_get(m);
+	ethdev = &rte_eth_devices[port_id];
+	txq = ethdev->data->tx_queues[queue_id];
+	dq = &txq->dq;
+
+	if (__octeontx_xmit_pkts(dq->lmtline_va, dq->ioreg_va, dq->fc_status_va,
+				m) < 0)
+		return 0;
+
+	return 1;
 }

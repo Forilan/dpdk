@@ -78,10 +78,22 @@ Supported DPAA SoCs
 * LS1046A/LS1026A
 * LS1043A/LS1023A
 
+Whitelisting & Blacklisting
+---------------------------
+
+For blacklisting a DPAA device, following commands can be used.
+
+ .. code-block:: console
+
+    <dpdk app> <EAL args> -b "dpaa:dpaa_sec-X" -- ...
+    e.g. "dpaa:dpaa_sec-1"
+
+    or to disable all 4 SEC devices
+    -b "dpaa:dpaa_sec-1"  -b "dpaa:dpaa_sec-2" -b "dpaa:dpaa_sec-3" -b "dpaa:dpaa_sec-4"
+
 Limitations
 -----------
 
-* Chained mbufs are not supported.
 * Hash followed by Cipher mode is not supported
 * Only supports the session-oriented API implementation (session-less APIs are not supported).
 
@@ -89,32 +101,11 @@ Prerequisites
 -------------
 
 DPAA_SEC driver has similar pre-requisites as described in :ref:`dpaa_overview`.
-The following dependencies are not part of DPDK and must be installed separately:
 
-* **NXP Linux SDK**
+See :doc:`../platform/dpaa` for setup information
 
-  NXP Linux software development kit (SDK) includes support for the family
-  of QorIQ® ARM-Architecture-based system on chip (SoC) processors
-  and corresponding boards.
 
-  It includes the Linux board support packages (BSPs) for NXP SoCs,
-  a fully operational tool chain, kernel and board specific modules.
-
-  SDK and related information can be obtained from:  `NXP QorIQ SDK  <http://www.nxp.com/products/software-and-tools/run-time-software/linux-sdk/linux-sdk-for-qoriq-processors:SDKLINUX>`_.
-
-* **DPDK Extras Scripts**
-
-  DPAA based resources can be configured easily with the help of ready scripts
-  as provided in the DPDK Extras repository.
-
-  `DPDK Extras Scripts <https://github.com/qoriq-open-source/dpdk-extras>`_.
-
-Currently supported by DPDK:
-
-* NXP SDK **2.0+**.
-* Supported architectures:  **arm64 LE**.
-
-* Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
+- Follow the DPDK :ref:`Getting Started Guide for Linux <linux_gsg>` to setup the basic DPDK environment.
 
 Pre-Installation Configuration
 ------------------------------
@@ -132,11 +123,6 @@ Please note that enabling debugging options may affect system performance.
   By default it is only enabled in defconfig_arm64-dpaa-* config.
   Toggle compilation of the ``librte_pmd_dpaa_sec`` driver.
 
-* ``CONFIG_RTE_DPAA_SEC_PMD_MAX_NB_SESSIONS``
-  By default it is set as 2048 in defconfig_arm64-dpaa-* config.
-  It indicates Number of sessions to create in the session memory pool
-  on a single DPAA SEC device.
-
 Installations
 -------------
 To compile the DPAA_SEC PMD for Linux arm64 gcc target, run the
@@ -145,7 +131,7 @@ following ``make`` command:
 .. code-block:: console
 
    cd <DPDK-source-directory>
-   make config T=arm64-dpaa-linuxapp-gcc install
+   make config T=arm64-dpaa-linux-gcc install
 
 Enabling logs
 -------------
@@ -154,7 +140,7 @@ For enabling logs, use the following EAL parameter:
 
 .. code-block:: console
 
-   ./your_crypto_application <EAL args> --log-level=pmd.crypto.dpaa,<level>
+   ./your_crypto_application <EAL args> --log-level=pmd.crypto.dpaa:<level>
 
 Using ``pmd.crypto.dpaa`` as log matching criteria, all Crypto PMD logs can be
 enabled which are lower than logging ``level``.

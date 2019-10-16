@@ -53,7 +53,7 @@ struct rte_tailq_elem {
 };
 
 /**
- * Return the first tailq entry casted to the right struct.
+ * Return the first tailq entry cast to the right struct.
  */
 #define RTE_TAILQ_CAST(tailq_entry, struct_name) \
 	(struct struct_name *)&(tailq_entry)->tailq_head
@@ -119,8 +119,7 @@ struct rte_tailq_head *rte_eal_tailq_lookup(const char *name);
 int rte_eal_tailq_register(struct rte_tailq_elem *t);
 
 #define EAL_REGISTER_TAILQ(t) \
-RTE_INIT(tailqinitfn_ ##t); \
-static void tailqinitfn_ ##t(void) \
+RTE_INIT(tailqinitfn_ ##t) \
 { \
 	if (rte_eal_tailq_register(&t) < 0) \
 		rte_panic("Cannot initialize tailq: %s\n", t.name); \

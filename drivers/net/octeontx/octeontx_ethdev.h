@@ -21,6 +21,7 @@
 #include "base/octeontx_pkovf.h"
 #include "base/octeontx_io.h"
 
+#define OCTEONTX_PMD				net_octeontx
 #define OCTEONTX_VDEV_DEFAULT_MAX_NR_PORT	12
 #define OCTEONTX_VDEV_NR_PORT_ARG		("nr_port")
 #define OCTEONTX_MAX_NAME_LEN			32
@@ -28,7 +29,7 @@
 #define OCTEONTX_MAX_BGX_PORTS			4
 #define OCTEONTX_MAX_LMAC_PER_BGX		4
 
-#define OCTEONTX_RX_OFFLOADS			DEV_RX_OFFLOAD_CRC_STRIP
+#define OCTEONTX_RX_OFFLOADS			DEV_RX_OFFLOAD_CHECKSUM
 #define OCTEONTX_TX_OFFLOADS			DEV_TX_OFFLOAD_MT_LOCKFREE
 
 static inline struct octeontx_nic *
@@ -61,7 +62,7 @@ struct octeontx_nic {
 	uint8_t	duplex;
 	uint8_t speed;
 	uint16_t mtu;
-	uint8_t mac_addr[ETHER_ADDR_LEN];
+	uint8_t mac_addr[RTE_ETHER_ADDR_LEN];
 	/* Rx port parameters */
 	struct {
 		bool classifier_enable;

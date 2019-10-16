@@ -302,7 +302,7 @@ netmap_regif(struct nmreq *req, uint32_t idx, uint16_t port)
 	if (req->nr_ringid != 0)
 		return -EINVAL;
 
-	snprintf(nmif->ni_name, sizeof(nmif->ni_name), "%s", req->nr_name);
+	strlcpy(nmif->ni_name, req->nr_name, sizeof(nmif->ni_name));
 	nmif->ni_version  = req->nr_version;
 
 	/* Netmap uses ni_(r|t)x_rings + 1 */
@@ -684,7 +684,14 @@ rte_netmap_init_port(uint16_t portid, const struct rte_netmap_port_conf *conf)
 		return -EINVAL;
 	}
 
-	rte_eth_dev_info_get(portid, &dev_info);
+	ret = rte_eth_dev_info_get(portid, &dev_info);
+	if (ret != 0) {
+		RTE_LOG(ERR, USER1,
+			"Error during getting device (port %u) info: %s\n",
+			portid, strerror(-ret));
+		return ret;
+	}
+
 	if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		conf->eth_conf->txmode.offloads |=
 			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
@@ -708,7 +715,6 @@ rte_netmap_init_port(uint16_t portid, const struct rte_netmap_port_conf *conf)
 	rxq_conf = dev_info.default_rxconf;
 	rxq_conf.offloads = conf->eth_conf->rxmode.offloads;
 	txq_conf = dev_info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = conf->eth_conf->txmode.offloads;
 	for (i = 0; i < conf->nr_tx_rings; i++) {
 		ret = rte_eth_tx_queue_setup(portid, i, tx_slots,

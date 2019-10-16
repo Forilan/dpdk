@@ -5,8 +5,8 @@ ifeq ($(RTE_SDK),)
 $(error "Please define RTE_SDK environment variable")
 endif
 
-# Default target, can be overridden by command line or environment
-RTE_TARGET ?= x86_64-native-linuxapp-gcc
+# Default target, detect a build directory, by looking for a path with a .config
+RTE_TARGET ?= $(notdir $(abspath $(dir $(firstword $(wildcard $(RTE_SDK)/*/.config)))))
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
@@ -16,7 +16,6 @@ APP = qw
 # all source are stored in SRCS-y
 SRCS-y := args.c init.c main.c
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3 -DQW_SOFTWARE_FC
 CFLAGS += $(WERROR_FLAGS)
 

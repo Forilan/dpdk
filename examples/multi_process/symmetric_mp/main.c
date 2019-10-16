@@ -178,9 +178,7 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 			.rxmode = {
 				.mq_mode	= ETH_MQ_RX_RSS,
 				.split_hdr_size = 0,
-				.ignore_offload_bitfield = 1,
-				.offloads = (DEV_RX_OFFLOAD_CHECKSUM |
-					     DEV_RX_OFFLOAD_CRC_STRIP),
+				.offloads = DEV_RX_OFFLOAD_CHECKSUM,
 			},
 			.rx_adv_conf = {
 				.rss_conf = {
@@ -200,6 +198,7 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 	uint16_t q;
 	uint16_t nb_rxd = RX_RING_SIZE;
 	uint16_t nb_txd = TX_RING_SIZE;
+	uint64_t rss_hf_tmp;
 
 	if (rte_eal_process_type() == RTE_PROC_SECONDARY)
 		return 0;
@@ -210,12 +209,29 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 	printf("# Initialising port %u... ", port);
 	fflush(stdout);
 
-	rte_eth_dev_info_get(port, &info);
+	retval = rte_eth_dev_info_get(port, &info);
+	if (retval != 0) {
+		printf("Error during getting device (port %u) info: %s\n",
+				port, strerror(-retval));
+		return retval;
+	}
+
 	info.default_rxconf.rx_drop_en = 1;
 
 	if (info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 		port_conf.txmode.offloads |=
 			DEV_TX_OFFLOAD_MBUF_FAST_FREE;
+
+	rss_hf_tmp = port_conf.rx_adv_conf.rss_conf.rss_hf;
+	port_conf.rx_adv_conf.rss_conf.rss_hf &= info.flow_type_rss_offloads;
+	if (port_conf.rx_adv_conf.rss_conf.rss_hf != rss_hf_tmp) {
+		printf("Port %u modified RSS hash function based on hardware support,"
+			"requested:%#"PRIx64" configured:%#"PRIx64"\n",
+			port,
+			rss_hf_tmp,
+			port_conf.rx_adv_conf.rss_conf.rss_hf);
+	}
+
 	retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
 	if (retval < 0)
 		return retval;
@@ -236,7 +252,6 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 	}
 
 	txq_conf = info.default_txconf;
-	txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 	txq_conf.offloads = port_conf.txmode.offloads;
 	for (q = 0; q < tx_rings; q ++) {
 		retval = rte_eth_tx_queue_setup(port, q, nb_txd,
@@ -246,7 +261,9 @@ smp_port_init(uint16_t port, struct rte_mempool *mbuf_pool,
 			return retval;
 	}
 
-	rte_eth_promiscuous_enable(port);
+	retval = rte_eth_promiscuous_enable(port);
+	if (retval != 0)
+		return retval;
 
 	retval  = rte_eth_dev_start(port);
 	if (retval < 0)
@@ -262,7 +279,7 @@ static void
 assign_ports_to_cores(void)
 {
 
-	const unsigned lcores = rte_eal_get_configuration()->lcore_count;
+	const unsigned int lcores = rte_lcore_count();
 	const unsigned port_pairs = num_ports / 2;
 	const unsigned pairs_per_lcore = port_pairs / lcores;
 	unsigned extra_pairs = port_pairs % lcores;
@@ -347,6 +364,7 @@ check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 	uint16_t portid;
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
+	int ret;
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -356,7 +374,14 @@ check_all_ports_link_status(uint16_t port_num, uint32_t port_mask)
 			if ((port_mask & (1 << portid)) == 0)
 				continue;
 			memset(&link, 0, sizeof(link));
-			rte_eth_link_get_nowait(portid, &link);
+			ret = rte_eth_link_get_nowait(portid, &link);
+			if (ret < 0) {
+				all_ports_up = 0;
+				if (print_flag == 1)
+					printf("Port %u link get failed: %s\n",
+						portid, rte_strerror(-ret));
+				continue;
+			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status)

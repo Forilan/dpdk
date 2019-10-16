@@ -59,7 +59,7 @@ static uint16_t nb_rxd = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t nb_txd = RTE_TEST_TX_DESC_DEFAULT;
 
 /* ethernet addresses of ports */
-static struct ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
+static struct rte_ether_addr l2fwd_ports_eth_addr[RTE_MAX_ETHPORTS];
 
 /* mask of enabled ports */
 static uint32_t l2fwd_enabled_port_mask = 0;
@@ -82,8 +82,6 @@ static struct rte_eth_dev_tx_buffer *tx_buffer[RTE_MAX_ETHPORTS];
 static struct rte_eth_conf port_conf = {
 	.rxmode = {
 		.split_hdr_size = 0,
-		.ignore_offload_bitfield = 1,
-		.offloads = DEV_RX_OFFLOAD_CRC_STRIP,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
@@ -153,17 +151,17 @@ print_stats(void)
 static void
 l2fwd_mac_updating(struct rte_mbuf *m, unsigned dest_portid)
 {
-	struct ether_hdr *eth;
+	struct rte_ether_hdr *eth;
 	void *tmp;
 
-	eth = rte_pktmbuf_mtod(m, struct ether_hdr *);
+	eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr *);
 
 	/* 02:00:00:00:00:xx */
 	tmp = &eth->d_addr.addr_bytes[0];
 	*((uint64_t *)tmp) = 0x000000000002 + ((uint64_t)dest_portid << 40);
 
 	/* src addr */
-	ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->s_addr);
+	rte_ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->s_addr);
 }
 
 static void
@@ -451,6 +449,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	uint16_t portid;
 	uint8_t count, all_ports_up, print_flag = 0;
 	struct rte_eth_link link;
+	int ret;
 
 	printf("\nChecking link status");
 	fflush(stdout);
@@ -464,7 +463,14 @@ check_all_ports_link_status(uint32_t port_mask)
 			if ((port_mask & (1 << portid)) == 0)
 				continue;
 			memset(&link, 0, sizeof(link));
-			rte_eth_link_get_nowait(portid, &link);
+			ret = rte_eth_link_get_nowait(portid, &link);
+			if (ret < 0) {
+				all_ports_up = 0;
+				if (print_flag == 1)
+					printf("Port %u link get failed: %s\n",
+						portid, rte_strerror(-ret));
+				continue;
+			}
 			/* print link status if flag set */
 			if (print_flag == 1) {
 				if (link.link_status)
@@ -637,7 +643,13 @@ main(int argc, char **argv)
 		/* init port */
 		printf("Initializing port %u... ", portid);
 		fflush(stdout);
-		rte_eth_dev_info_get(portid, &dev_info);
+
+		ret = rte_eth_dev_info_get(portid, &dev_info);
+		if (ret != 0)
+			rte_exit(EXIT_FAILURE,
+				"Error during getting device (port %u) info: %s\n",
+				portid, strerror(-ret));
+
 		if (dev_info.tx_offload_capa & DEV_TX_OFFLOAD_MBUF_FAST_FREE)
 			local_port_conf.txmode.offloads |=
 				DEV_TX_OFFLOAD_MBUF_FAST_FREE;
@@ -653,7 +665,12 @@ main(int argc, char **argv)
 				 "Cannot adjust number of descriptors: err=%d, port=%u\n",
 				 ret, portid);
 
-		rte_eth_macaddr_get(portid,&l2fwd_ports_eth_addr[portid]);
+		ret = rte_eth_macaddr_get(portid,
+					  &l2fwd_ports_eth_addr[portid]);
+		if (ret < 0)
+			rte_exit(EXIT_FAILURE,
+				 "Cannot get MAC address: err=%d, port=%u\n",
+				 ret, portid);
 
 		/* init one RX queue */
 		fflush(stdout);
@@ -670,7 +687,6 @@ main(int argc, char **argv)
 		/* init one TX queue on each port */
 		fflush(stdout);
 		txq_conf = dev_info.default_txconf;
-		txq_conf.txq_flags = ETH_TXQ_FLAGS_IGNORE;
 		txq_conf.offloads = local_port_conf.txmode.offloads;
 		ret = rte_eth_tx_queue_setup(portid, 0, nb_txd,
 				rte_eth_dev_socket_id(portid),
@@ -705,7 +721,11 @@ main(int argc, char **argv)
 
 		printf("done: \n");
 
-		rte_eth_promiscuous_enable(portid);
+		ret = rte_eth_promiscuous_enable(portid);
+		if (ret != 0)
+			rte_exit(EXIT_FAILURE,
+				 "rte_eth_promiscuous_enable:err=%s, port=%u\n",
+				 rte_strerror(-ret), portid);
 
 		printf("Port %u, MAC address: %02X:%02X:%02X:%02X:%02X:%02X\n\n",
 				portid,

@@ -87,8 +87,8 @@ mlx4_rss_hash_key_default[MLX4_RSS_HASH_KEY_SIZE] = {
  *   Pointer to RSS context on success, NULL otherwise and rte_errno is set.
  */
 struct mlx4_rss *
-mlx4_rss_get(struct priv *priv, uint64_t fields,
-	     uint8_t key[MLX4_RSS_HASH_KEY_SIZE],
+mlx4_rss_get(struct mlx4_priv *priv, uint64_t fields,
+	     const uint8_t key[MLX4_RSS_HASH_KEY_SIZE],
 	     uint16_t queues, const uint16_t queue_id[])
 {
 	struct mlx4_rss *rss;
@@ -175,7 +175,8 @@ mlx4_rss_attach(struct mlx4_rss *rss)
 	}
 
 	struct ibv_wq *ind_tbl[rss->queues];
-	struct priv *priv = rss->priv;
+	struct mlx4_priv *priv = rss->priv;
+	struct rte_eth_dev *dev = ETH_DEV(priv);
 	const char *msg;
 	unsigned int i = 0;
 	int ret;
@@ -189,8 +190,8 @@ mlx4_rss_attach(struct mlx4_rss *rss)
 		uint16_t id = rss->queue_id[i];
 		struct rxq *rxq = NULL;
 
-		if (id < priv->dev->data->nb_rx_queues)
-			rxq = priv->dev->data->rx_queues[id];
+		if (id < dev->data->nb_rx_queues)
+			rxq = dev->data->rx_queues[id];
 		if (!rxq) {
 			ret = EINVAL;
 			msg = "RSS target queue is not configured";
@@ -269,7 +270,7 @@ error:
 		rss->ind = NULL;
 	}
 	while (i--)
-		mlx4_rxq_detach(priv->dev->data->rx_queues[rss->queue_id[i]]);
+		mlx4_rxq_detach(dev->data->rx_queues[rss->queue_id[i]]);
 	ERROR("mlx4: %s", msg);
 	--rss->usecnt;
 	rte_errno = ret;
@@ -290,7 +291,8 @@ error:
 void
 mlx4_rss_detach(struct mlx4_rss *rss)
 {
-	struct priv *priv = rss->priv;
+	struct mlx4_priv *priv = rss->priv;
+	struct rte_eth_dev *dev = ETH_DEV(priv);
 	unsigned int i;
 
 	assert(rss->refcnt);
@@ -303,7 +305,7 @@ mlx4_rss_detach(struct mlx4_rss *rss)
 	claim_zero(mlx4_glue->destroy_rwq_ind_table(rss->ind));
 	rss->ind = NULL;
 	for (i = 0; i != rss->queues; ++i)
-		mlx4_rxq_detach(priv->dev->data->rx_queues[rss->queue_id[i]]);
+		mlx4_rxq_detach(dev->data->rx_queues[rss->queue_id[i]]);
 }
 
 /**
@@ -327,15 +329,23 @@ mlx4_rss_detach(struct mlx4_rss *rss)
  *   0 on success, a negative errno value otherwise and rte_errno is set.
  */
 int
-mlx4_rss_init(struct priv *priv)
+mlx4_rss_init(struct mlx4_priv *priv)
 {
-	struct rte_eth_dev *dev = priv->dev;
+	struct rte_eth_dev *dev = ETH_DEV(priv);
 	uint8_t log2_range = rte_log2_u32(dev->data->nb_rx_queues);
 	uint32_t wq_num_prev = 0;
 	const char *msg;
 	unsigned int i;
 	int ret;
 
+	if (priv->rss_init)
+		return 0;
+	if (ETH_DEV(priv)->data->nb_rx_queues > priv->hw_rss_max_qps) {
+		ERROR("RSS does not support more than %d queues",
+		      priv->hw_rss_max_qps);
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
 	/* Prepare range for RSS contexts before creating the first WQ. */
 	ret = mlx4_glue->dv_set_context_attr
 		(priv->ctx,
@@ -348,8 +358,8 @@ mlx4_rss_init(struct priv *priv)
 		rte_errno = ret;
 		return -ret;
 	}
-	for (i = 0; i != priv->dev->data->nb_rx_queues; ++i) {
-		struct rxq *rxq = priv->dev->data->rx_queues[i];
+	for (i = 0; i != ETH_DEV(priv)->data->nb_rx_queues; ++i) {
+		struct rxq *rxq = ETH_DEV(priv)->data->rx_queues[i];
 		struct ibv_cq *cq;
 		struct ibv_wq *wq;
 		uint32_t wq_num;
@@ -418,12 +428,13 @@ wq_num_check:
 		}
 		wq_num_prev = wq_num;
 	}
+	priv->rss_init = 1;
 	return 0;
 error:
 	ERROR("cannot initialize common RSS resources (queue %u): %s: %s",
 	      i, msg, strerror(ret));
 	while (i--) {
-		struct rxq *rxq = priv->dev->data->rx_queues[i];
+		struct rxq *rxq = ETH_DEV(priv)->data->rx_queues[i];
 
 		if (rxq)
 			mlx4_rxq_detach(rxq);
@@ -442,18 +453,21 @@ error:
  *   Pointer to private structure.
  */
 void
-mlx4_rss_deinit(struct priv *priv)
+mlx4_rss_deinit(struct mlx4_priv *priv)
 {
 	unsigned int i;
 
-	for (i = 0; i != priv->dev->data->nb_rx_queues; ++i) {
-		struct rxq *rxq = priv->dev->data->rx_queues[i];
+	if (!priv->rss_init)
+		return;
+	for (i = 0; i != ETH_DEV(priv)->data->nb_rx_queues; ++i) {
+		struct rxq *rxq = ETH_DEV(priv)->data->rx_queues[i];
 
 		if (rxq) {
 			assert(rxq->usecnt == 1);
 			mlx4_rxq_detach(rxq);
 		}
 	}
+	priv->rss_init = 0;
 }
 
 /**
@@ -481,7 +495,8 @@ mlx4_rxq_attach(struct rxq *rxq)
 		return 0;
 	}
 
-	struct priv *priv = rxq->priv;
+	struct mlx4_priv *priv = rxq->priv;
+	struct rte_eth_dev *dev = ETH_DEV(priv);
 	const uint32_t elts_n = 1 << rxq->elts_n;
 	const uint32_t sges_n = 1 << rxq->sges_n;
 	struct rte_mbuf *(*elts)[elts_n] = rxq->elts;
@@ -498,6 +513,8 @@ mlx4_rxq_attach(struct rxq *rxq)
 	int ret;
 
 	assert(rte_is_power_of_2(elts_n));
+	priv->verbs_alloc_ctx.type = MLX4_VERBS_ALLOC_TYPE_RX_QUEUE;
+	priv->verbs_alloc_ctx.obj = rxq;
 	cq = mlx4_glue->create_cq(priv->ctx, elts_n / sges_n, NULL,
 				  rxq->channel, 0);
 	if (!cq) {
@@ -546,6 +563,11 @@ mlx4_rxq_attach(struct rxq *rxq)
 		msg = "failed to obtain device information from WQ/CQ objects";
 		goto error;
 	}
+	/* Pre-register Rx mempool. */
+	DEBUG("port %u Rx queue %u registering mp %s having %u chunks",
+	      ETH_DEV(priv)->data->port_id, rxq->stats.idx,
+	      rxq->mp->name, rxq->mp->nb_mem_chunks);
+	mlx4_mr_update_mp(dev, &rxq->mr_ctrl, rxq->mp);
 	wqes = (volatile struct mlx4_wqe_data_seg (*)[])
 		((uintptr_t)dv_rwq.buf.buf + dv_rwq.rq.offset);
 	for (i = 0; i != RTE_DIM(*elts); ++i) {
@@ -577,7 +599,7 @@ mlx4_rxq_attach(struct rxq *rxq)
 			.addr = rte_cpu_to_be_64(rte_pktmbuf_mtod(buf,
 								  uintptr_t)),
 			.byte_count = rte_cpu_to_be_32(buf->data_len),
-			.lkey = rte_cpu_to_be_32(rxq->mr->lkey),
+			.lkey = mlx4_rx_mb2mr(rxq, buf),
 		};
 		(*elts)[i] = buf;
 	}
@@ -600,15 +622,18 @@ mlx4_rxq_attach(struct rxq *rxq)
 	rxq->rq_ci = elts_n / sges_n;
 	rte_wmb();
 	*rxq->rq_db = rte_cpu_to_be_32(rxq->rq_ci);
+	priv->verbs_alloc_ctx.type = MLX4_VERBS_ALLOC_TYPE_NONE;
 	return 0;
 error:
 	if (wq)
 		claim_zero(mlx4_glue->destroy_wq(wq));
 	if (cq)
 		claim_zero(mlx4_glue->destroy_cq(cq));
+	--rxq->usecnt;
 	rte_errno = ret;
 	ERROR("error while attaching Rx queue %p: %s: %s",
 	      (void *)rxq, msg, strerror(ret));
+	priv->verbs_alloc_ctx.type = MLX4_VERBS_ALLOC_TYPE_NONE;
 	return -ret;
 }
 
@@ -656,12 +681,12 @@ mlx4_rxq_detach(struct rxq *rxq)
  *   Supported Tx offloads.
  */
 uint64_t
-mlx4_get_rx_queue_offloads(struct priv *priv)
+mlx4_get_rx_queue_offloads(struct mlx4_priv *priv)
 {
-	uint64_t offloads = DEV_RX_OFFLOAD_SCATTER;
+	uint64_t offloads = DEV_RX_OFFLOAD_SCATTER |
+			    DEV_RX_OFFLOAD_KEEP_CRC |
+			    DEV_RX_OFFLOAD_JUMBO_FRAME;
 
-	if (priv->hw_fcs_strip)
-		offloads |= DEV_RX_OFFLOAD_CRC_STRIP;
 	if (priv->hw_csum)
 		offloads |= DEV_RX_OFFLOAD_CHECKSUM;
 	return offloads;
@@ -677,32 +702,12 @@ mlx4_get_rx_queue_offloads(struct priv *priv)
  *   Supported Rx offloads.
  */
 uint64_t
-mlx4_get_rx_port_offloads(struct priv *priv)
+mlx4_get_rx_port_offloads(struct mlx4_priv *priv)
 {
 	uint64_t offloads = DEV_RX_OFFLOAD_VLAN_FILTER;
 
 	(void)priv;
 	return offloads;
-}
-
-/**
- * Checks if the per-queue offload configuration is valid.
- *
- * @param priv
- *   Pointer to private structure.
- * @param requested
- *   Per-queue offloads configuration.
- *
- * @return
- *   Nonzero when configuration is valid.
- */
-static int
-mlx4_check_rx_queue_offloads(struct priv *priv, uint64_t requested)
-{
-	uint64_t mandatory = priv->dev->data->dev_conf.rxmode.offloads;
-	uint64_t supported = mlx4_get_rx_port_offloads(priv);
-
-	return !((mandatory ^ requested) & supported);
 }
 
 /**
@@ -729,7 +734,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		    unsigned int socket, const struct rte_eth_rxconf *conf,
 		    struct rte_mempool *mp)
 {
-	struct priv *priv = dev->data->dev_private;
+	struct mlx4_priv *priv = dev->data->dev_private;
 	uint32_t mb_len = rte_pktmbuf_data_room_size(mp);
 	struct rte_mbuf *(*elts)[rte_align32pow2(desc)];
 	struct rxq *rxq;
@@ -747,20 +752,13 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	};
 	int ret;
 	uint32_t crc_present;
+	uint64_t offloads;
 
-	(void)conf; /* Thresholds configuration (ignored). */
+	offloads = conf->offloads | dev->data->dev_conf.rxmode.offloads;
+
 	DEBUG("%p: configuring queue %u for %u descriptors",
 	      (void *)dev, idx, desc);
-	if (!mlx4_check_rx_queue_offloads(priv, conf->offloads)) {
-		rte_errno = ENOTSUP;
-		ERROR("%p: Rx queue offloads 0x%" PRIx64 " don't match port "
-		      "offloads 0x%" PRIx64 " or supported offloads 0x%" PRIx64,
-		      (void *)dev, conf->offloads,
-		      dev->data->dev_conf.rxmode.offloads,
-		      (mlx4_get_rx_port_offloads(priv) |
-		       mlx4_get_rx_queue_offloads(priv)));
-		return -rte_errno;
-	}
+
 	if (idx >= dev->data->nb_rx_queues) {
 		rte_errno = EOVERFLOW;
 		ERROR("%p: queue index out of range (%u >= %u)",
@@ -786,16 +784,16 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		     (void *)dev, idx, desc);
 	}
 	/* By default, FCS (CRC) is stripped by hardware. */
-	if (conf->offloads & DEV_RX_OFFLOAD_CRC_STRIP) {
-		crc_present = 0;
-	} else if (priv->hw_fcs_strip) {
-		crc_present = 1;
-	} else {
-		WARN("%p: CRC stripping has been disabled but will still"
-		     " be performed by hardware, make sure MLNX_OFED and"
-		     " firmware are up to date",
-		     (void *)dev);
-		crc_present = 0;
+	crc_present = 0;
+	if (offloads & DEV_RX_OFFLOAD_KEEP_CRC) {
+		if (priv->hw_fcs_strip) {
+			crc_present = 1;
+		} else {
+			WARN("%p: CRC stripping has been disabled but will still"
+			     " be performed by hardware, make sure MLNX_OFED and"
+			     " firmware are up to date",
+			     (void *)dev);
+		}
 	}
 	DEBUG("%p: CRC stripping is %s, %u bytes will be subtracted from"
 	      " incoming frames to hide it",
@@ -818,9 +816,9 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		.elts = elts,
 		/* Toggle Rx checksum offload if hardware supports it. */
 		.csum = priv->hw_csum &&
-			(conf->offloads & DEV_RX_OFFLOAD_CHECKSUM),
+			(offloads & DEV_RX_OFFLOAD_CHECKSUM),
 		.csum_l2tun = priv->hw_csum_l2tun &&
-			      (conf->offloads & DEV_RX_OFFLOAD_CHECKSUM),
+			      (offloads & DEV_RX_OFFLOAD_CHECKSUM),
 		.crc_present = crc_present,
 		.l2tun_offload = priv->hw_csum_l2tun,
 		.stats = {
@@ -833,7 +831,7 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	if (dev->data->dev_conf.rxmode.max_rx_pkt_len <=
 	    (mb_len - RTE_PKTMBUF_HEADROOM)) {
 		;
-	} else if (conf->offloads & DEV_RX_OFFLOAD_SCATTER) {
+	} else if (offloads & DEV_RX_OFFLOAD_SCATTER) {
 		uint32_t size =
 			RTE_PKTMBUF_HEADROOM +
 			dev->data->dev_conf.rxmode.max_rx_pkt_len;
@@ -876,11 +874,9 @@ mlx4_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		      1 << rxq->sges_n);
 		goto error;
 	}
-	/* Use the entire Rx mempool as the memory region. */
-	rxq->mr = mlx4_mr_get(priv, mp);
-	if (!rxq->mr) {
-		ERROR("%p: MR creation failure: %s",
-		      (void *)dev, strerror(rte_errno));
+	if (mlx4_mr_btree_init(&rxq->mr_ctrl.cache_bh,
+			       MLX4_MR_BTREE_CACHE_N, socket)) {
+		/* rte_errno is already set. */
 		goto error;
 	}
 	if (dev->data->dev_conf.intr_conf.rxq) {
@@ -921,17 +917,17 @@ void
 mlx4_rx_queue_release(void *dpdk_rxq)
 {
 	struct rxq *rxq = (struct rxq *)dpdk_rxq;
-	struct priv *priv;
+	struct mlx4_priv *priv;
 	unsigned int i;
 
 	if (rxq == NULL)
 		return;
 	priv = rxq->priv;
-	for (i = 0; i != priv->dev->data->nb_rx_queues; ++i)
-		if (priv->dev->data->rx_queues[i] == rxq) {
+	for (i = 0; i != ETH_DEV(priv)->data->nb_rx_queues; ++i)
+		if (ETH_DEV(priv)->data->rx_queues[i] == rxq) {
 			DEBUG("%p: removing Rx queue %p from list",
-			      (void *)priv->dev, (void *)rxq);
-			priv->dev->data->rx_queues[i] = NULL;
+			      (void *)ETH_DEV(priv), (void *)rxq);
+			ETH_DEV(priv)->data->rx_queues[i] = NULL;
 			break;
 		}
 	assert(!rxq->cq);
@@ -940,7 +936,6 @@ mlx4_rx_queue_release(void *dpdk_rxq)
 	assert(!rxq->rq_db);
 	if (rxq->channel)
 		claim_zero(mlx4_glue->destroy_comp_channel(rxq->channel));
-	if (rxq->mr)
-		mlx4_mr_put(rxq->mr);
+	mlx4_mr_btree_free(&rxq->mr_ctrl.cache_bh);
 	rte_free(rxq);
 }

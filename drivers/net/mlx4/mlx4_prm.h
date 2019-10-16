@@ -19,6 +19,7 @@
 #ifdef PEDANTIC
 #pragma GCC diagnostic error "-Wpedantic"
 #endif
+#include "mlx4_autoconf.h"
 
 /* ConnectX-3 Tx queue basic block. */
 #define MLX4_TXBB_SHIFT 6
@@ -40,6 +41,7 @@
 /* Work queue element (WQE) flags. */
 #define MLX4_WQE_CTRL_IIP_HDR_CSUM (1 << 28)
 #define MLX4_WQE_CTRL_IL4_HDR_CSUM (1 << 27)
+#define MLX4_WQE_CTRL_RR (1 << 6)
 
 /* CQE checksum flags. */
 enum {
@@ -51,6 +53,7 @@ enum {
 };
 
 /* CQE status flags. */
+#define MLX4_CQE_STATUS_IPV6F (1 << 12)
 #define MLX4_CQE_STATUS_IPV4 (1 << 22)
 #define MLX4_CQE_STATUS_IPV4F (1 << 23)
 #define MLX4_CQE_STATUS_IPV6 (1 << 24)
@@ -74,7 +77,8 @@ struct mlx4_sq {
 	uint32_t owner_opcode;
 	/**< Default owner opcode with HW valid owner bit. */
 	uint32_t stamp; /**< Stamp value with an invalid HW owner bit. */
-	volatile uint32_t *db; /**< Pointer to the doorbell. */
+	uint32_t *db; /**< Pointer to the doorbell. */
+	off_t uar_mmap_offset; /* UAR mmap offset for non-primary process. */
 	uint32_t doorbell_qpn; /**< qp number to write to the doorbell. */
 };
 
@@ -96,6 +100,19 @@ struct mlx4_cq {
 	uint32_t cqn; /**< CQ number. */
 	int arm_sn; /**< Rx event counter. */
 };
+
+#ifndef HAVE_IBV_MLX4_WQE_LSO_SEG
+/*
+ * WQE LSO segment structure.
+ * Defined here as backward compatibility for rdma-core v17 and below.
+ * Similar definition is found in infiniband/mlx4dv.h in rdma-core v18
+ * and above.
+ */
+struct mlx4_wqe_lso_seg {
+	rte_be32_t mss_hdr_size;
+	rte_be32_t header[];
+};
+#endif
 
 /**
  * Retrieve a CQE entry from a CQ.

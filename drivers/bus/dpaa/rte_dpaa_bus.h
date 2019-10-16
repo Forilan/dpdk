@@ -8,14 +8,13 @@
 
 #include <rte_bus.h>
 #include <rte_mempool.h>
+#include <dpaax_iova_table.h>
 
 #include <fsl_usd.h>
 #include <fsl_qman.h>
 #include <fsl_bman.h>
 #include <of.h>
 #include <netcfg.h>
-
-#define FSL_DPAA_BUS_NAME	"FSL_DPAA_BUS"
 
 #define DPAA_MEMPOOL_OPS_NAME	"dpaa"
 
@@ -30,6 +29,9 @@
 #define SVR_LS1043A_FAMILY	0x87920000
 #define SVR_LS1046A_FAMILY	0x87070000
 #define SVR_MASK		0xffff0000
+
+#define RTE_DEV_TO_DPAA_CONST(ptr) \
+	container_of(ptr, const struct rte_dpaa_device, device)
 
 extern unsigned int dpaa_svr_family;
 
@@ -55,6 +57,7 @@ struct rte_dpaa_bus {
 	struct rte_dpaa_device_list device_list;
 	struct rte_dpaa_driver_list driver_list;
 	int device_count;
+	int detected;
 };
 
 struct dpaa_device_id {
@@ -72,6 +75,7 @@ struct rte_dpaa_device {
 	};
 	struct rte_dpaa_driver *driver;
 	struct dpaa_device_id id;
+	struct rte_intr_handle intr_handle;
 	enum rte_dpaa_type device_type; /**< Ethernet or crypto type device */
 	char name[RTE_ETH_NAME_MAX_LEN];
 };
@@ -95,9 +99,39 @@ struct dpaa_portal {
 	uint64_t tid;/**< Parent Thread id for this portal */
 };
 
-/* TODO - this is costly, need to write a fast coversion routine */
+/* Various structures representing contiguous memory maps */
+struct dpaa_memseg {
+	TAILQ_ENTRY(dpaa_memseg) next;
+	char *vaddr;
+	rte_iova_t iova;
+	size_t len;
+};
+
+TAILQ_HEAD(dpaa_memseg_list, dpaa_memseg);
+extern struct dpaa_memseg_list rte_dpaa_memsegs;
+
+/* Either iterate over the list of internal memseg references or fallback to
+ * EAL memseg based iova2virt.
+ */
 static inline void *rte_dpaa_mem_ptov(phys_addr_t paddr)
 {
+	struct dpaa_memseg *ms;
+	void *va;
+
+	va = dpaax_iova_table_get_va(paddr);
+	if (likely(va != NULL))
+		return va;
+
+	/* Check if the address is already part of the memseg list internally
+	 * maintained by the dpaa driver.
+	 */
+	TAILQ_FOREACH(ms, &rte_dpaa_memsegs, next) {
+		if (paddr >= ms->iova && paddr <
+			ms->iova + ms->len)
+			return RTE_PTR_ADD(ms->vaddr, (uintptr_t)(paddr - ms->iova));
+	}
+
+	/* If not, Fallback to full memseg list searching */
 	return rte_mem_iova2virt(paddr);
 }
 
@@ -141,8 +175,7 @@ void dpaa_portal_finish(void *arg);
 
 /** Helper for DPAA device registration from driver (eth, crypto) instance */
 #define RTE_PMD_REGISTER_DPAA(nm, dpaa_drv) \
-RTE_INIT(dpaainitfn_ ##nm); \
-static void dpaainitfn_ ##nm(void) \
+RTE_INIT(dpaainitfn_ ##nm) \
 {\
 	(dpaa_drv).driver.name = RTE_STR(nm);\
 	rte_dpaa_driver_register(&dpaa_drv); \

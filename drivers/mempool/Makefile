@@ -3,6 +3,7 @@
 
 include $(RTE_SDK)/mk/rte.vars.mk
 
+DIRS-$(CONFIG_RTE_DRIVER_MEMPOOL_BUCKET) += bucket
 ifeq ($(CONFIG_RTE_LIBRTE_DPAA_BUS),y)
 DIRS-$(CONFIG_RTE_LIBRTE_DPAA_MEMPOOL) += dpaa
 endif
@@ -12,5 +13,6 @@ endif
 DIRS-$(CONFIG_RTE_DRIVER_MEMPOOL_RING) += ring
 DIRS-$(CONFIG_RTE_DRIVER_MEMPOOL_STACK) += stack
 DIRS-$(CONFIG_RTE_LIBRTE_OCTEONTX_MEMPOOL) += octeontx
+DIRS-$(CONFIG_RTE_LIBRTE_OCTEONTX2_MEMPOOL) += octeontx2
 
 include $(RTE_SDK)/mk/rte.subdir.mk

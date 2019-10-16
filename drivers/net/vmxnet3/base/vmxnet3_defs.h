@@ -1,9 +1,6 @@
-/*********************************************************
+/* SPDX-License-Identifier: BSD-3-Clause
  * Copyright (C) 2007 VMware, Inc. All rights reserved.
- *
- * SPDX-License-Identifier:    BSD-3-Clause
- *
- *********************************************************/
+ */
 
 /*
  * vmxnet3_defs.h --
@@ -92,6 +89,7 @@ typedef enum {
    VMXNET3_CMD_RESERVED3,
    VMXNET3_CMD_RESERVED4,
    VMXNET3_CMD_REGISTER_MEMREGS,
+   VMXNET3_CMD_SET_RSS_FIELDS,
 
    VMXNET3_CMD_FIRST_GET = 0xF00D0000,
    VMXNET3_CMD_GET_QUEUE_STATUS = VMXNET3_CMD_FIRST_GET,
@@ -327,7 +325,32 @@ struct Vmxnet3_RxCompDescExt {
    uint8  segCnt;       /* Number of aggregated packets */
    uint8  dupAckCnt;    /* Number of duplicate Acks */
    __le16 tsDelta;      /* TCP timestamp difference */
-   __le32 dword2[2];
+	__le32 dword2;
+#ifdef __BIG_ENDIAN_BITFIELD
+	uint32 gen : 1;     /* generation bit */
+	uint32 type : 7;    /* completion type */
+	uint32 fcs : 1;     /* Frame CRC correct */
+	uint32 frg : 1;     /* IP Fragment */
+	uint32 v4 : 1;      /* IPv4 */
+	uint32 v6 : 1;      /* IPv6 */
+	uint32 ipc : 1;     /* IP Checksum Correct */
+	uint32 tcp : 1;     /* TCP packet */
+	uint32 udp : 1;     /* UDP packet */
+	uint32 tuc : 1;     /* TCP/UDP Checksum Correct */
+	uint32 mss : 16;
+#else
+	uint32 mss : 16;
+	uint32 tuc : 1;     /* TCP/UDP Checksum Correct */
+	uint32 udp : 1;     /* UDP packet */
+	uint32 tcp : 1;     /* TCP packet */
+	uint32 ipc : 1;     /* IP Checksum Correct */
+	uint32 v6 : 1;      /* IPv6 */
+	uint32 v4 : 1;      /* IPv4 */
+	uint32 frg : 1;     /* IP Fragment */
+	uint32 fcs : 1;     /* Frame CRC correct */
+	uint32 type : 7;    /* completion type */
+	uint32 gen : 1;     /* generation bit */
+#endif  /* __BIG_ENDIAN_BITFIELD */
 }
 #include "vmware_pack_end.h"
 Vmxnet3_RxCompDescExt;
@@ -727,6 +750,15 @@ struct Vmxnet3_MemRegs {
 #include "vmware_pack_end.h"
 Vmxnet3_MemRegs;
 
+typedef enum Vmxnet3_RSSField {
+   VMXNET3_RSS_FIELDS_TCPIP4 = 0x0001,
+   VMXNET3_RSS_FIELDS_TCPIP6 = 0x0002,
+   VMXNET3_RSS_FIELDS_UDPIP4 = 0x0004,
+   VMXNET3_RSS_FIELDS_UDPIP6 = 0x0008,
+   VMXNET3_RSS_FIELDS_ESPIP4 = 0x0010,
+   VMXNET3_RSS_FIELDS_ESPIP6 = 0x0020,
+} Vmxnet3_RSSField;
+
 /*
  * If the command data <= 16 bytes, use the shared memory direcly.
  * Otherwise, use the variable length configuration descriptor.
@@ -736,6 +768,8 @@ typedef
 union Vmxnet3_CmdInfo {
    Vmxnet3_VariableLenConfDesc varConf;
    Vmxnet3_SetPolling          setPolling;
+   Vmxnet3_RSSField            setRSSFields;
+   __le16                      reserved[2];
    __le64                      data[2];
 }
 #include "vmware_pack_end.h"
