@@ -46,8 +46,18 @@ DPDK_18.08 {
 	rte_pktmbuf_pool_create_by_ops;
 } DPDK_16.11;
 
+DPDK_19.11 {
+	global:
+
+	__rte_pktmbuf_linearize;
+	rte_pktmbuf_clone;
+
+} DPDK_18.08;
+
 EXPERIMENTAL {
 	global:
 
 	rte_mbuf_check;
+	rte_pktmbuf_copy;
+
 } DPDK_18.08;
