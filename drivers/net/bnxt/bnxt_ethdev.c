@@ -14,7 +14,6 @@
 #include <rte_alarm.h>
 
 #include "bnxt.h"
-#include "bnxt_cpr.h"
 #include "bnxt_filter.h"
 #include "bnxt_hwrm.h"
 #include "bnxt_irq.h"
@@ -27,61 +26,15 @@
 #include "bnxt_vnic.h"
 #include "hsi_struct_def_dpdk.h"
 #include "bnxt_nvm_defs.h"
-#include "bnxt_util.h"
 
 #define DRV_MODULE_NAME		"bnxt"
 static const char bnxt_version[] =
 	"Broadcom NetXtreme driver " DRV_MODULE_NAME;
 int bnxt_logtype_driver;
 
-#define PCI_VENDOR_ID_BROADCOM 0x14E4
-
-#define BROADCOM_DEV_ID_STRATUS_NIC_VF1 0x1606
-#define BROADCOM_DEV_ID_STRATUS_NIC_VF2 0x1609
-#define BROADCOM_DEV_ID_STRATUS_NIC 0x1614
-#define BROADCOM_DEV_ID_57414_VF 0x16c1
-#define BROADCOM_DEV_ID_57301 0x16c8
-#define BROADCOM_DEV_ID_57302 0x16c9
-#define BROADCOM_DEV_ID_57304_PF 0x16ca
-#define BROADCOM_DEV_ID_57304_VF 0x16cb
-#define BROADCOM_DEV_ID_57417_MF 0x16cc
-#define BROADCOM_DEV_ID_NS2 0x16cd
-#define BROADCOM_DEV_ID_57311 0x16ce
-#define BROADCOM_DEV_ID_57312 0x16cf
-#define BROADCOM_DEV_ID_57402 0x16d0
-#define BROADCOM_DEV_ID_57404 0x16d1
-#define BROADCOM_DEV_ID_57406_PF 0x16d2
-#define BROADCOM_DEV_ID_57406_VF 0x16d3
-#define BROADCOM_DEV_ID_57402_MF 0x16d4
-#define BROADCOM_DEV_ID_57407_RJ45 0x16d5
-#define BROADCOM_DEV_ID_57412 0x16d6
-#define BROADCOM_DEV_ID_57414 0x16d7
-#define BROADCOM_DEV_ID_57416_RJ45 0x16d8
-#define BROADCOM_DEV_ID_57417_RJ45 0x16d9
-#define BROADCOM_DEV_ID_5741X_VF 0x16dc
-#define BROADCOM_DEV_ID_57412_MF 0x16de
-#define BROADCOM_DEV_ID_57314 0x16df
-#define BROADCOM_DEV_ID_57317_RJ45 0x16e0
-#define BROADCOM_DEV_ID_5731X_VF 0x16e1
-#define BROADCOM_DEV_ID_57417_SFP 0x16e2
-#define BROADCOM_DEV_ID_57416_SFP 0x16e3
-#define BROADCOM_DEV_ID_57317_SFP 0x16e4
-#define BROADCOM_DEV_ID_57404_MF 0x16e7
-#define BROADCOM_DEV_ID_57406_MF 0x16e8
-#define BROADCOM_DEV_ID_57407_SFP 0x16e9
-#define BROADCOM_DEV_ID_57407_MF 0x16ea
-#define BROADCOM_DEV_ID_57414_MF 0x16ec
-#define BROADCOM_DEV_ID_57416_MF 0x16ee
-#define BROADCOM_DEV_ID_57508 0x1750
-#define BROADCOM_DEV_ID_57504 0x1751
-#define BROADCOM_DEV_ID_57502 0x1752
-#define BROADCOM_DEV_ID_57500_VF1 0x1806
-#define BROADCOM_DEV_ID_57500_VF2 0x1807
-#define BROADCOM_DEV_ID_58802 0xd802
-#define BROADCOM_DEV_ID_58804 0xd804
-#define BROADCOM_DEV_ID_58808 0x16f0
-#define BROADCOM_DEV_ID_58802_VF 0xd800
-
+/*
+ * The set of PCI devices this driver supports
+ */
 static const struct rte_pci_id bnxt_pci_id_map[] = {
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM,
 			 BROADCOM_DEV_ID_STRATUS_NIC_VF1) },
@@ -130,6 +83,12 @@ static const struct rte_pci_id bnxt_pci_id_map[] = {
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57502) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57500_VF1) },
 	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57500_VF2) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57508_MF1) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57504_MF1) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57502_MF1) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57508_MF2) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57504_MF2) },
+	{ RTE_PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, BROADCOM_DEV_ID_57502_MF2) },
 	{ .vendor_id = 0, /* sentinel */ },
 };
 
@@ -168,7 +127,6 @@ static const struct rte_pci_id bnxt_pci_id_map[] = {
 
 static int bnxt_vlan_offload_set_op(struct rte_eth_dev *dev, int mask);
 static void bnxt_print_link_info(struct rte_eth_dev *eth_dev);
-static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu);
 static int bnxt_dev_uninit(struct rte_eth_dev *eth_dev);
 static int bnxt_init_resources(struct bnxt *bp, bool reconfig_dev);
 static int bnxt_uninit_resources(struct bnxt *bp, bool reconfig_dev);
@@ -225,6 +183,9 @@ static void bnxt_free_mem(struct bnxt *bp, bool reconfig)
 	}
 	bnxt_free_async_cp_ring(bp);
 	bnxt_free_rxtx_nq_ring(bp);
+
+	rte_free(bp->grp_info);
+	bp->grp_info = NULL;
 }
 
 static int bnxt_alloc_mem(struct bnxt *bp, bool reconfig)
@@ -669,11 +630,36 @@ static int bnxt_dev_configure_op(struct rte_eth_dev *eth_dev)
 			return -ENOSPC;
 		}
 
+		/* If a resource has already been allocated - in this case
+		 * it is the async completion ring, free it. Reallocate it after
+		 * resource reservation. This will ensure the resource counts
+		 * are calculated correctly.
+		 */
+
+		pthread_mutex_lock(&bp->def_cp_lock);
+
+		if (!BNXT_HAS_NQ(bp) && bp->async_cp_ring) {
+			bnxt_disable_int(bp);
+			bnxt_free_cp_ring(bp, bp->async_cp_ring);
+		}
+
 		rc = bnxt_hwrm_func_reserve_vf_resc(bp, false);
 		if (rc) {
 			PMD_DRV_LOG(ERR, "HWRM resource alloc fail:%x\n", rc);
+			pthread_mutex_unlock(&bp->def_cp_lock);
 			return -ENOSPC;
 		}
+
+		if (!BNXT_HAS_NQ(bp) && bp->async_cp_ring) {
+			rc = bnxt_alloc_async_cp_ring(bp);
+			if (rc) {
+				pthread_mutex_unlock(&bp->def_cp_lock);
+				return rc;
+			}
+			bnxt_enable_int(bp);
+		}
+
+		pthread_mutex_unlock(&bp->def_cp_lock);
 	} else {
 		/* legacy driver needs to get updated values */
 		rc = bnxt_hwrm_func_qcaps(bp);
@@ -853,13 +839,17 @@ static int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	int vlan_mask = 0;
 	int rc;
 
+	if (!eth_dev->data->nb_tx_queues || !eth_dev->data->nb_rx_queues) {
+		PMD_DRV_LOG(ERR, "Queues are not configured yet!\n");
+		return -EINVAL;
+	}
+
 	if (bp->rx_cp_nr_rings > RTE_ETHDEV_QUEUE_STAT_CNTRS) {
 		PMD_DRV_LOG(ERR,
 			"RxQ cnt %d > CONFIG_RTE_ETHDEV_QUEUE_STAT_CNTRS %d\n",
 			bp->rx_cp_nr_rings, RTE_ETHDEV_QUEUE_STAT_CNTRS);
 	}
 
-	bnxt_enable_int(bp);
 	rc = bnxt_hwrm_if_change(bp, 1);
 	if (!rc) {
 		if (bp->flags & BNXT_FLAG_IF_CHANGE_HOT_FW_RESET_DONE) {
@@ -868,6 +858,7 @@ static int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 				return rc;
 		}
 	}
+	bnxt_enable_int(bp);
 
 	rc = bnxt_init_chip(bp);
 	if (rc)
@@ -891,7 +882,9 @@ static int bnxt_dev_start_op(struct rte_eth_dev *eth_dev)
 	bp->flags |= BNXT_FLAG_INIT_DONE;
 	eth_dev->data->dev_started = 1;
 	bp->dev_stopped = 0;
+	pthread_mutex_lock(&bp->def_cp_lock);
 	bnxt_schedule_fw_health_check(bp);
+	pthread_mutex_unlock(&bp->def_cp_lock);
 	return 0;
 
 error:
@@ -913,7 +906,7 @@ static int bnxt_dev_set_link_up_op(struct rte_eth_dev *eth_dev)
 		eth_dev->data->dev_link.link_status = 1;
 
 	bnxt_print_link_info(eth_dev);
-	return 0;
+	return rc;
 }
 
 static int bnxt_dev_set_link_down_op(struct rte_eth_dev *eth_dev)
@@ -952,8 +945,12 @@ static void bnxt_dev_stop_op(struct rte_eth_dev *eth_dev)
 		eth_dev->data->dev_link.link_status = 0;
 	}
 	bnxt_dev_set_link_down_op(eth_dev);
-	/* Wait for link to be reset and the async notification to process. */
-	rte_delay_ms(BNXT_LINK_WAIT_INTERVAL * 2);
+
+	/* Wait for link to be reset and the async notification to process.
+	 * During reset recovery, there is no need to wait
+	 */
+	if (!is_bnxt_in_error(bp))
+		rte_delay_ms(BNXT_LINK_WAIT_INTERVAL * 2);
 
 	/* Clean queue intr-vector mapping */
 	rte_intr_efd_disable(intr_handle);
@@ -1041,7 +1038,7 @@ static int bnxt_add_mac_filter(struct bnxt *bp, struct bnxt_vnic_info *vnic,
 	 * hw-vlan-filter is turned OFF from ON, default
 	 * MAC filter should be restored
 	 */
-	if (filter->dflt)
+	if (index == 0 && filter->dflt)
 		return 0;
 
 	filter = bnxt_alloc_filter(bp);
@@ -1340,9 +1337,6 @@ static int bnxt_reta_update_op(struct rte_eth_dev *eth_dev,
 			vnic->rss_table[i] =
 			    vnic->fw_grp_ids[reta_conf[idx].reta[sft]];
 		}
-
-		vnic->rss_table[i] =
-		    vnic->fw_grp_ids[reta_conf[idx].reta[sft]];
 	}
 
 	bnxt_hwrm_vnic_rss_cfg(bp, vnic);
@@ -2145,7 +2139,7 @@ bnxt_txq_info_get_op(struct rte_eth_dev *dev, uint16_t queue_id,
 	qinfo->conf.tx_deferred_start = txq->tx_deferred_start;
 }
 
-static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
+int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 {
 	struct bnxt *bp = eth_dev->data->dev_private;
 	uint32_t new_pkt_size;
@@ -2154,6 +2148,10 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 
 	rc = is_bnxt_in_error(bp);
 	if (rc)
+		return rc;
+
+	/* Exit if receive queues are not configured yet */
+	if (!eth_dev->data->nb_rx_queues)
 		return rc;
 
 	new_pkt_size = new_mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN +
@@ -2186,14 +2184,15 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 		bp->flags &= ~BNXT_FLAG_JUMBO;
 	}
 
-	eth_dev->data->dev_conf.rxmode.max_rx_pkt_len = new_pkt_size;
+	/* Is there a change in mtu setting? */
+	if (eth_dev->data->dev_conf.rxmode.max_rx_pkt_len == new_pkt_size)
+		return rc;
 
 	for (i = 0; i < bp->nr_vnics; i++) {
 		struct bnxt_vnic_info *vnic = &bp->vnic_info[i];
 		uint16_t size = 0;
 
-		vnic->mru = new_mtu + RTE_ETHER_HDR_LEN +
-				RTE_ETHER_CRC_LEN + VLAN_TAG_SIZE * 2;
+		vnic->mru = BNXT_VNIC_MRU(new_mtu);
 		rc = bnxt_hwrm_vnic_cfg(bp, vnic);
 		if (rc)
 			break;
@@ -2207,6 +2206,9 @@ static int bnxt_mtu_set_op(struct rte_eth_dev *eth_dev, uint16_t new_mtu)
 				return rc;
 		}
 	}
+
+	if (!rc)
+		eth_dev->data->dev_conf.rxmode.max_rx_pkt_len = new_pkt_size;
 
 	PMD_DRV_LOG(INFO, "New MTU is %d\n", new_mtu);
 
@@ -2982,7 +2984,6 @@ bnxt_parse_fdir_filter(struct bnxt *bp,
 		PMD_DRV_LOG(ERR, "Invalid queue %d\n", fdir->action.rx_queue);
 		return -EINVAL;
 	}
-
 
 	if (fdir_mode == RTE_FDIR_MODE_PERFECT_MAC_VLAN) {
 		rte_memcpy(filter->dst_macaddr,
@@ -4076,6 +4077,24 @@ static bool bnxt_vf_pciid(uint16_t id)
 	return false;
 }
 
+static bool bnxt_thor_device(uint16_t id)
+{
+	if (id == BROADCOM_DEV_ID_57508 ||
+	    id == BROADCOM_DEV_ID_57504 ||
+	    id == BROADCOM_DEV_ID_57502 ||
+	    id == BROADCOM_DEV_ID_57508_MF1 ||
+	    id == BROADCOM_DEV_ID_57504_MF1 ||
+	    id == BROADCOM_DEV_ID_57502_MF1 ||
+	    id == BROADCOM_DEV_ID_57508_MF2 ||
+	    id == BROADCOM_DEV_ID_57504_MF2 ||
+	    id == BROADCOM_DEV_ID_57502_MF2 ||
+	    id == BROADCOM_DEV_ID_57500_VF1 ||
+	    id == BROADCOM_DEV_ID_57500_VF2)
+		return true;
+
+	return false;
+}
+
 bool bnxt_stratus_device(struct bnxt *bp)
 {
 	uint16_t id = bp->pdev->id.device_id;
@@ -4612,8 +4631,14 @@ bnxt_init_locks(struct bnxt *bp)
 	int err;
 
 	err = pthread_mutex_init(&bp->flow_lock, NULL);
-	if (err)
+	if (err) {
 		PMD_DRV_LOG(ERR, "Unable to initialize flow_lock\n");
+		return err;
+	}
+
+	err = pthread_mutex_init(&bp->def_cp_lock, NULL);
+	if (err)
+		PMD_DRV_LOG(ERR, "Unable to initialize def_cp_lock\n");
 	return err;
 }
 
@@ -4712,11 +4737,7 @@ bnxt_dev_init(struct rte_eth_dev *eth_dev)
 	if (bnxt_vf_pciid(pci_dev->id.device_id))
 		bp->flags |= BNXT_FLAG_VF;
 
-	if (pci_dev->id.device_id == BROADCOM_DEV_ID_57508 ||
-	    pci_dev->id.device_id == BROADCOM_DEV_ID_57504 ||
-	    pci_dev->id.device_id == BROADCOM_DEV_ID_57502 ||
-	    pci_dev->id.device_id == BROADCOM_DEV_ID_57500_VF1 ||
-	    pci_dev->id.device_id == BROADCOM_DEV_ID_57500_VF2)
+	if (bnxt_thor_device(pci_dev->id.device_id))
 		bp->flags |= BNXT_FLAG_THOR_CHIP;
 
 	if (pci_dev->id.device_id == BROADCOM_DEV_ID_58802 ||
@@ -4762,6 +4783,7 @@ static void
 bnxt_uninit_locks(struct bnxt *bp)
 {
 	pthread_mutex_destroy(&bp->flow_lock);
+	pthread_mutex_destroy(&bp->def_cp_lock);
 }
 
 static int
@@ -4784,6 +4806,7 @@ bnxt_uninit_resources(struct bnxt *bp, bool reconfig_dev)
 		}
 	}
 
+	bnxt_uninit_locks(bp);
 	rte_free(bp->ptp_cfg);
 	bp->ptp_cfg = NULL;
 	return rc;
@@ -4802,11 +4825,6 @@ bnxt_dev_uninit(struct rte_eth_dev *eth_dev)
 
 	rc = bnxt_uninit_resources(bp, false);
 
-	if (bp->grp_info != NULL) {
-		rte_free(bp->grp_info);
-		bp->grp_info = NULL;
-	}
-
 	if (bp->tx_mem_zone) {
 		rte_memzone_free((const struct rte_memzone *)bp->tx_mem_zone);
 		bp->tx_mem_zone = NULL;
@@ -4824,8 +4842,6 @@ bnxt_dev_uninit(struct rte_eth_dev *eth_dev)
 	eth_dev->dev_ops = NULL;
 	eth_dev->rx_pkt_burst = NULL;
 	eth_dev->tx_pkt_burst = NULL;
-
-	bnxt_uninit_locks(bp);
 
 	return rc;
 }

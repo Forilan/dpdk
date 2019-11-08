@@ -27,7 +27,6 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 #include <rte_cycles.h>
-#include <rte_malloc_heap.h>
 #include <rte_memory.h>
 #include <rte_memcpy.h>
 #include <rte_launch.h>
@@ -477,41 +476,6 @@ uint8_t bitrate_enabled;
 
 struct gro_status gro_ports[RTE_MAX_ETHPORTS];
 uint8_t gro_flush_cycles = GRO_DEFAULT_FLUSH_CYCLES;
-
-struct vxlan_encap_conf vxlan_encap_conf = {
-	.select_ipv4 = 1,
-	.select_vlan = 0,
-	.select_tos_ttl = 0,
-	.vni = "\x00\x00\x00",
-	.udp_src = 0,
-	.udp_dst = RTE_BE16(4789),
-	.ipv4_src = RTE_IPV4(127, 0, 0, 1),
-	.ipv4_dst = RTE_IPV4(255, 255, 255, 255),
-	.ipv6_src = "\x00\x00\x00\x00\x00\x00\x00\x00"
-		"\x00\x00\x00\x00\x00\x00\x00\x01",
-	.ipv6_dst = "\x00\x00\x00\x00\x00\x00\x00\x00"
-		"\x00\x00\x00\x00\x00\x00\x11\x11",
-	.vlan_tci = 0,
-	.ip_tos = 0,
-	.ip_ttl = 255,
-	.eth_src = "\x00\x00\x00\x00\x00\x00",
-	.eth_dst = "\xff\xff\xff\xff\xff\xff",
-};
-
-struct nvgre_encap_conf nvgre_encap_conf = {
-	.select_ipv4 = 1,
-	.select_vlan = 0,
-	.tni = "\x00\x00\x00",
-	.ipv4_src = RTE_IPV4(127, 0, 0, 1),
-	.ipv4_dst = RTE_IPV4(255, 255, 255, 255),
-	.ipv6_src = "\x00\x00\x00\x00\x00\x00\x00\x00"
-		"\x00\x00\x00\x00\x00\x00\x00\x01",
-	.ipv6_dst = "\x00\x00\x00\x00\x00\x00\x00\x00"
-		"\x00\x00\x00\x00\x00\x00\x11\x11",
-	.vlan_tci = 0,
-	.eth_src = "\x00\x00\x00\x00\x00\x00",
-	.eth_dst = "\xff\xff\xff\xff\xff\xff",
-};
 
 /* Forward function declarations */
 static void setup_attached_port(portid_t pi);

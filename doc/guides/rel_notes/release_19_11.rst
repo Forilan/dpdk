@@ -56,15 +56,46 @@ New Features
      Also, make sure to start the actual text at the margin.
      =========================================================
 
+* **FreeBSD now supports `--base-virtaddr` EAL option.**
+
+  FreeBSD version now also supports setting base virtual address for mapping
+  pages and resources into its address space.
+
 * **Added Lock-free Stack for aarch64.**
 
   The lock-free stack implementation is enabled for aarch64 platforms.
+
+* **Changed mempool allocation behaviour.**
+
+  Objects are no longer across pages by default.
+  It may consume more memory when using small memory pages.
+
+* **Added support of dynamic fields and flags in mbuf.**
+
+  This new feature adds the ability to dynamically register some room
+  for a field or a flag in the mbuf structure. This is typically used
+  for specific offload features, where adding a static field or flag
+  in the mbuf is not justified.
+
+* **Updated the enic driver.**
+
+  * Added support for Geneve with options offload.
+  * Added flow API implementation based on VIC Flow Manager API.
 
 * **Added Hisilicon hns3 PMD.**
 
   Added the new ``hns3`` net driver for the inbuilt Hisilicon Network
   Subsystem 3(HNS3) network engine found in the Hisilicon Kunpeng 920 SoC.
   See the :doc:`../nics/hns3` guide for more details on this new driver.
+
+* **Added NXP PFE PMD.**
+
+  Added the new PFE driver for the NXP LS1012A platform. See the
+  :doc:`../nics/pfe` NIC driver guide for more details on this new driver.
+
+* **Updated iavf PMD.**
+
+  Enable AVX2 data path for iavf PMD.
 
 * **Updated the Intel e1000 driver.**
 
@@ -82,6 +113,15 @@ New Features
 
   Added support for the ``RTE_ETH_DEV_CLOSE_REMOVE`` flag.
 
+* **Added RX/TX packet burst mode get API.**
+
+  Added two new functions ``rte_eth_rx_burst_mode_get`` and
+  ``rte_eth_tx_burst_mode_get`` that allow an application
+  to retrieve the mode information about RX/TX packet burst
+  such as Scalar or Vector, and Vector technology like AVX2.
+  Another new function ``rte_eth_burst_mode_option_name`` is
+  provided for burst mode options stringification.
+
 * **Updated the Intel ice driver.**
 
   Updated the Intel ice driver with new features and improvements, including:
@@ -89,12 +129,61 @@ New Features
   * Added support for device-specific DDP package loading.
   * Added support for handling Receive Flex Descriptor.
   * Added support for protocol extraction on per Rx queue.
+  * Added support for Flow Director filter based on generic filter framework.
   * Added support for the ``RTE_ETH_DEV_CLOSE_REMOVE`` flag.
+  * Generic filter enhancement
+    - Supported pipeline mode.
+    - Supported new packet type like PPPoE for switch filter.
+  * Supported input set change and symmetric hash by rte_flow RSS action.
+  * Added support for GTP Tx checksum offload.
+
+* **Added cryptodev asymmetric session-less operation.**
+
+  Added session-less option to cryptodev asymmetric structure. It works the same
+  way as symmetric crypto, corresponding xform is used directly by the crypto op.
+
+* **Updated the Huawei hinic driver.**
+
+  Updated the Huawei hinic driver with new features and improvements, including:
+
+  * Enabled SR-IOV - Partially supported at this point, VFIO only.
+  * Supported VLAN filter and VLAN offload.
+  * Supported Unicast MAC filter and Multicast MAC filter.
+  * Supported Flow director for LACP, VRRP, BGP and so on.
+  * Supported FW version get.
+
+* **Updated Mellanox mlx5 driver.**
+
+  Updated Mellanox mlx5 driver with new features and improvements, including:
+
+  * Added support for VLAN pop flow offload command.
+  * Added support for VLAN push flow offload command.
+  * Added support for VLAN set PCP offload command.
+  * Added support for VLAN set VID offload command.
+  * Added support for matching on packets withe Geneve tunnel header.
+
+* **Updated the AF_XDP PMD.**
+
+  Updated the AF_XDP PMD. The new features include:
+
+  * Enabled zero copy between application mempools and UMEM by enabling the
+    XDP_UMEM_UNALIGNED_CHUNKS UMEM flag.
 
 * **Added Marvell NITROX symmetric crypto PMD.**
 
   Added a symmetric crypto PMD for Marvell NITROX V security processor.
   See the :doc:`../cryptodevs/nitrox` guide for more details on this new
+
+* **Added asymmetric support to Marvell OCTEON TX crypto PMD.**
+
+  Added support for asymmetric operations in Marvell OCTEON TX cypto PMD.
+  Supports RSA and modexp operations.
+
+* **Added Marvell OCTEON TX2 crypto PMD**
+
+  Added a new PMD driver for h/w crypto offload block on ``OCTEON TX2`` SoC.
+
+  See :doc:`../cryptodevs/octeontx2` for more details
 
 * **Updated NXP crypto PMDs for PDCP support.**
 
@@ -109,10 +198,28 @@ New Features
   classic 2-pass mode when running on QAT GEN3, significantly improving
   the performance of AES GCM operations.
 
+* **Updated the Intel QuickAssist Technology (QAT) asymmetric crypto PMD.**
+
+  * Added support for asymmetric session-less operations.
+  * Added support for RSA algorithm with pair (n, d) private key representation.
+  * Added support for RSA algorithm with quintuple private key representation.
+
 * **Updated the Intel QuickAssist Technology (QAT) compression PMD.**
 
   Added stateful decompression support in the Intel QuickAssist Technology PMD.
   Please note that stateful compression is not supported.
+
+* **Added external buffers support for dpdk-test-compress-perf tool.**
+
+  Added a command line option to dpdk-test-compress-perf tool to allocate
+  and use memory zones as external buffers instead of keeping the data directly
+  in mbuf areas.
+
+* **Updated the IPSec library.**
+
+  Added SA Database API to ``librte_ipsec``. A new test-sad application is also
+  introduced to evaluate and perform custom functional and performance tests
+  for IPsec SAD implementation.
 
 * **Introduced FIFO for NTB PMD.**
 
@@ -123,6 +230,23 @@ New Features
 
   Added eBPF JIT support for arm64 architecture to improve the eBPF program
   performance.
+
+* **Added RIB and FIB (Routing/Forwarding Information Base) libraries.**
+
+  RIB and FIB can replace the LPM (Longest Prefix Match) library
+  with better control plane (RIB) performance.
+  The data plane (FIB) can be extended with new algorithms.
+
+* **Updated testpmd.**
+
+  * Added a console command to testpmd app, ``show port (port_id) ptypes`` which
+    gives ability to print port supported ptypes in different protocol layers.
+
+* **Added new example l2fwd-event application.**
+
+  Added an example application `l2fwd-event` that adds event device support to
+  traditional l2fwd example. It demonstrates usage of poll and event mode IO
+  mechanism under a single application.
 
 
 Removed Items
@@ -137,14 +261,31 @@ Removed Items
    Also, make sure to start the actual text at the margin.
    =========================================================
 
-   * Removed duplicated set of commands for RX offloading configuration from app/testpmd:
-     “port config all crc-strip|scatter|rx-cksum|rx-timestamp|hw-vlan|hw-vlan-filter|
-     hw-vlan-strip|hw-vlan-extend on|off”.
+* Removed duplicated set of commands for Rx offload configuration from testpmd::
 
-     The testpmd commands set that can be used instead in order to enable or disable Rx
-     offloading on all Rx queues of a port is:
-     "port config <port_id> rx_offload crc_strip|scatter|ipv4_cksum|udp_cksum|tcp_cksum|
-     timestamp|vlan_strip|vlan_filter|vlan_extend on|off"
+    port config all crc-strip|scatter|rx-cksum|rx-timestamp|
+                    hw-vlan|hw-vlan-filter|hw-vlan-strip|hw-vlan-extend on|off
+
+  The testpmd commands set that can be used instead
+  in order to enable or disable Rx offloading on all Rx queues of a port is::
+
+    port config <port_id> rx_offload crc_strip|scatter|
+                                     ipv4_cksum|udp_cksum|tcp_cksum|timestamp|
+                                     vlan_strip|vlan_filter|vlan_extend on|off
+
+* Removed AF_XDP pmd_zero copy vdev argument. Support is now auto-detected.
+
+* The following sample applications have been removed in this release:
+
+  * Exception Path
+  * L3 Forwarding in a Virtualization Environment
+  * Load Balancer
+  * Netmap Compatibility
+  * Quota and Watermark
+  * vhost-scsi
+
+* Removed arm64-dpaa2-* build config. arm64-dpaa-* can now build for both
+  dpaa and dpaa2 platforms.
 
 
 API Changes
@@ -161,6 +302,37 @@ API Changes
    This section is a comment. Do not overwrite or remove it.
    Also, make sure to start the actual text at the margin.
    =========================================================
+
+* eal: made the ``lcore_config`` struct and global symbol private.
+
+* eal: removed the ``rte_cpu_check_supported`` function, replaced by
+  ``rte_cpu_is_supported`` since dpdk v17.08.
+
+* eal: removed the ``rte_malloc_virt2phy`` function, replaced by
+  ``rte_malloc_virt2iova`` since v17.11.
+
+* eal: made the ``rte_config`` struct and ``rte_eal_get_configuration``
+  function private.
+
+* mem: hid the internal ``malloc_heap`` structure and the
+  ``rte_malloc_heap.h`` header.
+
+* vfio: removed ``rte_vfio_dma_map`` and ``rte_vfio_dma_unmap`` that have
+  been marked as deprecated in release 19.05.
+  ``rte_vfio_container_dma_map`` and ``rte_vfio_container_dma_unmap`` can
+  be used as substitutes.
+
+* pci: removed the following functions deprecated since dpdk v17.11:
+
+  - ``eal_parse_pci_BDF`` replaced by ``rte_pci_addr_parse``
+  - ``eal_parse_pci_DomBDF`` replaced by ``rte_pci_addr_parse``
+  - ``rte_eal_compare_pci_addr`` replaced by ``rte_pci_addr_cmp``
+
+* The network structure ``esp_tail`` has been prefixed by ``rte_``.
+
+* The network definitions of PPPoE ethertypes have been prefixed by ``RTE_``.
+
+* The network structure for MPLS has been prefixed by ``rte_``.
 
 * ethdev: changed ``rte_eth_dev_infos_get`` return value from ``void`` to
   ``int`` to provide a way to report various error conditions.
@@ -186,6 +358,16 @@ API Changes
 * ethdev: changed ``rte_eth_dev_owner_delete`` return value from ``void`` to
   ``int`` to provide a way to report various error conditions.
 
+* event: The function ``rte_event_eth_tx_adapter_enqueue`` takes an additional
+  input as ``flags``. Flag ``RTE_EVENT_ETH_TX_ADAPTER_ENQUEUE_SAME_DEST`` which
+  has been introduced in this release is used when used when all the packets
+  enqueued in the tx adapter are destined for the same Ethernet port & Tx queue.
+
+* sched: The pipe nodes configuration parameters such as number of pipes,
+  pipe queue sizes, pipe profiles, etc., are moved from port level structure
+  to subport level. This allows different subports of the same port to
+  have different configuration for the pipe nodes.
+
 
 ABI Changes
 -----------
@@ -201,6 +383,12 @@ ABI Changes
    This section is a comment. Do not overwrite or remove it.
    Also, make sure to start the actual text at the margin.
    =========================================================
+
+* net: The Ethernet address and other header definitions have changed
+  attributes. They have been modified to be aligned on 2-byte boundaries.
+  These changes should not impact normal usage because drivers naturally
+  align the Ethernet header on receive and all known encapsulations
+  preserve the alignment of the header.
 
 
 Shared Library Versions
@@ -235,10 +423,11 @@ The libraries prepended with a plus sign were incremented in this version.
      librte_compressdev.so.1
      librte_cryptodev.so.8
      librte_distributor.so.1
-     librte_eal.so.11
+   + librte_eal.so.12
      librte_efd.so.1
    + librte_ethdev.so.13
-     librte_eventdev.so.7
+   + librte_eventdev.so.8
+   + librte_fib.so.1
      librte_flow_classify.so.1
      librte_gro.so.1
      librte_gso.so.1
@@ -256,7 +445,7 @@ The libraries prepended with a plus sign were incremented in this version.
      librte_meter.so.3
      librte_metrics.so.1
      librte_net.so.1
-     librte_pci.so.1
+   + librte_pci.so.2
      librte_pdump.so.3
      librte_pipeline.so.3
      librte_pmd_bnxt.so.2
@@ -270,10 +459,11 @@ The libraries prepended with a plus sign were incremented in this version.
      librte_port.so.3
      librte_power.so.1
      librte_rawdev.so.1
+   + librte_rib.so.1
      librte_rcu.so.1
      librte_reorder.so.1
      librte_ring.so.2
-     librte_sched.so.3
+   + librte_sched.so.4
      librte_security.so.2
      librte_stack.so.1
      librte_table.so.3
@@ -314,13 +504,4 @@ Tested Platforms
    This section is a comment. Do not overwrite or remove it.
    Also, make sure to start the actual text at the margin.
    =========================================================
-
-* **Updated Mellanox mlx5 driver.**
-
-  Updated Mellanox mlx5 driver with new features and improvements, including:
-
-  * Added support for VLAN pop flow offload command.
-  * Added support for VLAN push flow offload command.
-  * Added support for VLAN set PCP offload command.
-  * Added support for VLAN set VID offload command.
 

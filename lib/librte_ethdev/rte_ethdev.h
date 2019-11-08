@@ -156,8 +156,8 @@ extern "C" {
 #include <rte_errno.h>
 #include <rte_common.h>
 #include <rte_config.h>
+#include <rte_ether.h>
 
-#include "rte_ether.h"
 #include "rte_dev_info.h"
 
 extern int rte_eth_dev_logtype;
@@ -453,7 +453,6 @@ struct rte_eth_rss_conf {
  * possible, and exclusively. For example, if a packet is identified as
  * 'RTE_ETH_FLOW_NONFRAG_IPV4_TCP', it will not be any of other flow types,
  * though it is an actual IPV4 packet.
- * Note that the flow types are used to define RSS offload types.
  */
 #define RTE_ETH_FLOW_UNKNOWN             0
 #define RTE_ETH_FLOW_RAW                 1
@@ -479,34 +478,70 @@ struct rte_eth_rss_conf {
 #define RTE_ETH_FLOW_GENEVE             20 /**< GENEVE protocol based flow */
 #define RTE_ETH_FLOW_NVGRE              21 /**< NVGRE protocol based flow */
 #define RTE_ETH_FLOW_VXLAN_GPE          22 /**< VXLAN-GPE protocol based flow */
-#define RTE_ETH_FLOW_MAX                23
+#define RTE_ETH_FLOW_GTPU               23 /**< GTPU protocol based flow */
+#define RTE_ETH_FLOW_MAX                24
 
 /*
- * The RSS offload types are defined based on flow types.
- * Different NIC hardware may support different RSS offload
- * types. The supported flow types or RSS offload types can be queried by
- * rte_eth_dev_info_get().
+ * Below macros are defined for RSS offload types, they can be used to
+ * fill rte_eth_rss_conf.rss_hf or rte_flow_action_rss.types.
  */
-#define ETH_RSS_IPV4               (1ULL << RTE_ETH_FLOW_IPV4)
-#define ETH_RSS_FRAG_IPV4          (1ULL << RTE_ETH_FLOW_FRAG_IPV4)
-#define ETH_RSS_NONFRAG_IPV4_TCP   (1ULL << RTE_ETH_FLOW_NONFRAG_IPV4_TCP)
-#define ETH_RSS_NONFRAG_IPV4_UDP   (1ULL << RTE_ETH_FLOW_NONFRAG_IPV4_UDP)
-#define ETH_RSS_NONFRAG_IPV4_SCTP  (1ULL << RTE_ETH_FLOW_NONFRAG_IPV4_SCTP)
-#define ETH_RSS_NONFRAG_IPV4_OTHER (1ULL << RTE_ETH_FLOW_NONFRAG_IPV4_OTHER)
-#define ETH_RSS_IPV6               (1ULL << RTE_ETH_FLOW_IPV6)
-#define ETH_RSS_FRAG_IPV6          (1ULL << RTE_ETH_FLOW_FRAG_IPV6)
-#define ETH_RSS_NONFRAG_IPV6_TCP   (1ULL << RTE_ETH_FLOW_NONFRAG_IPV6_TCP)
-#define ETH_RSS_NONFRAG_IPV6_UDP   (1ULL << RTE_ETH_FLOW_NONFRAG_IPV6_UDP)
-#define ETH_RSS_NONFRAG_IPV6_SCTP  (1ULL << RTE_ETH_FLOW_NONFRAG_IPV6_SCTP)
-#define ETH_RSS_NONFRAG_IPV6_OTHER (1ULL << RTE_ETH_FLOW_NONFRAG_IPV6_OTHER)
-#define ETH_RSS_L2_PAYLOAD         (1ULL << RTE_ETH_FLOW_L2_PAYLOAD)
-#define ETH_RSS_IPV6_EX            (1ULL << RTE_ETH_FLOW_IPV6_EX)
-#define ETH_RSS_IPV6_TCP_EX        (1ULL << RTE_ETH_FLOW_IPV6_TCP_EX)
-#define ETH_RSS_IPV6_UDP_EX        (1ULL << RTE_ETH_FLOW_IPV6_UDP_EX)
-#define ETH_RSS_PORT               (1ULL << RTE_ETH_FLOW_PORT)
-#define ETH_RSS_VXLAN              (1ULL << RTE_ETH_FLOW_VXLAN)
-#define ETH_RSS_GENEVE             (1ULL << RTE_ETH_FLOW_GENEVE)
-#define ETH_RSS_NVGRE              (1ULL << RTE_ETH_FLOW_NVGRE)
+#define ETH_RSS_IPV4               (1ULL << 2)
+#define ETH_RSS_FRAG_IPV4          (1ULL << 3)
+#define ETH_RSS_NONFRAG_IPV4_TCP   (1ULL << 4)
+#define ETH_RSS_NONFRAG_IPV4_UDP   (1ULL << 5)
+#define ETH_RSS_NONFRAG_IPV4_SCTP  (1ULL << 6)
+#define ETH_RSS_NONFRAG_IPV4_OTHER (1ULL << 7)
+#define ETH_RSS_IPV6               (1ULL << 8)
+#define ETH_RSS_FRAG_IPV6          (1ULL << 9)
+#define ETH_RSS_NONFRAG_IPV6_TCP   (1ULL << 10)
+#define ETH_RSS_NONFRAG_IPV6_UDP   (1ULL << 11)
+#define ETH_RSS_NONFRAG_IPV6_SCTP  (1ULL << 12)
+#define ETH_RSS_NONFRAG_IPV6_OTHER (1ULL << 13)
+#define ETH_RSS_L2_PAYLOAD         (1ULL << 14)
+#define ETH_RSS_IPV6_EX            (1ULL << 15)
+#define ETH_RSS_IPV6_TCP_EX        (1ULL << 16)
+#define ETH_RSS_IPV6_UDP_EX        (1ULL << 17)
+#define ETH_RSS_PORT               (1ULL << 18)
+#define ETH_RSS_VXLAN              (1ULL << 19)
+#define ETH_RSS_GENEVE             (1ULL << 20)
+#define ETH_RSS_NVGRE              (1ULL << 21)
+#define ETH_RSS_GTPU               (1ULL << 23)
+
+/*
+ * We use the following macros to combine with above ETH_RSS_* for
+ * more specific input set selection. These bits are defined starting
+ * from the high end of the 64 bits.
+ * Note: If we use above ETH_RSS_* without SRC/DST_ONLY, it represents
+ * both SRC and DST are taken into account. If SRC_ONLY and DST_ONLY of
+ * the same level are used simultaneously, it is the same case as none of
+ * them are added.
+ */
+#define ETH_RSS_L3_SRC_ONLY        (1ULL << 63)
+#define ETH_RSS_L3_DST_ONLY        (1ULL << 62)
+#define ETH_RSS_L4_SRC_ONLY        (1ULL << 61)
+#define ETH_RSS_L4_DST_ONLY        (1ULL << 60)
+
+/**
+ * For input set change of hash filter, if SRC_ONLY and DST_ONLY of
+ * the same level are used simultaneously, it is the same case as
+ * none of them are added.
+ *
+ * @param rss_hf
+ *   RSS types with SRC/DST_ONLY.
+ * @return
+ *   RSS types.
+ */
+static inline uint64_t
+rte_eth_rss_hf_refine(uint64_t rss_hf)
+{
+	if ((rss_hf & ETH_RSS_L3_SRC_ONLY) && (rss_hf & ETH_RSS_L3_DST_ONLY))
+		rss_hf &= ~(ETH_RSS_L3_SRC_ONLY | ETH_RSS_L3_DST_ONLY);
+
+	if ((rss_hf & ETH_RSS_L4_SRC_ONLY) && (rss_hf & ETH_RSS_L4_DST_ONLY))
+		rss_hf &= ~(ETH_RSS_L4_SRC_ONLY | ETH_RSS_L4_DST_ONLY);
+
+	return rss_hf;
+}
 
 #define ETH_RSS_IP ( \
 	ETH_RSS_IPV4 | \
@@ -1211,6 +1246,35 @@ struct rte_eth_txq_info {
 	struct rte_eth_txconf conf; /**< queue config parameters. */
 	uint16_t nb_desc;           /**< configured number of TXDs. */
 } __rte_cache_min_aligned;
+
+/**
+ * Burst mode types, values can be ORed to define the burst mode of a driver.
+ */
+enum rte_eth_burst_mode_option {
+	RTE_ETH_BURST_SCALAR = (1 << 0),
+	RTE_ETH_BURST_VECTOR = (1 << 1),
+
+	/**< bits[15:2] are reserved for each vector type */
+	RTE_ETH_BURST_ALTIVEC = (1 << 2),
+	RTE_ETH_BURST_NEON = (1 << 3),
+	RTE_ETH_BURST_SSE = (1 << 4),
+	RTE_ETH_BURST_AVX2 = (1 << 5),
+	RTE_ETH_BURST_AVX512 = (1 << 6),
+
+	RTE_ETH_BURST_SCATTERED = (1 << 16), /**< Support scattered packets */
+	RTE_ETH_BURST_BULK_ALLOC = (1 << 17), /**< Support mbuf bulk alloc */
+	RTE_ETH_BURST_SIMPLE = (1 << 18),
+
+	RTE_ETH_BURST_PER_QUEUE = (1 << 19), /**< Support per queue burst */
+};
+
+/**
+ * Ethernet device RX/TX queue packet burst mode information structure.
+ * Used to retrieve information about packet burst mode setting.
+ */
+struct rte_eth_burst_mode {
+	uint64_t options;
+};
 
 /** Maximum name length for extended statistics counters */
 #define RTE_ETH_XSTATS_NAME_SIZE 64
@@ -3599,6 +3663,62 @@ int rte_eth_rx_queue_info_get(uint16_t port_id, uint16_t queue_id,
  */
 int rte_eth_tx_queue_info_get(uint16_t port_id, uint16_t queue_id,
 	struct rte_eth_txq_info *qinfo);
+
+/**
+ * Retrieve information about the Rx packet burst mode.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param queue_id
+ *   The Rx queue on the Ethernet device for which information
+ *   will be retrieved.
+ * @param mode
+ *   A pointer to a structure of type *rte_eth_burst_mode* to be filled
+ *   with the information of the packet burst mode.
+ *
+ * @return
+ *   - 0: Success
+ *   - -ENOTSUP: routine is not supported by the device PMD.
+ *   - -EINVAL:  The port_id or the queue_id is out of range.
+ */
+__rte_experimental
+int rte_eth_rx_burst_mode_get(uint16_t port_id, uint16_t queue_id,
+	struct rte_eth_burst_mode *mode);
+
+/**
+ * Retrieve information about the Tx packet burst mode.
+ *
+ * @param port_id
+ *   The port identifier of the Ethernet device.
+ * @param queue_id
+ *   The Tx queue on the Ethernet device for which information
+ *   will be retrieved.
+ * @param mode
+ *   A pointer to a structure of type *rte_eth_burst_mode* to be filled
+ *   with the information of the packet burst mode.
+ *
+ * @return
+ *   - 0: Success
+ *   - -ENOTSUP: routine is not supported by the device PMD.
+ *   - -EINVAL:  The port_id or the queue_id is out of range.
+ */
+__rte_experimental
+int rte_eth_tx_burst_mode_get(uint16_t port_id, uint16_t queue_id,
+	struct rte_eth_burst_mode *mode);
+
+/**
+ * Retrieve name about burst mode option.
+ *
+ * @param option
+ *   The burst mode option of type *rte_eth_burst_mode_option*.
+ *
+ * @return
+ *   - "": Not found
+ *   - "xxx": name of the mode option.
+ */
+__rte_experimental
+const char *
+rte_eth_burst_mode_option_name(uint64_t option);
 
 /**
  * Retrieve device registers and register attributes (number of registers and

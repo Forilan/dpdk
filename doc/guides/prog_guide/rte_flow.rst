@@ -1247,6 +1247,57 @@ Matches a PPPoE session protocol identifier.
    | ``mask`` | ``data`` | bit-mask applies to "spec" and "last" |
    +----------+----------+---------------------------------------+
 
+Item: ``NSH``
+^^^^^^^^^^^^^
+
+Matches a network service header (RFC 8300).
+
+- ``version``: normally 0x0 (2 bits).
+- ``oam_pkt``: indicate oam packet (1 bit).
+- ``reserved``: reserved bit (1 bit).
+- ``ttl``: maximum SFF hopes (6 bits).
+- ``length``: total length in 4 bytes words (6 bits).
+- ``reserved1``: reserved1 bits (4 bits).
+- ``mdtype``: ndicates format of NSH header (4 bits).
+- ``next_proto``: indicates protocol type of encap data (8 bits).
+- ``spi``: service path identifier (3 bytes).
+- ``sindex``: service index (1 byte).
+- Default ``mask`` matches mdtype, next_proto, spi, sindex.
+
+
+Item: ``IGMP``
+^^^^^^^^^^^^^^
+
+Matches a Internet Group Management Protocol (RFC 2236).
+
+- ``type``: IGMP message type (Query/Report).
+- ``max_resp_time``: max time allowed before sending report.
+- ``checksum``: checksum, 1s complement of whole IGMP message.
+- ``group_addr``: group address, for Query value will be 0.
+- Default ``mask`` matches group_addr.
+
+
+Item: ``AH``
+^^^^^^^^^^^^
+
+Matches a IP Authentication Header (RFC 4302).
+
+- ``next_hdr``: next payload after AH.
+- ``payload_len``: total length of AH in 4B words.
+- ``reserved``: reserved bits.
+- ``spi``: security parameters index.
+- ``seq_num``: counter value increased by 1 on each packet sent.
+- Default ``mask`` matches spi.
+
+Item: ``HIGIG2``
+^^^^^^^^^^^^^^^^^
+
+Matches a HIGIG2 header field. It is layer 2.5 protocol and used in
+Broadcom switches.
+
+- Default ``mask`` matches classification and vlan.
+
+
 Actions
 ~~~~~~~
 

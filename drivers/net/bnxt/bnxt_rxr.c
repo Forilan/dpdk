@@ -12,7 +12,6 @@
 #include <rte_memory.h>
 
 #include "bnxt.h"
-#include "bnxt_cpr.h"
 #include "bnxt_ring.h"
 #include "bnxt_rxr.h"
 #include "bnxt_rxq.h"
@@ -64,17 +63,21 @@ static inline int bnxt_alloc_ag_data(struct bnxt_rx_queue *rxq,
 	struct bnxt_sw_rx_bd *rx_buf = &rxr->ag_buf_ring[prod];
 	struct rte_mbuf *mbuf;
 
+	if (rxbd == NULL) {
+		PMD_DRV_LOG(ERR, "Jumbo Frame. rxbd is NULL\n");
+		return -EINVAL;
+	}
+
+	if (rx_buf == NULL) {
+		PMD_DRV_LOG(ERR, "Jumbo Frame. rx_buf is NULL\n");
+		return -EINVAL;
+	}
+
 	mbuf = __bnxt_alloc_rx_data(rxq->mb_pool);
 	if (!mbuf) {
 		rte_atomic64_inc(&rxq->rx_mbuf_alloc_fail);
 		return -ENOMEM;
 	}
-
-	if (rxbd == NULL)
-		PMD_DRV_LOG(ERR, "Jumbo Frame. rxbd is NULL\n");
-	if (rx_buf == NULL)
-		PMD_DRV_LOG(ERR, "Jumbo Frame. rx_buf is NULL\n");
-
 
 	rx_buf->mbuf = mbuf;
 	mbuf->data_off = RTE_PKTMBUF_HEADROOM;
@@ -636,6 +639,9 @@ uint16_t bnxt_recv_pkts(void *rx_queue, struct rte_mbuf **rx_pkts,
 			evt =
 			bnxt_event_hwrm_resp_handler(rxq->bp,
 						     (struct cmpl_base *)rxcmp);
+			/* If the async event is Fatal error, return */
+			if (unlikely(is_bnxt_in_error(rxq->bp)))
+				goto done;
 		}
 
 		raw_cons = NEXT_RAW_CMP(raw_cons);

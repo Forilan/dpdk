@@ -330,6 +330,8 @@ mlx5_devx_cmd_query_hca_attr(struct ibv_context *ctx,
 	attr->eth_net_offloads = MLX5_GET(cmd_hca_cap, hcattr,
 					  eth_net_offloads);
 	attr->eth_virt = MLX5_GET(cmd_hca_cap, hcattr, eth_virt);
+	attr->flex_parser_protocols = MLX5_GET(cmd_hca_cap, hcattr,
+					       flex_parser_protocols);
 	if (!attr->eth_net_offloads)
 		return 0;
 
@@ -374,6 +376,12 @@ mlx5_devx_cmd_query_hca_attr(struct ibv_context *ctx,
 			MLX5_GET(per_protocol_networking_offload_caps, hcattr,
 				 lro_timer_supported_periods[i]);
 	}
+	attr->tunnel_stateless_geneve_rx =
+			    MLX5_GET(per_protocol_networking_offload_caps,
+				     hcattr, tunnel_stateless_geneve_rx);
+	attr->geneve_max_opt_len =
+		    MLX5_GET(per_protocol_networking_offload_caps,
+			     hcattr, max_geneve_opt_len);
 	attr->wqe_inline_mode = MLX5_GET(per_protocol_networking_offload_caps,
 					 hcattr, wqe_inline_mode);
 	if (attr->wqe_inline_mode != MLX5_CAP_INLINE_MODE_VPORT_CONTEXT)

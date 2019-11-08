@@ -24,6 +24,7 @@ Features of the OCTEON TX2 Ethdev PMD are:
 - Multiple queues for TX and RX
 - Receiver Side Scaling (RSS)
 - MAC/VLAN filtering
+- Multicast MAC filtering
 - Generic flow API
 - Inner and Outer Checksum offload
 - VLAN/QinQ stripping and insertion
@@ -187,12 +188,17 @@ The OCTEON TX2 SoC family NIC has inbuilt HW assisted external mempool manager.
 as it is performance wise most effective way for packet allocation and Tx buffer
 recycling on OCTEON TX2 SoC platform.
 
-CRC striping
-~~~~~~~~~~~~
+CRC stripping
+~~~~~~~~~~~~~
 
 The OCTEON TX2 SoC family NICs strip the CRC for every packet being received by
 the host interface irrespective of the offload configuration.
 
+Multicast MAC filtering
+~~~~~~~~~~~~~~~~~~~~~~~
+
+``net_octeontx2`` pmd supports multicast mac filtering feature only on physical
+function devices.
 
 Debugging Options
 -----------------

@@ -8,7 +8,6 @@
 #include <rte_malloc.h>
 
 #include "bnxt.h"
-#include "bnxt_cpr.h"
 #include "bnxt_filter.h"
 #include "bnxt_hwrm.h"
 #include "bnxt_ring.h"
@@ -367,6 +366,10 @@ int bnxt_rx_queue_setup_op(struct rte_eth_dev *eth_dev,
 	eth_dev->data->rx_queue_state[queue_idx] = queue_state;
 	rte_spinlock_init(&rxq->lock);
 
+	/* Configure mtu if it is different from what was configured before */
+	if (!queue_idx)
+		bnxt_mtu_set_op(eth_dev, eth_dev->data->mtu);
+
 out:
 	return rc;
 }
@@ -385,10 +388,9 @@ bnxt_rx_queue_intr_enable_op(struct rte_eth_dev *eth_dev, uint16_t queue_id)
 
 	if (eth_dev->data->rx_queues) {
 		rxq = eth_dev->data->rx_queues[queue_id];
-		if (!rxq) {
-			rc = -EINVAL;
-			return rc;
-		}
+		if (!rxq)
+			return -EINVAL;
+
 		cpr = rxq->cp_ring;
 		B_CP_DB_REARM(cpr, cpr->cp_raw_cons);
 	}
@@ -409,10 +411,9 @@ bnxt_rx_queue_intr_disable_op(struct rte_eth_dev *eth_dev, uint16_t queue_id)
 
 	if (eth_dev->data->rx_queues) {
 		rxq = eth_dev->data->rx_queues[queue_id];
-		if (!rxq) {
-			rc = -EINVAL;
-			return rc;
-		}
+		if (!rxq)
+			return -EINVAL;
+
 		cpr = rxq->cp_ring;
 		B_CP_DB_DISARM(cpr);
 	}

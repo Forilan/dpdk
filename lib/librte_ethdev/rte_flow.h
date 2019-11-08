@@ -27,6 +27,7 @@
 #include <rte_udp.h>
 #include <rte_byteorder.h>
 #include <rte_esp.h>
+#include <rte_higig.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -470,7 +471,56 @@ enum rte_flow_item_type {
 	 * See struct rte_flow_item_pppoe_proto_id.
 	 */
 	RTE_FLOW_ITEM_TYPE_PPPOE_PROTO_ID,
+
+	/**
+	 * Matches Network service header (NSH).
+	 * See struct rte_flow_item_nsh.
+	 *
+	 */
+	RTE_FLOW_ITEM_TYPE_NSH,
+
+	/**
+	 * Matches Internet Group Management Protocol (IGMP).
+	 * See struct rte_flow_item_igmp.
+	 *
+	 */
+	RTE_FLOW_ITEM_TYPE_IGMP,
+
+	/**
+	 * Matches IP Authentication Header (AH).
+	 * See struct rte_flow_item_ah.
+	 *
+	 */
+	RTE_FLOW_ITEM_TYPE_AH,
+
+	/**
+	 * Matches a HIGIG header.
+	 * see struct rte_flow_item_higig2_hdr.
+	 */
+	RTE_FLOW_ITEM_TYPE_HIGIG2,
 };
+
+/**
+ *
+ * RTE_FLOW_ITEM_TYPE_HIGIG2
+ * Matches higig2 header
+ */
+RTE_STD_C11
+struct rte_flow_item_higig2_hdr {
+	struct rte_higig2_hdr hdr;
+};
+
+/** Default mask for RTE_FLOW_ITEM_TYPE_HIGIG2. */
+#ifndef __cplusplus
+static const struct rte_flow_item_higig2_hdr rte_flow_item_higig2_hdr_mask = {
+	.hdr = {
+		.ppt1 = {
+			.classification = 0xffff,
+			.vid = 0xfff,
+		},
+	},
+};
+#endif
 
 /**
  * RTE_FLOW_ITEM_TYPE_ANY
@@ -1306,6 +1356,85 @@ rte_flow_item_pppoe_proto_id_mask = {
 struct rte_flow_item_mark {
 	uint32_t id; /**< Integer value to match against. */
 };
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this structure may change without prior notice
+ *
+ * RTE_FLOW_ITEM_TYPE_NSH
+ *
+ * Match network service header (NSH), RFC 8300
+ *
+ */
+struct rte_flow_item_nsh {
+	uint32_t version:2;
+	uint32_t oam_pkt:1;
+	uint32_t reserved:1;
+	uint32_t ttl:6;
+	uint32_t length:6;
+	uint32_t reserved1:4;
+	uint32_t mdtype:4;
+	uint32_t next_proto:8;
+	uint32_t spi:24;
+	uint32_t sindex:8;
+};
+
+/** Default mask for RTE_FLOW_ITEM_TYPE_NSH. */
+#ifndef __cplusplus
+static const struct rte_flow_item_nsh rte_flow_item_nsh_mask = {
+	.mdtype = 0xf,
+	.next_proto = 0xff,
+	.spi = 0xffffff,
+	.sindex = 0xff,
+};
+#endif
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this structure may change without prior notice
+ *
+ * RTE_FLOW_ITEM_TYPE_IGMP
+ *
+ * Match Internet Group Management Protocol (IGMP), RFC 2236
+ *
+ */
+struct rte_flow_item_igmp {
+	uint32_t type:8;
+	uint32_t max_resp_time:8;
+	uint32_t checksum:16;
+	uint32_t group_addr;
+};
+
+/** Default mask for RTE_FLOW_ITEM_TYPE_IGMP. */
+#ifndef __cplusplus
+static const struct rte_flow_item_igmp rte_flow_item_igmp_mask = {
+	.group_addr = 0xffffffff,
+};
+#endif
+
+/**
+ * @warning
+ * @b EXPERIMENTAL: this structure may change without prior notice
+ *
+ * RTE_FLOW_ITEM_TYPE_AH
+ *
+ * Match IP Authentication Header (AH), RFC 4302
+ *
+ */
+struct rte_flow_item_ah {
+	uint32_t next_hdr:8;
+	uint32_t payload_len:8;
+	uint32_t reserved:16;
+	uint32_t spi;
+	uint32_t seq_num;
+};
+
+/** Default mask for RTE_FLOW_ITEM_TYPE_AH. */
+#ifndef __cplusplus
+static const struct rte_flow_item_ah rte_flow_item_ah_mask = {
+	.spi = 0xffffffff,
+};
+#endif
 
 /**
  * Matching pattern item definition.

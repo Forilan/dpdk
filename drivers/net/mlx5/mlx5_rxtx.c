@@ -2747,27 +2747,33 @@ mlx5_tx_dseg_iptr(struct mlx5_txq_data *restrict txq,
 	/* Unrolled implementation of generic rte_memcpy. */
 	dst = (uintptr_t)&dseg->inline_data[0];
 	src = (uintptr_t)buf;
-#ifdef RTE_ARCH_STRICT_ALIGN
-	memcpy(dst, src, len);
-#else
 	if (len & 0x08) {
-		*(uint64_t *)dst = *(uint64_t *)src;
+#ifdef RTE_ARCH_STRICT_ALIGN
+		assert(dst == RTE_PTR_ALIGN(dst, sizeof(uint32_t)));
+		*(uint32_t *)dst = *(unaligned_uint32_t *)src;
+		dst += sizeof(uint32_t);
+		src += sizeof(uint32_t);
+		*(uint32_t *)dst = *(unaligned_uint32_t *)src;
+		dst += sizeof(uint32_t);
+		src += sizeof(uint32_t);
+#else
+		*(uint64_t *)dst = *(unaligned_uint64_t *)src;
 		dst += sizeof(uint64_t);
 		src += sizeof(uint64_t);
+#endif
 	}
 	if (len & 0x04) {
-		*(uint32_t *)dst = *(uint32_t *)src;
+		*(uint32_t *)dst = *(unaligned_uint32_t *)src;
 		dst += sizeof(uint32_t);
 		src += sizeof(uint32_t);
 	}
 	if (len & 0x02) {
-		*(uint16_t *)dst = *(uint16_t *)src;
+		*(uint16_t *)dst = *(unaligned_uint16_t *)src;
 		dst += sizeof(uint16_t);
 		src += sizeof(uint16_t);
 	}
 	if (len & 0x01)
 		*(uint8_t *)dst = *(uint8_t *)src;
-#endif
 }
 
 /**
@@ -4568,7 +4574,7 @@ send_loop:
 	loc.wqe_free = txq->wqe_s -
 				(uint16_t)(txq->wqe_ci - txq->wqe_pi);
 	if (unlikely(!loc.elts_free || !loc.wqe_free))
-		return loc.pkts_sent;
+		goto burst_exit;
 	for (;;) {
 		/*
 		 * Fetch the packet from array. Usually this is
@@ -4735,7 +4741,7 @@ enter_send_single:
 	assert(MLX5_TXOFF_CONFIG(INLINE) || loc.pkts_sent >= loc.pkts_copy);
 	/* Take a shortcut if nothing is sent. */
 	if (unlikely(loc.pkts_sent == loc.pkts_loop))
-		return loc.pkts_sent;
+		goto burst_exit;
 	/*
 	 * Ring QP doorbell immediately after WQE building completion
 	 * to improve latencies. The pure software related data treatment
@@ -4758,10 +4764,6 @@ enter_send_single:
 		mlx5_tx_copy_elts(txq, pkts + loc.pkts_copy, part, olx);
 		loc.pkts_copy = loc.pkts_sent;
 	}
-#ifdef MLX5_PMD_SOFT_COUNTERS
-	/* Increment sent packets counter. */
-	txq->stats.opackets += loc.pkts_sent;
-#endif
 	assert(txq->elts_s >= (uint16_t)(txq->elts_head - txq->elts_tail));
 	assert(txq->wqe_s >= (uint16_t)(txq->wqe_ci - txq->wqe_pi));
 	if (pkts_n > loc.pkts_sent) {
@@ -4772,6 +4774,11 @@ enter_send_single:
 		 */
 		goto send_loop;
 	}
+burst_exit:
+#ifdef MLX5_PMD_SOFT_COUNTERS
+	/* Increment sent packets counter. */
+	txq->stats.opackets += loc.pkts_sent;
+#endif
 	return loc.pkts_sent;
 }
 
