@@ -658,6 +658,60 @@ the physical device, with virtual groups in the PMD or not at all.
    | ``mask`` | ``id``   | zeroed to match any value |
    +----------+----------+---------------------------+
 
+Item: ``TAG``
+^^^^^^^^^^^^^
+
+Matches tag item set by other flows. Multiple tags are supported by specifying
+``index``.
+
+- Default ``mask`` matches the specified tag value and index.
+
+.. _table_rte_flow_item_tag:
+
+.. table:: TAG
+
+   +----------+----------+----------------------------------------+
+   | Field    | Subfield  | Value                                 |
+   +==========+===========+=======================================+
+   | ``spec`` | ``data``  | 32 bit flow tag value                 |
+   |          +-----------+---------------------------------------+
+   |          | ``index`` | index of flow tag                     |
+   +----------+-----------+---------------------------------------+
+   | ``last`` | ``data``  | upper range value                     |
+   |          +-----------+---------------------------------------+
+   |          | ``index`` | field is ignored                      |
+   +----------+-----------+---------------------------------------+
+   | ``mask`` | ``data``  | bit-mask applies to "spec" and "last" |
+   |          +-----------+---------------------------------------+
+   |          | ``index`` | field is ignored                      |
+   +----------+-----------+---------------------------------------+
+
+Item: ``META``
+^^^^^^^^^^^^^^^^^
+
+Matches 32 bit metadata item set.
+
+On egress, metadata can be set either by mbuf metadata field with
+PKT_TX_DYNF_METADATA flag or ``SET_META`` action. On ingress, ``SET_META``
+action sets metadata for a packet and the metadata will be reported via
+``metadata`` dynamic field of ``rte_mbuf`` with PKT_RX_DYNF_METADATA flag.
+
+- Default ``mask`` matches the specified Rx metadata value.
+
+.. _table_rte_flow_item_meta:
+
+.. table:: META
+
+   +----------+----------+---------------------------------------+
+   | Field    | Subfield | Value                                 |
+   +==========+==========+=======================================+
+   | ``spec`` | ``data`` | 32 bit metadata value                 |
+   +----------+----------+---------------------------------------+
+   | ``last`` | ``data`` | upper range value                     |
+   +----------+----------+---------------------------------------+
+   | ``mask`` | ``data`` | bit-mask applies to "spec" and "last" |
+   +----------+----------+---------------------------------------+
+
 Data matching item types
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -851,6 +905,11 @@ so-called layer 2.5 pattern items such as ``RTE_FLOW_ITEM_TYPE_VLAN``. In
 the latter case, ``type`` refers to that of the outer header, with the inner
 EtherType/TPID provided by the subsequent pattern item. This is the same
 order as on the wire.
+If the ``type`` field contains a TPID value, then only tagged packets with the
+specified TPID will match the pattern.
+Otherwise, only untagged packets will match the pattern.
+If the ``ETH`` item is the only item in the pattern, and the ``type`` field is
+not specified, then both tagged and untagged packets will match the pattern.
 
 - ``dst``: destination MAC.
 - ``src``: source MAC.
@@ -865,6 +924,8 @@ Matches an 802.1Q/ad VLAN tag.
 The corresponding standard outer EtherType (TPID) values are
 ``RTE_ETHER_TYPE_VLAN`` or ``RTE_ETHER_TYPE_QINQ``. It can be overridden by the
 preceding pattern item.
+If a ``VLAN`` item is present in the pattern, then only tagged packets will
+match the pattern.
 
 - ``tci``: tag control information.
 - ``inner_type``: inner EtherType or TPID.
@@ -1232,21 +1293,6 @@ Matches a PPPoE session protocol identifier.
 - ``proto_id``: PPP protocol identifier.
 - Default ``mask`` matches proto_id only.
 
-
-.. _table_rte_flow_item_meta:
-
-.. table:: META
-
-   +----------+----------+---------------------------------------+
-   | Field    | Subfield | Value                                 |
-   +==========+==========+=======================================+
-   | ``spec`` | ``data`` | 32 bit metadata value                 |
-   +----------+--------------------------------------------------+
-   | ``last`` | ``data`` | upper range value                     |
-   +----------+----------+---------------------------------------+
-   | ``mask`` | ``data`` | bit-mask applies to "spec" and "last" |
-   +----------+----------+---------------------------------------+
-
 Item: ``NSH``
 ^^^^^^^^^^^^^
 
@@ -1297,6 +1343,24 @@ Broadcom switches.
 
 - Default ``mask`` matches classification and vlan.
 
+Item: ``L2TPV3OIP``
+^^^^^^^^^^^^^^^^^^^
+
+Matches a L2TPv3 over IP header.
+
+- ``session_id``: L2TPv3 over IP session identifier.
+- Default ``mask`` matches session_id only.
+
+Item: ``PFCP``
+^^^^^^^^^^^^^^
+
+Matches a PFCP Header.
+
+- ``s_field``: S field.
+- ``msg_type``: message type.
+- ``msg_len``: message length.
+- ``seid``: session endpoint identifier.
+- Default ``mask`` matches s_field and seid.
 
 Actions
 ~~~~~~~
@@ -1611,7 +1675,7 @@ Counters can be retrieved and reset through ``rte_flow_query()``, see
 The shared flag indicates whether the counter is unique to the flow rule the
 action is specified with, or whether it is a shared counter.
 
-For a count action with the shared flag set, then then a global device
+For a count action with the shared flag set, then a global device
 namespace is assumed for the counter id, so that any matched flow rules using
 a count action with the same counter id on the same port will contribute to
 that counter.
@@ -2465,6 +2529,121 @@ Decrease acknowledgment number in the outermost TCP header.
 Value to decrease TCP acknowledgment number by is a big-endian 32 bit integer.
 
 Using this action on non-matching traffic will result in undefined behavior.
+
+Action: ``SET_TAG``
+^^^^^^^^^^^^^^^^^^^
+
+Set Tag.
+
+Tag is a transient data used during flow matching. This is not delivered to
+application. Multiple tags are supported by specifying index.
+
+.. _table_rte_flow_action_set_tag:
+
+.. table:: SET_TAG
+
+   +-----------+----------------------------+
+   | Field     | Value                      |
+   +===========+============================+
+   | ``data``  | 32 bit tag value           |
+   +-----------+----------------------------+
+   | ``mask``  | bit-mask applies to "data" |
+   +-----------+----------------------------+
+   | ``index`` | index of tag to set        |
+   +-----------+----------------------------+
+
+Action: ``SET_META``
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Set metadata. Item ``META`` matches metadata.
+
+Metadata set by mbuf metadata field with PKT_TX_DYNF_METADATA flag on egress
+will be overridden by this action. On ingress, the metadata will be carried by
+``metadata`` dynamic field of ``rte_mbuf`` which can be accessed by
+``RTE_FLOW_DYNF_METADATA()``. PKT_RX_DYNF_METADATA flag will be set along
+with the data.
+
+The mbuf dynamic field must be registered by calling
+``rte_flow_dynf_metadata_register()`` prior to use ``SET_META`` action.
+
+Altering partial bits is supported with ``mask``. For bits which have never been
+set, unpredictable value will be seen depending on driver implementation. For
+loopback/hairpin packet, metadata set on Rx/Tx may or may not be propagated to
+the other path depending on HW capability.
+
+.. _table_rte_flow_action_set_meta:
+
+.. table:: SET_META
+
+   +----------+----------------------------+
+   | Field    | Value                      |
+   +==========+============================+
+   | ``data`` | 32 bit metadata value      |
+   +----------+----------------------------+
+   | ``mask`` | bit-mask applies to "data" |
+   +----------+----------------------------+
+
+Action: ``SET_IPV4_DSCP``
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set IPv4 DSCP.
+
+Modify DSCP in IPv4 header.
+
+It must be used with RTE_FLOW_ITEM_TYPE_IPV4 in pattern.
+Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
+
+.. _table_rte_flow_action_set_ipv4_dscp:
+
+.. table:: SET_IPV4_DSCP
+
+   +-----------+---------------------------------+
+   | Field     | Value                           |
+   +===========+=================================+
+   | ``dscp``  | DSCP in low 6 bits, rest ignore |
+   +-----------+---------------------------------+
+
+Action: ``SET_IPV6_DSCP``
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Set IPv6 DSCP.
+
+Modify DSCP in IPv6 header.
+
+It must be used with RTE_FLOW_ITEM_TYPE_IPV6 in pattern.
+Otherwise, RTE_FLOW_ERROR_TYPE_ACTION error will be returned.
+
+.. _table_rte_flow_action_set_ipv6_dscp:
+
+.. table:: SET_IPV6_DSCP
+
+   +-----------+---------------------------------+
+   | Field     | Value                           |
+   +===========+=================================+
+   | ``dscp``  | DSCP in low 6 bits, rest ignore |
+   +-----------+---------------------------------+
+
+Action: ``AGE``
+^^^^^^^^^^^^^^^
+
+Set ageing timeout configuration to a flow.
+
+Event RTE_ETH_EVENT_FLOW_AGED will be reported if
+timeout passed without any matching on the flow.
+
+.. _table_rte_flow_action_age:
+
+.. table:: AGE
+
+   +--------------+---------------------------------+
+   | Field        | Value                           |
+   +==============+=================================+
+   | ``timeout``  | 24 bits timeout value           |
+   +--------------+---------------------------------+
+   | ``reserved`` | 8 bits reserved, must be zero   |
+   +--------------+---------------------------------+
+   | ``context``  | user input flow context         |
+   +--------------+---------------------------------+
 
 Negative types
 ~~~~~~~~~~~~~~

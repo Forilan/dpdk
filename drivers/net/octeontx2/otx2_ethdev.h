@@ -79,7 +79,7 @@
 #define NIX_RX_NB_SEG_MAX		6
 #define NIX_CQ_ENTRY_SZ			128
 #define NIX_CQ_ALIGN			512
-#define NIX_SQB_LOWER_THRESH		90
+#define NIX_SQB_LOWER_THRESH		70
 #define LMT_SLOT_MASK			0x7f
 #define NIX_RX_DEFAULT_RING_SZ		4096
 
@@ -113,17 +113,21 @@
 #define CQ_TIMER_THRESH_DEFAULT	0xAULL /* ~1usec i.e (0xA * 100nsec) */
 #define CQ_TIMER_THRESH_MAX     255
 
+#define NIX_RSS_L3_L4_SRC_DST  (ETH_RSS_L3_SRC_ONLY | ETH_RSS_L3_DST_ONLY \
+				| ETH_RSS_L4_SRC_ONLY | ETH_RSS_L4_DST_ONLY)
+
 #define NIX_RSS_OFFLOAD		(ETH_RSS_PORT | ETH_RSS_IP | ETH_RSS_UDP |\
 				 ETH_RSS_TCP | ETH_RSS_SCTP | \
-				 ETH_RSS_TUNNEL | ETH_RSS_L2_PAYLOAD)
+				 ETH_RSS_TUNNEL | ETH_RSS_L2_PAYLOAD | \
+				 NIX_RSS_L3_L4_SRC_DST)
 
 #define NIX_TX_OFFLOAD_CAPA ( \
 	DEV_TX_OFFLOAD_MBUF_FAST_FREE	| \
 	DEV_TX_OFFLOAD_MT_LOCKFREE	| \
 	DEV_TX_OFFLOAD_VLAN_INSERT	| \
 	DEV_TX_OFFLOAD_QINQ_INSERT	| \
-	DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM | \
-	DEV_TX_OFFLOAD_OUTER_UDP_CKSUM  | \
+	DEV_TX_OFFLOAD_OUTER_IPV4_CKSUM	| \
+	DEV_TX_OFFLOAD_OUTER_UDP_CKSUM	| \
 	DEV_TX_OFFLOAD_TCP_CKSUM	| \
 	DEV_TX_OFFLOAD_UDP_CKSUM	| \
 	DEV_TX_OFFLOAD_SCTP_CKSUM	| \
@@ -140,11 +144,12 @@
 	DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM | \
 	DEV_RX_OFFLOAD_SCATTER		| \
 	DEV_RX_OFFLOAD_JUMBO_FRAME	| \
-	DEV_RX_OFFLOAD_OUTER_UDP_CKSUM | \
-	DEV_RX_OFFLOAD_VLAN_STRIP | \
-	DEV_RX_OFFLOAD_VLAN_FILTER | \
-	DEV_RX_OFFLOAD_QINQ_STRIP | \
-	DEV_RX_OFFLOAD_TIMESTAMP)
+	DEV_RX_OFFLOAD_OUTER_UDP_CKSUM	| \
+	DEV_RX_OFFLOAD_VLAN_STRIP	| \
+	DEV_RX_OFFLOAD_VLAN_FILTER	| \
+	DEV_RX_OFFLOAD_QINQ_STRIP	| \
+	DEV_RX_OFFLOAD_TIMESTAMP	| \
+	DEV_RX_OFFLOAD_RSS_HASH)
 
 #define NIX_DEFAULT_RSS_CTX_GROUP  0
 #define NIX_DEFAULT_RSS_MCAM_IDX  -1
@@ -191,6 +196,7 @@ struct otx2_eth_qconf {
 	void *mempool;
 	uint32_t socket_id;
 	uint16_t nb_desc;
+	uint8_t valid;
 };
 
 struct otx2_fc_info {
@@ -253,7 +259,7 @@ struct otx2_vlan_info {
 
 struct otx2_eth_dev {
 	OTX2_DEV; /* Base class */
-	MARKER otx2_eth_dev_data_start;
+	RTE_MARKER otx2_eth_dev_data_start;
 	uint16_t sqb_size;
 	uint16_t rx_chan_base;
 	uint16_t tx_chan_base;
@@ -275,10 +281,12 @@ struct otx2_eth_dev {
 	uint8_t configured_cints;
 	uint8_t configured_nb_rx_qs;
 	uint8_t configured_nb_tx_qs;
+	uint8_t ptype_disable;
 	uint16_t nix_msixoff;
 	uintptr_t base;
 	uintptr_t lmt_addr;
 	uint16_t scalar_ena;
+	uint16_t rss_tag_as_xor;
 	uint16_t max_sqb_count;
 	uint16_t rx_offload_flags; /* Selected Rx offload flags(NIX_RX_*_F) */
 	uint64_t rx_offloads;
@@ -297,8 +305,10 @@ struct otx2_eth_dev {
 	/* Contiguous queues */
 	uint16_t txschq_contig_list[NIX_TXSCH_LVL_CNT][MAX_TXSCHQ_PER_FUNC];
 	uint16_t otx2_tm_root_lvl;
+	uint16_t link_cfg_lvl;
 	uint16_t tm_flags;
 	uint16_t tm_leaf_cnt;
+	uint64_t tm_rate_min;
 	struct otx2_nix_tm_node_list node_list;
 	struct otx2_nix_tm_shaper_profile_list shaper_profile_list;
 	struct otx2_rss_info rss_info;
@@ -321,6 +331,11 @@ struct otx2_eth_dev {
 	uint64_t clk_delta;
 	bool mc_tbl_set;
 	struct otx2_nix_mc_filter_tbl mc_fltr_tbl;
+	bool sdp_link; /* SDP flag */
+	/* Inline IPsec params */
+	uint16_t ipsec_in_max_spi;
+	uint8_t duplex;
+	uint32_t speed;
 } __rte_cache_aligned;
 
 struct otx2_eth_txq {
@@ -332,7 +347,7 @@ struct otx2_eth_txq {
 	rte_iova_t fc_iova;
 	uint16_t sqes_per_sqb_log2;
 	int16_t nb_sqb_bufs_adj;
-	MARKER slow_path_start;
+	RTE_MARKER slow_path_start;
 	uint16_t nb_sqb_bufs;
 	uint16_t sq;
 	uint64_t offloads;
@@ -354,7 +369,7 @@ struct otx2_eth_rxq {
 	uint32_t available;
 	uint16_t rq;
 	struct otx2_timesync_info *tstamp;
-	MARKER slow_path_start;
+	RTE_MARKER slow_path_start;
 	uint64_t aura;
 	uint64_t offloads;
 	uint32_t qlen;
@@ -388,6 +403,10 @@ void otx2_nix_rxq_info_get(struct rte_eth_dev *eth_dev, uint16_t queue_id,
 			   struct rte_eth_rxq_info *qinfo);
 void otx2_nix_txq_info_get(struct rte_eth_dev *eth_dev, uint16_t queue_id,
 			   struct rte_eth_txq_info *qinfo);
+int otx2_rx_burst_mode_get(struct rte_eth_dev *dev, uint16_t queue_id,
+			   struct rte_eth_burst_mode *mode);
+int otx2_tx_burst_mode_get(struct rte_eth_dev *dev, uint16_t queue_id,
+			   struct rte_eth_burst_mode *mode);
 uint32_t otx2_nix_rx_queue_count(struct rte_eth_dev *eth_dev, uint16_t qidx);
 int otx2_nix_tx_done_cleanup(void *txq, uint32_t free_cnt);
 int otx2_nix_rx_descriptor_done(void *rxq, uint16_t offset);
@@ -423,6 +442,7 @@ void otx2_eth_dev_link_status_update(struct otx2_dev *dev,
 				     struct cgx_link_user_info *link);
 int otx2_nix_dev_set_link_up(struct rte_eth_dev *eth_dev);
 int otx2_nix_dev_set_link_down(struct rte_eth_dev *eth_dev);
+int otx2_apply_link_speed(struct rte_eth_dev *eth_dev);
 
 /* IRQ */
 int otx2_nix_register_irqs(struct rte_eth_dev *eth_dev);
@@ -431,6 +451,8 @@ int oxt2_nix_register_cq_irqs(struct rte_eth_dev *eth_dev);
 void otx2_nix_unregister_irqs(struct rte_eth_dev *eth_dev);
 void oxt2_nix_unregister_queue_irqs(struct rte_eth_dev *eth_dev);
 void oxt2_nix_unregister_cq_irqs(struct rte_eth_dev *eth_dev);
+void otx2_nix_err_intr_enb_dis(struct rte_eth_dev *eth_dev, bool enb);
+void otx2_nix_ras_intr_enb_dis(struct rte_eth_dev *eth_dev, bool enb);
 
 int otx2_nix_rx_queue_intr_enable(struct rte_eth_dev *eth_dev,
 				  uint16_t rx_queue_id);
@@ -443,6 +465,7 @@ int otx2_nix_dev_get_reg(struct rte_eth_dev *eth_dev,
 			 struct rte_dev_reg_info *regs);
 int otx2_nix_queues_ctx_dump(struct rte_eth_dev *eth_dev);
 void otx2_nix_cqe_dump(const struct nix_cqe_hdr_s *cq);
+void otx2_nix_tm_dump(struct otx2_eth_dev *dev);
 
 /* Stats */
 int otx2_nix_dev_stats_get(struct rte_eth_dev *eth_dev,
@@ -497,6 +520,8 @@ int otx2_cgx_mac_addr_set(struct rte_eth_dev *eth_dev,
 			  struct rte_ether_addr *addr);
 
 /* Flow Control */
+int otx2_nix_flow_ctrl_init(struct rte_eth_dev *eth_dev);
+
 int otx2_nix_flow_ctrl_get(struct rte_eth_dev *eth_dev,
 			   struct rte_eth_fc_conf *fc_conf);
 
@@ -525,6 +550,7 @@ void *otx2_nix_fastpath_lookup_mem_get(void);
 
 /* PTYPES */
 const uint32_t *otx2_nix_supported_ptypes_get(struct rte_eth_dev *dev);
+int otx2_nix_ptypes_set(struct rte_eth_dev *eth_dev, uint32_t ptype_mask);
 
 /* Mac address handling */
 int otx2_nix_mac_addr_set(struct rte_eth_dev *eth_dev,
@@ -561,5 +587,6 @@ int otx2_nix_timesync_read_time(struct rte_eth_dev *eth_dev,
 int otx2_eth_dev_ptp_info_update(struct otx2_dev *dev, bool ptp_en);
 int otx2_nix_read_clock(struct rte_eth_dev *eth_dev, uint64_t *time);
 int otx2_nix_raw_clock_tsc_conv(struct otx2_eth_dev *dev);
+void otx2_nix_ptp_enable_vf(struct rte_eth_dev *eth_dev);
 
 #endif /* __OTX2_ETHDEV_H__ */

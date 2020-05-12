@@ -237,7 +237,7 @@ fill_crypto_xform(struct ipsec_unitest_params *ut_params,
 }
 
 static int
-check_cryptodev_capablity(const struct ipsec_unitest_params *ut,
+check_cryptodev_capability(const struct ipsec_unitest_params *ut,
 		uint8_t dev_id)
 {
 	struct rte_cryptodev_sym_capability_idx cap_idx;
@@ -302,7 +302,7 @@ testsuite_setup(void)
 
 	/* Find first valid crypto device */
 	for (i = 0; i < nb_devs; i++) {
-		rc = check_cryptodev_capablity(ut_params, i);
+		rc = check_cryptodev_capability(ut_params, i);
 		if (rc == 0) {
 			ts_params->valid_dev = i;
 			ts_params->valid_dev_found = 1;
@@ -689,11 +689,11 @@ fill_ipsec_param(uint32_t replay_win_sz, uint64_t flags)
 
 	prm->userdata = 1;
 	prm->flags = flags;
-	prm->replay_win_sz = replay_win_sz;
 
 	/* setup ipsec xform */
 	prm->ipsec_xform = ut_params->ipsec_xform;
 	prm->ipsec_xform.salt = (uint32_t)rte_rand();
+	prm->ipsec_xform.replay_win_sz = replay_win_sz;
 
 	/* setup tunnel related fields */
 	prm->tun.hdr_len = sizeof(ipv4_outer);
@@ -1168,6 +1168,34 @@ test_ipsec_dump_buffers(struct ipsec_unitest_params *ut_params, int i)
 }
 
 static void
+destroy_dummy_sec_session(struct ipsec_unitest_params *ut,
+	uint32_t j)
+{
+	rte_security_session_destroy(&dummy_sec_ctx,
+					ut->ss[j].security.ses);
+	ut->ss[j].security.ctx = NULL;
+}
+
+static void
+destroy_crypto_session(struct ipsec_unitest_params *ut,
+	uint8_t crypto_dev, uint32_t j)
+{
+	rte_cryptodev_sym_session_clear(crypto_dev, ut->ss[j].crypto.ses);
+	rte_cryptodev_sym_session_free(ut->ss[j].crypto.ses);
+	memset(&ut->ss[j], 0, sizeof(ut->ss[j]));
+}
+
+static void
+destroy_session(struct ipsec_unitest_params *ut,
+	uint8_t crypto_dev, uint32_t j)
+{
+	if (ut->ss[j].type == RTE_SECURITY_ACTION_TYPE_NONE)
+		return destroy_crypto_session(ut, crypto_dev, j);
+	else
+		return destroy_dummy_sec_session(ut, j);
+}
+
+static void
 destroy_sa(uint32_t j)
 {
 	struct ipsec_unitest_params *ut = &unittest_params;
@@ -1175,9 +1203,8 @@ destroy_sa(uint32_t j)
 
 	rte_ipsec_sa_fini(ut->ss[j].sa);
 	rte_free(ut->ss[j].sa);
-	rte_cryptodev_sym_session_clear(ts->valid_dev, ut->ss[j].crypto.ses);
-	rte_cryptodev_sym_session_free(ut->ss[j].crypto.ses);
-	memset(&ut->ss[j], 0, sizeof(ut->ss[j]));
+
+	destroy_session(ut, ts->valid_dev, j);
 }
 
 static int

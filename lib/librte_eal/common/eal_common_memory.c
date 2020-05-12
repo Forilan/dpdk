@@ -40,6 +40,14 @@
 static void *next_baseaddr;
 static uint64_t system_page_sz;
 
+#ifdef RTE_EXEC_ENV_LINUX
+#define RTE_DONTDUMP MADV_DONTDUMP
+#elif defined RTE_EXEC_ENV_FREEBSD
+#define RTE_DONTDUMP MADV_NOCORE
+#else
+#error "madvise doesn't support this OS"
+#endif
+
 #define MAX_MMAP_WITH_DEFINED_ADDR_TRIES 5
 void *
 eal_get_virtual_area(void *requested_addr, size_t *size,
@@ -97,7 +105,7 @@ eal_get_virtual_area(void *requested_addr, size_t *size,
 			return NULL;
 		}
 
-		mapped_addr = mmap(requested_addr, (size_t)map_sz, PROT_READ,
+		mapped_addr = mmap(requested_addr, (size_t)map_sz, PROT_NONE,
 				mmap_flags, -1, 0);
 		if (mapped_addr == MAP_FAILED && allow_shrink)
 			*size -= page_sz;
@@ -177,6 +185,13 @@ eal_get_virtual_area(void *requested_addr, size_t *size,
 		after_len = RTE_PTR_DIFF(map_end, aligned_end);
 		if (after_len > 0)
 			munmap(aligned_end, after_len);
+	}
+
+	if (!unmap) {
+		/* Exclude these pages from a core dump. */
+		if (madvise(aligned_addr, *size, RTE_DONTDUMP) != 0)
+			RTE_LOG(DEBUG, EAL, "madvise failed: %s\n",
+				strerror(errno));
 	}
 
 	return aligned_addr;

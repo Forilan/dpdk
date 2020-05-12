@@ -139,11 +139,15 @@ qat_comp_qp_setup(struct rte_compressdev *dev, uint16_t qp_id,
 								= *qp_addr;
 
 	qp = (struct qat_qp *)*qp_addr;
+	qp->min_enq_burst_threshold = qat_private->min_enq_burst_threshold;
 
 	for (i = 0; i < qp->nb_descriptors; i++) {
 
 		struct qat_comp_op_cookie *cookie =
 				qp->op_cookies[i];
+
+		cookie->qp = qp;
+		cookie->cookie_index = i;
 
 		cookie->qat_sgl_src_d = rte_zmalloc_socket(NULL,
 					sizeof(struct qat_sgl) +
@@ -560,20 +564,6 @@ qat_comp_dev_info_get(struct rte_compressdev *dev,
 }
 
 static uint16_t
-qat_comp_pmd_enqueue_op_burst(void *qp, struct rte_comp_op **ops,
-		uint16_t nb_ops)
-{
-	return qat_enqueue_op_burst(qp, (void **)ops, nb_ops);
-}
-
-static uint16_t
-qat_comp_pmd_dequeue_op_burst(void *qp, struct rte_comp_op **ops,
-			      uint16_t nb_ops)
-{
-	return qat_dequeue_op_burst(qp, (void **)ops, nb_ops);
-}
-
-static uint16_t
 qat_comp_pmd_enq_deq_dummy_op_burst(void *qp __rte_unused,
 				    struct rte_comp_op **ops __rte_unused,
 				    uint16_t nb_ops __rte_unused)
@@ -602,7 +592,7 @@ static struct rte_compressdev_ops compress_qat_dummy_ops = {
 };
 
 static uint16_t
-qat_comp_pmd_dequeue_frst_op_burst(void *qp, struct rte_comp_op **ops,
+qat_comp_pmd_dequeue_first_op_burst(void *qp, struct rte_comp_op **ops,
 				   uint16_t nb_ops)
 {
 	uint16_t ret = qat_dequeue_op_burst(qp, (void **)ops, nb_ops);
@@ -622,7 +612,8 @@ qat_comp_pmd_dequeue_frst_op_burst(void *qp, struct rte_comp_op **ops,
 
 		} else {
 			tmp_qp->qat_dev->comp_dev->compressdev->dequeue_burst =
-					qat_comp_pmd_dequeue_op_burst;
+					(compressdev_dequeue_pkt_burst_t)
+					qat_dequeue_op_burst;
 		}
 	}
 	return ret;
@@ -660,10 +651,12 @@ static const struct rte_driver compdev_qat_driver = {
 	.alias = qat_comp_drv_name
 };
 int
-qat_comp_dev_create(struct qat_pci_device *qat_pci_dev)
+qat_comp_dev_create(struct qat_pci_device *qat_pci_dev,
+		struct qat_dev_cmd_param *qat_dev_cmd_param)
 {
+	int i = 0;
 	if (qat_pci_dev->qat_dev_gen == QAT_GEN3) {
-		QAT_LOG(ERR, "Compression PMD not supported on QAT c4xxx");
+		QAT_LOG(ERR, "Compression PMD not supported on QAT P5xxx");
 		return 0;
 	}
 
@@ -695,8 +688,9 @@ qat_comp_dev_create(struct qat_pci_device *qat_pci_dev)
 
 	compressdev->dev_ops = &compress_qat_ops;
 
-	compressdev->enqueue_burst = qat_comp_pmd_enqueue_op_burst;
-	compressdev->dequeue_burst = qat_comp_pmd_dequeue_frst_op_burst;
+	compressdev->enqueue_burst = (compressdev_enqueue_pkt_burst_t)
+			qat_enqueue_comp_op_burst;
+	compressdev->dequeue_burst = qat_comp_pmd_dequeue_first_op_burst;
 
 	compressdev->feature_flags = RTE_COMPDEV_FF_HW_ACCELERATED;
 
@@ -717,6 +711,15 @@ qat_comp_dev_create(struct qat_pci_device *qat_pci_dev)
 			"QAT gen %d capabilities unknown, default to GEN1",
 					qat_pci_dev->qat_dev_gen);
 		break;
+	}
+
+	while (1) {
+		if (qat_dev_cmd_param[i].name == NULL)
+			break;
+		if (!strcmp(qat_dev_cmd_param[i].name, COMP_ENQ_THRESHOLD_NAME))
+			comp_dev->min_enq_burst_threshold =
+					qat_dev_cmd_param[i].val;
+		i++;
 	}
 
 	QAT_LOG(DEBUG,

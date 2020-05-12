@@ -62,6 +62,7 @@ typedef enum VhostUserRequest {
 typedef enum VhostUserSlaveRequest {
 	VHOST_USER_SLAVE_NONE = 0,
 	VHOST_USER_SLAVE_IOTLB_MSG = 1,
+	VHOST_USER_SLAVE_CONFIG_CHANGE_MSG = 2,
 	VHOST_USER_SLAVE_VRING_HOST_NOTIFIER_MSG = 3,
 	VHOST_USER_SLAVE_MAX
 } VhostUserSlaveRequest;
@@ -147,7 +148,7 @@ typedef struct VhostUserMsg {
 	} payload;
 	int fds[VHOST_MEMORY_MAX_NREGIONS];
 	int fd_num;
-} __attribute((packed)) VhostUserMsg;
+} __rte_packed VhostUserMsg;
 
 #define VHOST_USER_HDR_SIZE offsetof(VhostUserMsg, payload.u64)
 

@@ -56,7 +56,8 @@
 	 DEV_RX_OFFLOAD_UDP_CKSUM |	\
 	 DEV_RX_OFFLOAD_TCP_CKSUM |	\
 	 DEV_RX_OFFLOAD_TCP_LRO |	\
-	 DEV_RX_OFFLOAD_JUMBO_FRAME)
+	 DEV_RX_OFFLOAD_JUMBO_FRAME |   \
+	 DEV_RX_OFFLOAD_RSS_HASH)
 
 static int eth_vmxnet3_dev_init(struct rte_eth_dev *eth_dev);
 static int eth_vmxnet3_dev_uninit(struct rte_eth_dev *eth_dev);
@@ -86,6 +87,7 @@ static int vmxnet3_dev_info_get(struct rte_eth_dev *dev,
 				struct rte_eth_dev_info *dev_info);
 static const uint32_t *
 vmxnet3_dev_supported_ptypes_get(struct rte_eth_dev *dev);
+static int vmxnet3_dev_mtu_set(struct rte_eth_dev *dev, uint16_t mtu);
 static int vmxnet3_dev_vlan_filter_set(struct rte_eth_dev *dev,
 				       uint16_t vid, int on);
 static int vmxnet3_dev_vlan_offload_set(struct rte_eth_dev *dev, int mask);
@@ -123,6 +125,7 @@ static const struct eth_dev_ops vmxnet3_eth_dev_ops = {
 	.mac_addr_set         = vmxnet3_mac_addr_set,
 	.dev_infos_get        = vmxnet3_dev_info_get,
 	.dev_supported_ptypes_get = vmxnet3_dev_supported_ptypes_get,
+	.mtu_set              = vmxnet3_dev_mtu_set,
 	.vlan_filter_set      = vmxnet3_dev_vlan_filter_set,
 	.vlan_offload_set     = vmxnet3_dev_vlan_offload_set,
 	.rx_queue_setup       = vmxnet3_dev_rx_queue_setup,
@@ -406,6 +409,9 @@ vmxnet3_dev_configure(struct rte_eth_dev *dev)
 	size_t size;
 
 	PMD_INIT_FUNC_TRACE();
+
+	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
 
 	if (dev->data->nb_tx_queues > VMXNET3_MAX_TX_QUEUES ||
 	    dev->data->nb_rx_queues > VMXNET3_MAX_RX_QUEUES) {
@@ -767,7 +773,8 @@ vmxnet3_dev_start(struct rte_eth_dev *dev)
 		PMD_INIT_LOG(DEBUG, "Failed to setup memory region\n");
 	}
 
-	if (VMXNET3_VERSION_GE_4(hw)) {
+	if (VMXNET3_VERSION_GE_4(hw) &&
+	    dev->data->dev_conf.rxmode.mq_mode == ETH_MQ_RX_RSS) {
 		/* Check for additional RSS  */
 		ret = vmxnet3_v4_rss_configure(dev);
 		if (ret != VMXNET3_SUCCESS) {
@@ -1161,6 +1168,8 @@ vmxnet3_dev_info_get(struct rte_eth_dev *dev,
 	dev_info->max_tx_queues = VMXNET3_MAX_TX_QUEUES;
 	dev_info->min_rx_bufsize = 1518 + RTE_PKTMBUF_HEADROOM;
 	dev_info->max_rx_pktlen = 16384; /* includes CRC, cf MAXFRS register */
+	dev_info->min_mtu = VMXNET3_MIN_MTU;
+	dev_info->max_mtu = VMXNET3_MAX_MTU;
 	dev_info->speed_capa = ETH_LINK_SPEED_10G;
 	dev_info->max_mac_addrs = VMXNET3_MAX_MAC_ADDRS;
 
@@ -1204,6 +1213,18 @@ vmxnet3_dev_supported_ptypes_get(struct rte_eth_dev *dev)
 	if (dev->rx_pkt_burst == vmxnet3_recv_pkts)
 		return ptypes;
 	return NULL;
+}
+
+static int
+vmxnet3_dev_mtu_set(struct rte_eth_dev *dev, __rte_unused uint16_t mtu)
+{
+	if (dev->data->dev_started) {
+		PMD_DRV_LOG(ERR, "Port %d must be stopped to configure MTU",
+			    dev->data->port_id);
+		return -EBUSY;
+	}
+
+	return 0;
 }
 
 static int

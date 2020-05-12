@@ -131,11 +131,9 @@ enum hinic_mbox_tx_status {
 #define MBOX_RESPONSE_ERROR		0x1
 #define MBOX_MSG_ID_MASK		0xFF
 #define MBOX_MSG_ID(func_to_func)	((func_to_func)->send_msg_id)
-#define MBOX_MSG_ID_INC(func_to_func)	(MBOX_MSG_ID(func_to_func) =	\
-			(MBOX_MSG_ID(func_to_func) + 1) & MBOX_MSG_ID_MASK)
 
 enum hinic_hwif_direction_type {
-	/* driver send msg to up or up send msg to drier*/
+	/* driver send msg to up or up send msg to driver*/
 	HINIC_HWIF_DIRECT_SEND = 0,
 	/* after driver/up send msg to each other, then up/driver ack the msg */
 	HINIC_HWIF_RESPONSE,
@@ -193,8 +191,7 @@ static int recv_vf_mbox_handler(struct hinic_mbox_func_to_func *func_to_func,
 						buf_out, out_size);
 		break;
 	default:
-		PMD_DRV_LOG(ERR, "No handler, mod = %d",
-				recv_mbox->mod);
+		PMD_DRV_LOG(ERR, "No handler, mod: %d", recv_mbox->mod);
 		rc = HINIC_MBOX_VF_CMD_ERROR;
 		break;
 	}
@@ -406,10 +403,8 @@ static int alloc_mbox_wb_status(struct hinic_mbox_func_to_func *func_to_func)
 	struct hinic_hwif *hwif = hwdev->hwif;
 	u32 addr_h, addr_l;
 
-	send_mbox->wb_vaddr = dma_zalloc_coherent(hwdev,
-				  MBOX_WB_STATUS_LEN,
-				  &send_mbox->wb_paddr,
-				  GFP_KERNEL);
+	send_mbox->wb_vaddr = dma_zalloc_coherent(hwdev, MBOX_WB_STATUS_LEN,
+					&send_mbox->wb_paddr, SOCKET_ID_ANY);
 	if (!send_mbox->wb_vaddr) {
 		PMD_DRV_LOG(ERR, "Allocating memory for mailbox wb status failed");
 		return -ENOMEM;
@@ -690,7 +685,8 @@ static int hinic_mbox_to_func(struct hinic_mbox_func_to_func *func_to_func,
 	if (err)
 		return err;
 
-	msg_info.msg_id = MBOX_MSG_ID_INC(func_to_func);
+	msg_info.msg_id = (MBOX_MSG_ID(func_to_func) + 1) & MBOX_MSG_ID_MASK;
+	MBOX_MSG_ID(func_to_func) = msg_info.msg_id;
 
 	set_mbox_to_func_event(func_to_func, EVENT_START);
 
@@ -873,7 +869,7 @@ static int hinic_func_to_func_init(struct hinic_hwdev *hwdev)
 
 	err = alloc_mbox_info(func_to_func->mbox_resp);
 	if (err) {
-		PMD_DRV_LOG(ERR, "Allocating memory for mailbox responsing failed");
+		PMD_DRV_LOG(ERR, "Allocating memory for mailbox responding failed");
 		goto alloc_mbox_for_resp_err;
 	}
 

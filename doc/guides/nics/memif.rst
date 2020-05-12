@@ -45,7 +45,7 @@ client.
    "socket=/tmp/memif.sock", "Socket filename", "/tmp/memif.sock", "string len 108"
    "mac=01:23:45:ab:cd:ef", "Mac address", "01:ab:23:cd:45:ef", ""
    "secret=abc123", "Secret is an optional security option, which if specified, must be matched by peer", "", "string len 24"
-   "zero-copy=yes", "Enable/disable zero-copy slave mode", "no", "yes|no"
+   "zero-copy=yes", "Enable/disable zero-copy slave mode. Only relevant to slave, requires '--single-file-segments' eal argument", "no", "yes|no"
 
 **Connection establishment**
 
@@ -171,6 +171,42 @@ Files
 - net/memif/memif.h *- descriptor and ring definitions*
 - net/memif/rte_eth_memif.c *- eth_memif_rx() eth_memif_tx()*
 
+Zero-copy slave
+~~~~~~~~~~~~~~~
+
+Zero-copy slave can be enabled with memif configuration option 'zero-copy=yes'. This option
+is only relevant to slave and requires eal argument '--single-file-segments'.
+This limitation is in place, because it is too expensive to identify memseg
+for each packet buffer, resulting in worse performance than with zero-copy disabled.
+With single file segments we can calculate offset from the beginning of the file
+for each packet buffer.
+
+**Shared memory format**
+
+Region 0 is created by memif driver and contains rings. Slave interface exposes DPDK memory (memseg).
+Instead of using memfd_create() to create new shared file, existing memsegs are used.
+Master interface functions the same as with zero-copy disabled.
+
+region 0:
+
++-----------------------+
+| Rings                 |
++-----------+-----------+
+| S2M rings | M2S rings |
++-----------+-----------+
+
+region n:
+
++-----------------+
+| Buffers         |
++-----------------+
+|memseg           |
++-----------------+
+
+Buffers are dequeued and enqueued as needed. Offset descriptor field is calculated at tx.
+Only single file segments mode (EAL option --single-file-segments) is supported, as calculating
+offset from multiple segments is too expensive.
+
 Example: testpmd
 ----------------------------
 In this example we run two instances of testpmd application and transmit packets over memif.
@@ -182,6 +218,10 @@ First create ``master`` interface::
 Now create ``slave`` interface (master must be already running so the slave will connect)::
 
     #./build/app/testpmd -l 2-3 --proc-type=primary --file-prefix=pmd2 --vdev=net_memif -- -i
+
+You can also enable ``zero-copy`` on ``slave`` interface::
+
+    #./build/app/testpmd -l 2-3 --proc-type=primary --file-prefix=pmd2 --vdev=net_memif,zero-copy=yes --single-file-segments -- -i
 
 Start forwarding packets::
 
@@ -232,3 +272,21 @@ Send ping from VPP::
     64 bytes from 192.168.1.2: icmp_seq=3 ttl=254 time=23.3927 ms
     64 bytes from 192.168.1.2: icmp_seq=4 ttl=254 time=24.2975 ms
     64 bytes from 192.168.1.2: icmp_seq=5 ttl=254 time=17.7049 ms
+
+Example: testpmd memif loopback
+-------------------------------
+In this example we will create 2 memif ports connected into loopback.
+The situation is analogous to cross connecting 2 ports of the NIC by cable.
+
+To set the loopback, just use the same socket and id with different roles::
+
+    #./testpmd --vdev=net_memif0,role=master,id=0 --vdev=net_memif1,role=slave,id=0 -- -i
+
+Then start the communication::
+
+    testpmd> start tx_first
+
+Finally we can check port stats to see the traffic::
+
+    testpmd> show port stats all
+    testpmd> show port stats all

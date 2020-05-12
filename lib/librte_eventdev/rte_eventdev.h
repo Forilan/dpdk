@@ -215,6 +215,8 @@ extern "C" {
 #include <rte_memory.h>
 #include <rte_errno.h>
 
+#include "rte_eventdev_trace_fp.h"
+
 struct rte_mbuf; /* we just use mbuf pointers; no need to include rte_mbuf.h */
 struct rte_event;
 
@@ -1282,6 +1284,9 @@ struct rte_eventdev_data {
 
 	char name[RTE_EVENTDEV_NAME_MAX_LEN];
 	/**< Unique identifier name */
+
+	uint64_t reserved_64s[4]; /**< Reserved for future fields */
+	void *reserved_ptrs[4];   /**< Reserved for future fields */
 } __rte_cache_aligned;
 
 /** @internal The data structure associated with each event device. */
@@ -1314,6 +1319,9 @@ struct rte_eventdev {
 	RTE_STD_C11
 	uint8_t attached : 1;
 	/**< Flag indicating the device is attached */
+
+	uint64_t reserved_64s[4]; /**< Reserved for future fields */
+	void *reserved_ptrs[4];   /**< Reserved for future fields */
 } __rte_cache_aligned;
 
 extern struct rte_eventdev *rte_eventdevs;
@@ -1337,6 +1345,7 @@ __rte_event_enqueue_burst(uint8_t dev_id, uint8_t port_id,
 		return 0;
 	}
 #endif
+	rte_eventdev_trace_enq_burst(dev_id, port_id, ev, nb_events, fn);
 	/*
 	 * Allow zero cost non burst mode routine invocation if application
 	 * requests nb_events as const one
@@ -1614,7 +1623,7 @@ rte_event_dequeue_burst(uint8_t dev_id, uint8_t port_id, struct rte_event ev[],
 		return 0;
 	}
 #endif
-
+	rte_eventdev_trace_deq_burst(dev_id, port_id, ev, nb_events);
 	/*
 	 * Allow zero cost non burst mode routine invocation if application
 	 * requests nb_events as const one

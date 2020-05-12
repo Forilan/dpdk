@@ -8,7 +8,6 @@ include $(RTE_SDK)/mk/rte.vars.mk
 #
 LIB = librte_pmd_bond.a
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
@@ -17,8 +16,6 @@ LDLIBS += -lrte_pci -lrte_bus_pci
 LDLIBS += -lrte_bus_vdev
 
 EXPORT_MAP := rte_pmd_bond_version.map
-
-LIBABIVER := 2
 
 #
 # all source are stored in SRCS-y

@@ -4,8 +4,9 @@
 include $(RTE_SDK)/mk/rte.vars.mk
 
 DIRS-$(CONFIG_RTE_LIBRTE_KVARGS) += librte_kvargs
+DIRS-y += librte_telemetry
 DIRS-$(CONFIG_RTE_LIBRTE_EAL) += librte_eal
-DEPDIRS-librte_eal := librte_kvargs
+DEPDIRS-librte_eal := librte_kvargs librte_telemetry
 DIRS-$(CONFIG_RTE_LIBRTE_PCI) += librte_pci
 DEPDIRS-librte_pci := librte_eal
 DIRS-$(CONFIG_RTE_LIBRTE_RING) += librte_ring
@@ -46,7 +47,7 @@ DIRS-$(CONFIG_RTE_LIBRTE_RAWDEV) += librte_rawdev
 DEPDIRS-librte_rawdev := librte_eal librte_ethdev
 DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += librte_vhost
 DEPDIRS-librte_vhost := librte_eal librte_mempool librte_mbuf librte_ethdev \
-			librte_net
+			librte_net librte_hash librte_cryptodev
 DIRS-$(CONFIG_RTE_LIBRTE_HASH) += librte_hash
 DEPDIRS-librte_hash := librte_eal librte_ring
 DIRS-$(CONFIG_RTE_LIBRTE_EFD) += librte_efd
@@ -71,7 +72,10 @@ DEPDIRS-librte_gro := librte_eal librte_mbuf librte_ethdev librte_net
 DIRS-$(CONFIG_RTE_LIBRTE_JOBSTATS) += librte_jobstats
 DEPDIRS-librte_jobstats := librte_eal
 DIRS-$(CONFIG_RTE_LIBRTE_METRICS) += librte_metrics
-DEPDIRS-librte_metrics := librte_eal
+DEPDIRS-librte_metrics := librte_eal librte_ethdev
+ifeq ($(CONFIG_RTE_LIBRTE_TELEMETRY),y)
+DEPDIRS-librte_metrics += librte_telemetry
+endif
 DIRS-$(CONFIG_RTE_LIBRTE_BITRATE) += librte_bitratestats
 DEPDIRS-librte_bitratestats := librte_eal librte_metrics librte_ethdev
 DIRS-$(CONFIG_RTE_LIBRTE_LATENCY_STATS) += librte_latencystats
@@ -113,11 +117,15 @@ DIRS-$(CONFIG_RTE_LIBRTE_BPF) += librte_bpf
 DEPDIRS-librte_bpf := librte_eal librte_mempool librte_mbuf librte_ethdev
 DIRS-$(CONFIG_RTE_LIBRTE_IPSEC) += librte_ipsec
 DEPDIRS-librte_ipsec := librte_eal librte_mbuf librte_cryptodev librte_security \
-			librte_net
-DIRS-$(CONFIG_RTE_LIBRTE_TELEMETRY) += librte_telemetry
-DEPDIRS-librte_telemetry := librte_eal librte_metrics librte_ethdev
+			librte_net librte_hash
 DIRS-$(CONFIG_RTE_LIBRTE_RCU) += librte_rcu
-DEPDIRS-librte_rcu := librte_eal
+DEPDIRS-librte_rcu := librte_eal librte_ring
+
+DIRS-$(CONFIG_RTE_LIBRTE_GRAPH) += librte_graph
+DEPDIRS-librte_graph := librte_eal
+
+DIRS-$(CONFIG_RTE_LIBRTE_NODE) += librte_node
+DEPDIRS-librte_node := librte_graph librte_lpm librte_ethdev librte_mbuf
 
 ifeq ($(CONFIG_RTE_EXEC_ENV_LINUX),y)
 DIRS-$(CONFIG_RTE_LIBRTE_KNI) += librte_kni

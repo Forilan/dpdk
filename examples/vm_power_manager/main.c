@@ -272,7 +272,7 @@ check_all_ports_link_status(uint32_t port_mask)
 						"Mbps - %s\n", (uint16_t)portid,
 						(unsigned int)link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex\n"));
+					("full-duplex") : ("half-duplex"));
 				else
 					printf("Port %d Link Down\n",
 						(uint16_t)portid);
@@ -302,7 +302,7 @@ check_all_ports_link_status(uint32_t port_mask)
 	}
 }
 static int
-run_monitor(__attribute__((unused)) void *arg)
+run_monitor(__rte_unused void *arg)
 {
 	if (channel_monitor_init() < 0) {
 		printf("Unable to initialize channel monitor\n");
@@ -313,7 +313,7 @@ run_monitor(__attribute__((unused)) void *arg)
 }
 
 static int
-run_core_monitor(__attribute__((unused)) void *arg)
+run_core_monitor(__rte_unused void *arg)
 {
 	if (branch_monitor_init() < 0) {
 		printf("Unable to initialize core monitor\n");

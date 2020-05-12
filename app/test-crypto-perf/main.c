@@ -38,7 +38,8 @@ const char *cperf_op_type_strs[] = {
 	[CPERF_AUTH_ONLY] = "auth-only",
 	[CPERF_CIPHER_THEN_AUTH] = "cipher-then-auth",
 	[CPERF_AUTH_THEN_CIPHER] = "auth-then-cipher",
-	[CPERF_AEAD] = "aead"
+	[CPERF_AEAD] = "aead",
+	[CPERF_PDCP] = "pdcp"
 };
 
 const struct cperf_test cperf_testmap[] = {
@@ -581,7 +582,8 @@ main(int argc, char **argv)
 		goto err;
 	}
 
-	if (!opts.silent)
+	if (!opts.silent && opts.test != CPERF_TEST_TYPE_THROUGHPUT &&
+			opts.test != CPERF_TEST_TYPE_LATENCY)
 		show_test_vector(t_vec);
 
 	total_nb_qps = nb_cryptodevs * opts.nb_qps;

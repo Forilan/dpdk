@@ -56,7 +56,8 @@ static uint64_t dev_rx_offloads_nodis =
 		DEV_RX_OFFLOAD_IPV4_CKSUM |
 		DEV_RX_OFFLOAD_UDP_CKSUM |
 		DEV_RX_OFFLOAD_TCP_CKSUM |
-		DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM;
+		DEV_RX_OFFLOAD_OUTER_IPV4_CKSUM |
+		DEV_RX_OFFLOAD_RSS_HASH;
 
 /* Supported Tx offloads */
 static uint64_t dev_tx_offloads_sup =
@@ -173,7 +174,7 @@ dpaa_mtu_set(struct rte_eth_dev *dev, uint16_t mtu)
 	}
 
 	if (frame_size > RTE_ETHER_MAX_LEN)
-		dev->data->dev_conf.rxmode.offloads &=
+		dev->data->dev_conf.rxmode.offloads |=
 						DEV_RX_OFFLOAD_JUMBO_FRAME;
 	else
 		dev->data->dev_conf.rxmode.offloads &=
@@ -362,6 +363,10 @@ static int dpaa_eth_dev_info(struct rte_eth_dev *dev,
 					dev_tx_offloads_nodis;
 	dev_info->default_rxportconf.burst_size = DPAA_DEF_RX_BURST_SIZE;
 	dev_info->default_txportconf.burst_size = DPAA_DEF_TX_BURST_SIZE;
+	dev_info->default_rxportconf.nb_queues = 1;
+	dev_info->default_txportconf.nb_queues = 1;
+	dev_info->default_txportconf.ring_size = CGR_TX_CGR_THRESH;
+	dev_info->default_rxportconf.ring_size = CGR_RX_PERFQ_THRESH;
 
 	return 0;
 }
@@ -880,8 +885,8 @@ dpaa_dev_rx_queue_count(struct rte_eth_dev *dev, uint16_t rx_queue_id)
 	PMD_INIT_FUNC_TRACE();
 
 	if (qman_query_fq_frm_cnt(rxq, &frm_cnt) == 0) {
-		RTE_LOG(DEBUG, PMD, "RX frame count for q(%d) is %u\n",
-			rx_queue_id, frm_cnt);
+		DPAA_PMD_DEBUG("RX frame count for q(%d) is %u",
+			       rx_queue_id, frm_cnt);
 	}
 	return frm_cnt;
 }
@@ -995,8 +1000,7 @@ dpaa_dev_add_mac_addr(struct rte_eth_dev *dev,
 	ret = fman_if_add_mac_addr(dpaa_intf->fif, addr->addr_bytes, index);
 
 	if (ret)
-		RTE_LOG(ERR, PMD, "error: Adding the MAC ADDR failed:"
-			" err = %d", ret);
+		DPAA_PMD_ERR("Adding the MAC ADDR failed: err = %d", ret);
 	return 0;
 }
 
@@ -1022,7 +1026,7 @@ dpaa_dev_set_mac_addr(struct rte_eth_dev *dev,
 
 	ret = fman_if_add_mac_addr(dpaa_intf->fif, addr->addr_bytes, 0);
 	if (ret)
-		RTE_LOG(ERR, PMD, "error: Setting the MAC ADDR failed %d", ret);
+		DPAA_PMD_ERR("Setting the MAC ADDR failed %d", ret);
 
 	return ret;
 }
@@ -1305,6 +1309,7 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 	struct fman_if *fman_intf;
 	struct fman_if_bpool *bp, *tmp_bp;
 	uint32_t cgrid[DPAA_MAX_NUM_PCD_QUEUES];
+	char eth_buf[RTE_ETHER_ADDR_FMT_SIZE];
 
 	PMD_INIT_FUNC_TRACE();
 
@@ -1456,15 +1461,9 @@ dpaa_dev_init(struct rte_eth_dev *eth_dev)
 
 	/* copy the primary mac address */
 	rte_ether_addr_copy(&fman_intf->mac_addr, &eth_dev->data->mac_addrs[0]);
+	rte_ether_format_addr(eth_buf, sizeof(eth_buf), &fman_intf->mac_addr);
 
-	RTE_LOG(INFO, PMD, "net: dpaa: %s: %02x:%02x:%02x:%02x:%02x:%02x\n",
-		dpaa_device->name,
-		fman_intf->mac_addr.addr_bytes[0],
-		fman_intf->mac_addr.addr_bytes[1],
-		fman_intf->mac_addr.addr_bytes[2],
-		fman_intf->mac_addr.addr_bytes[3],
-		fman_intf->mac_addr.addr_bytes[4],
-		fman_intf->mac_addr.addr_bytes[5]);
+	DPAA_PMD_INFO("net: dpaa: %s: %s", dpaa_device->name, eth_buf);
 
 	/* Disable RX mode */
 	fman_if_discard_rx_errors(fman_intf);
@@ -1577,8 +1576,7 @@ rte_dpaa_probe(struct rte_dpaa_driver *dpaa_drv __rte_unused,
 
 	if (!is_global_init && (rte_eal_process_type() == RTE_PROC_PRIMARY)) {
 		if (access("/tmp/fmc.bin", F_OK) == -1) {
-			RTE_LOG(INFO, PMD,
-				"* FMC not configured.Enabling default mode\n");
+			DPAA_PMD_INFO("* FMC not configured.Enabling default mode");
 			default_q = 1;
 		}
 

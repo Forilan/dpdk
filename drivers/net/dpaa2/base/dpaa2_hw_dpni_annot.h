@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
  *   Copyright (c) 2016 Freescale Semiconductor, Inc. All rights reserved.
- *   Copyright 2016 NXP
+ *   Copyright 2016,2019 NXP
  *
  */
 
@@ -37,7 +37,7 @@ struct dpaa2_fas {
 	uint8_t ppid;
 	__le16 ifpid;
 	__le32 status;
-}  __attribute__((__packed__));
+}  __rte_packed;
 
 /**
  * HW Packet Annotation  Register structures

@@ -38,6 +38,8 @@ Features of the OCTEON TX2 Ethdev PMD are:
 - IEEE1588 timestamping
 - HW offloaded `ethdev Rx queue` to `eventdev event queue` packet injection
 - Support Rx interrupt
+- Inline IPsec processing support
+- :ref:`Traffic Management API <otx2_tmapi>`
 
 Prerequisites
 -------------
@@ -113,11 +115,6 @@ use arm64-octeontx2-linux-gcc as target.
 Runtime Config Options
 ----------------------
 
-- ``HW offload ptype parsing disable`` (default ``0``)
-
-   Packet type parsing is HW offloaded by default and this feature may be toggled
-   using ``ptype_disable`` ``devargs`` parameter.
-
 - ``Rx&Tx scalar mode enable`` (default ``0``)
 
    Ethdev supports both scalar and vector mode, it may be selected at runtime
@@ -170,12 +167,70 @@ Runtime Config Options
    With the above configuration, each send queue's decscriptor buffer count is
    limited to a maximum of 64 buffers.
 
+- ``Switch header enable`` (default ``none``)
+
+   A port can be configured to a specific switch header type by using
+   ``switch_header`` ``devargs`` parameter.
+
+   For example::
+
+      -w 0002:02:00.0,switch_header="higig2"
+
+   With the above configuration, higig2 will be enabled on that port and the
+   traffic on this port should be higig2 traffic only. Supported switch header
+   types are "higig2", "dsa" and "chlen90b".
+
+- ``RSS tag as XOR`` (default ``0``)
+
+   C0 HW revision onward, The HW gives an option to configure the RSS adder as
+
+   * ``rss_adder<7:0> = flow_tag<7:0> ^ flow_tag<15:8> ^ flow_tag<23:16> ^ flow_tag<31:24>``
+
+   * ``rss_adder<7:0> = flow_tag<7:0>``
+
+   Latter one aligns with standard NIC behavior vs former one is a legacy
+   RSS adder scheme used in OCTEON TX2 products.
+
+   By default, the driver runs in the latter mode from C0 HW revision onward.
+   Setting this flag to 1 to select the legacy mode.
+
+   For example to select the legacy mode(RSS tag adder as XOR)::
+      -w 0002:02:00.0,tag_as_xor=1
+
+- ``Max SPI for inbound inline IPsec`` (default ``1``)
+
+   Max SPI supported for inbound inline IPsec processing can be specified by
+   ``ipsec_in_max_spi`` ``devargs`` parameter.
+
+   For example::
+      -w 0002:02:00.0,ipsec_in_max_spi=128
+
+   With the above configuration, application can enable inline IPsec processing
+   on 128 SAs (SPI 0-127).
 
 .. note::
 
    Above devarg parameters are configurable per device, user needs to pass the
    parameters to all the PCIe devices if application requires to configure on
    all the ethdev ports.
+
+.. _otx2_tmapi:
+
+Traffic Management API
+----------------------
+
+OCTEON TX2 PMD supports generic DPDK Traffic Management API which allows to
+configure the following features:
+
+#. Hierarchical scheduling
+#. Single rate - Two color, Two rate - Three color shaping
+
+Both DWRR and Static Priority(SP) hierarchial scheduling is supported.
+
+Every parent can have atmost 10 SP Children and unlimited DWRR children.
+
+Both PF & VF supports traffic management API with PF supporting 6 levels
+and VF supporting 5 levels of topology.
 
 Limitations
 -----------
@@ -199,6 +254,18 @@ Multicast MAC filtering
 
 ``net_octeontx2`` pmd supports multicast mac filtering feature only on physical
 function devices.
+
+SDP interface support
+~~~~~~~~~~~~~~~~~~~~~
+OCTEON TX2 SDP interface support is limited to PF device, No VF support.
+
+Inline Protocol Processing
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+``net_octeontx2`` pmd doesn't support the following features for packets to be
+inline protocol processed.
+- TSO offload
+- VLAN/QinQ offload
+- Fragmentation
 
 Debugging Options
 -----------------
@@ -275,6 +342,8 @@ Patterns:
    | 22 | RTE_FLOW_ITEM_TYPE_ANY         |
    +----+--------------------------------+
    | 23 | RTE_FLOW_ITEM_TYPE_GRE_KEY     |
+   +----+--------------------------------+
+   | 24 | RTE_FLOW_ITEM_TYPE_HIGIG2      |
    +----+--------------------------------+
 
 .. note::

@@ -10,7 +10,6 @@ LIB = librte_pmd_hns3.a
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 # Experimantal APIs:
 # - rte_mp_action_register
 # - rte_mp_action_unregister
@@ -22,8 +21,6 @@ LDLIBS += -lrte_ethdev -lrte_net -lrte_hash
 LDLIBS += -lrte_bus_pci
 
 EXPORT_MAP := rte_pmd_hns3_version.map
-
-LIBABIVER := 1
 
 #
 # all source are stored in SRCS-y

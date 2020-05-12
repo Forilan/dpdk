@@ -29,7 +29,6 @@ struct lcore_config {
 	unsigned int core_id;      /**< core number on socket for this lcore */
 	int core_index;            /**< relative index, starting from 0 */
 	uint8_t core_role;         /**< role of core eg: OFF, RTE, SERVICE */
-	uint8_t detected;          /**< true if lcore was detected */
 
 	rte_cpuset_t cpuset;       /**< cpu set which the lcore affinity to */
 };
@@ -58,7 +57,7 @@ struct rte_config {
 	 * DPDK instances
 	 */
 	struct rte_mem_config *mem_config;
-} __attribute__((__packed__));
+} __rte_packed;
 
 /**
  * Get the global configuration structure.
@@ -411,37 +410,14 @@ int
 dev_sigbus_handler_unregister(void);
 
 /**
- * Check if the option is registered.
- *
- * @param option
- *  The option to be parsed.
- *
- * @return
- *  0 on success
- * @return
- *  -1 on fail
- */
-int
-rte_option_parse(const char *opt);
-
-/**
- * Iterate through the registered options and execute the associated
- * callback if enabled.
- */
-void
-rte_option_init(void);
-
-/**
- * Iterate through the registered options and show the associated
- * usage string.
- */
-void
-rte_option_usage(void);
-
-/**
  * Get OS-specific EAL mapping base address.
  */
 uint64_t
 eal_get_baseaddr(void);
+
+void *
+eal_malloc_no_trace(const char *type, size_t size, unsigned int align);
+
+void eal_free_no_trace(void *addr);
 
 #endif /* _EAL_PRIVATE_H_ */

@@ -19,9 +19,9 @@ static: build/$(APP)-static
 
 LDFLAGS += -pthread -lrt
 
-PKGCONF=pkg-config --define-prefix
+PKGCONF ?= pkg-config
 
-PC_FILE := $(shell $(PKGCONF) --path libdpdk)
+PC_FILE := $(shell $(PKGCONF) --path libdpdk 2>/dev/null)
 CFLAGS += -O3 $(shell $(PKGCONF) --cflags libdpdk)
 LDFLAGS_SHARED = $(shell $(PKGCONF) --libs libdpdk)
 LDFLAGS_STATIC = -Wl,-Bstatic $(shell $(PKGCONF) --static --libs libdpdk)
@@ -53,6 +53,7 @@ include $(RTE_SDK)/mk/rte.vars.mk
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
+CFLAGS += -DALLOW_EXPERIMENTAL_API
 LDFLAGS += -lrt
 
 include $(RTE_SDK)/mk/rte.extapp.mk

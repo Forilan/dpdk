@@ -18,7 +18,7 @@
 char qede_fw_file[PATH_MAX];
 
 static const char * const QEDE_DEFAULT_FIRMWARE =
-	"/lib/firmware/qed/qed_init_values-8.40.25.0.bin";
+	"/lib/firmware/qed/qed_init_values-8.40.33.0.bin";
 
 static void
 qed_update_pf_params(struct ecore_dev *edev, struct ecore_pf_params *params)
@@ -56,6 +56,10 @@ qed_probe(struct ecore_dev *edev, struct rte_pci_device *pci_dev,
 	qed_init_pci(edev, pci_dev);
 
 	memset(&hw_prepare_params, 0, sizeof(hw_prepare_params));
+
+	if (is_vf)
+		hw_prepare_params.acquire_retry_cnt = ECORE_VF_ACQUIRE_THRESH;
+
 	hw_prepare_params.personality = ECORE_PCI_ETH;
 	hw_prepare_params.drv_resc_alloc = false;
 	hw_prepare_params.chk_reg_fifo = false;
@@ -389,6 +393,9 @@ qed_fill_dev_info(struct ecore_dev *edev, struct qed_dev_info *dev_info)
 		if (ptt) {
 			ecore_mcp_get_mfw_ver(ECORE_LEADING_HWFN(edev), ptt,
 					      &dev_info->mfw_rev, NULL);
+
+			ecore_mcp_get_mbi_ver(ECORE_LEADING_HWFN(edev), ptt,
+					      &dev_info->mbi_version);
 
 			ecore_mcp_get_flash_size(ECORE_LEADING_HWFN(edev), ptt,
 						 &dev_info->flash_size);

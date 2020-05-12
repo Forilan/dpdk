@@ -10,6 +10,7 @@
 #include <rte_ether.h>
 #include <rte_ip.h>
 #include <rte_udp.h>
+#include <rte_memzone.h>
 
 #include "enic_compat.h"
 #include "enic.h"
@@ -17,9 +18,6 @@
 #include "vnic_nic.h"
 
 #define IP_DEFTTL  64   /* from RFC 1340. */
-#define IP_VERSION 0x40
-#define IP_HDRLEN  0x05 /* default IP header length == five 32-bits words. */
-#define IP_VHL_DEF (IP_VERSION | IP_HDRLEN)
 #define IP6_VTC_FLOW 0x60000000
 
 /* Highest Item type supported by Flowman */
@@ -633,7 +631,7 @@ enic_fet_alloc(struct enic_flowman *fm, uint8_t ingress,
 	struct fm_exact_match_table *cmd;
 	struct fm_header_set *hdr;
 	struct enic_fm_fet *fet;
-	u64 args[3];
+	uint64_t args[3];
 	int ret;
 
 	ENICPMD_FUNC_TRACE();
@@ -872,46 +870,36 @@ enic_fm_append_action_op(struct enic_flowman *fm,
 	return 0;
 }
 
-/* Steer operations need to appear before other ops */
+/* NIC requires that 1st steer appear before decap.
+ * Correct example: steer, decap, steer, steer, ...
+ */
 static void
 enic_fm_reorder_action_op(struct enic_flowman *fm)
 {
-	struct fm_action_op *dst, *dst_head, *src, *src_head;
+	struct fm_action_op *op, *steer, *decap;
+	struct fm_action_op tmp_op;
 
 	ENICPMD_FUNC_TRACE();
-	/* Move steer ops to the front. */
-	src = fm->action.fma_action_ops;
-	src_head = src;
-	dst = fm->action_tmp.fma_action_ops;
-	dst_head = dst;
-	/* Copy steer ops to tmp */
-	while (src->fa_op != FMOP_END) {
-		if (src->fa_op == FMOP_RQ_STEER) {
-			ENICPMD_LOG(DEBUG, "move op: %ld -> dst %ld",
-				    (long)(src - src_head),
-				    (long)(dst - dst_head));
-			*dst = *src;
-			dst++;
-		}
-		src++;
+	/* Find 1st steer and decap */
+	op = fm->action.fma_action_ops;
+	steer = NULL;
+	decap = NULL;
+	while (op->fa_op != FMOP_END) {
+		if (!decap && op->fa_op == FMOP_DECAP_NOSTRIP)
+			decap = op;
+		else if (!steer && op->fa_op == FMOP_RQ_STEER)
+			steer = op;
+		op++;
 	}
-	/* Then append non-steer ops */
-	src = src_head;
-	while (src->fa_op != FMOP_END) {
-		if (src->fa_op != FMOP_RQ_STEER) {
-			ENICPMD_LOG(DEBUG, "move op: %ld -> dst %ld",
-				    (long)(src - src_head),
-				    (long)(dst - dst_head));
-			*dst = *src;
-			dst++;
-		}
-		src++;
+	/* If decap is before steer, swap */
+	if (steer && decap && decap < steer) {
+		op = fm->action.fma_action_ops;
+		ENICPMD_LOG(DEBUG, "swap decap %ld <-> steer %ld",
+			    (long)(decap - op), (long)(steer - op));
+		tmp_op = *decap;
+		*decap = *steer;
+		*steer = tmp_op;
 	}
-	/* Copy END */
-	*dst = *src;
-	/* Finally replace the original action with the reordered one */
-	memcpy(fm->action.fma_action_ops, fm->action_tmp.fma_action_ops,
-	       sizeof(fm->action.fma_action_ops));
 }
 
 /* VXLAN decap is done via flowman compound action */
@@ -1000,7 +988,7 @@ enic_fm_copy_vxlan_encap(struct enic_flowman *fm,
 			sizeof(struct rte_vxlan_hdr);
 		append_template(&template, &off, item->spec,
 				sizeof(struct rte_ipv4_hdr));
-		ip4->version_ihl = IP_VHL_DEF;
+		ip4->version_ihl = RTE_IPV4_VHL_DEF;
 		if (ip4->time_to_live == 0)
 			ip4->time_to_live = IP_DEFTTL;
 		ip4->next_proto_id = IPPROTO_UDP;
@@ -1070,7 +1058,7 @@ enic_fm_find_vnic(struct enic *enic, const struct rte_pci_addr *addr,
 		  uint64_t *handle)
 {
 	uint32_t bdf;
-	u64 args[2];
+	uint64_t args[2];
 	int rc;
 
 	ENICPMD_FUNC_TRACE();
@@ -1098,7 +1086,7 @@ enic_fm_copy_action(struct enic_flowman *fm,
 {
 	enum {
 		FATE = 1 << 0,
-		MARK = 1 << 1,
+		DECAP = 1 << 1,
 		PASSTHRU = 1 << 2,
 		COUNT = 1 << 3,
 		ENCAP = 1 << 4,
@@ -1152,9 +1140,6 @@ enic_fm_copy_action(struct enic_flowman *fm,
 			const struct rte_flow_action_mark *mark =
 				actions->conf;
 
-			if (overlap & MARK)
-				goto unsupported;
-			overlap |= MARK;
 			if (mark->id >= ENIC_MAGIC_FILTER_ID - 1)
 				return rte_flow_error_set(error, EINVAL,
 					RTE_FLOW_ERROR_TYPE_ACTION,
@@ -1168,9 +1153,6 @@ enic_fm_copy_action(struct enic_flowman *fm,
 			break;
 		}
 		case RTE_FLOW_ACTION_TYPE_FLAG: {
-			if (overlap & MARK)
-				goto unsupported;
-			overlap |= MARK;
 			/* ENIC_MAGIC_FILTER_ID is reserved for flagging */
 			memset(&fm_op, 0, sizeof(fm_op));
 			fm_op.fa_op = FMOP_MARK;
@@ -1185,8 +1167,8 @@ enic_fm_copy_action(struct enic_flowman *fm,
 				actions->conf;
 
 			/*
-			 * If other fate kind is set, fail.  Multiple
-			 * queue actions are ok.
+			 * If fate other than QUEUE or RSS, fail. Multiple
+			 * rss and queue actions are ok.
 			 */
 			if ((overlap & FATE) && first_rq)
 				goto unsupported;
@@ -1196,6 +1178,7 @@ enic_fm_copy_action(struct enic_flowman *fm,
 			fm_op.fa_op = FMOP_RQ_STEER;
 			fm_op.rq_steer.rq_index =
 				enic_rte_rq_idx_to_sop_idx(queue->index);
+			fm_op.rq_steer.rq_count = 1;
 			fm_op.rq_steer.vnic_handle = vnic_h;
 			ret = enic_fm_append_action_op(fm, &fm_op, error);
 			if (ret)
@@ -1230,27 +1213,44 @@ enic_fm_copy_action(struct enic_flowman *fm,
 			uint16_t i;
 
 			/*
-			 * Hardware does not support general RSS actions, but
-			 * we can still support the dummy one that is used to
-			 * "receive normally".
+			 * If fate other than QUEUE or RSS, fail. Multiple
+			 * rss and queue actions are ok.
+			 */
+			if ((overlap & FATE) && first_rq)
+				goto unsupported;
+			first_rq = false;
+			overlap |= FATE;
+
+			/*
+			 * Hardware only supports RSS actions on outer level
+			 * with default type and function. Queues must be
+			 * sequential.
 			 */
 			allow = rss->func == RTE_ETH_HASH_FUNCTION_DEFAULT &&
-				rss->level == 0 &&
-				(rss->types == 0 ||
-				 rss->types == enic->rss_hf) &&
-				rss->queue_num == enic->rq_count &&
-				rss->key_len == 0;
-			/* Identity queue map is ok */
-			for (i = 0; i < rss->queue_num; i++)
-				allow = allow && (i == rss->queue[i]);
+				rss->level == 0 && (rss->types == 0 ||
+				rss->types == enic->rss_hf) &&
+				rss->queue_num <= enic->rq_count &&
+				rss->queue[rss->queue_num - 1] < enic->rq_count;
+
+
+			/* Identity queue map needs to be sequential */
+			for (i = 1; i < rss->queue_num; i++)
+				allow = allow && (rss->queue[i] ==
+					rss->queue[i - 1] + 1);
 			if (!allow)
 				goto unsupported;
-			if (overlap & FATE)
-				goto unsupported;
-			/* Need MARK or FLAG */
-			if (!(overlap & MARK))
-				goto unsupported;
-			overlap |= FATE;
+
+			memset(&fm_op, 0, sizeof(fm_op));
+			fm_op.fa_op = FMOP_RQ_STEER;
+			fm_op.rq_steer.rq_index =
+				enic_rte_rq_idx_to_sop_idx(rss->queue[0]);
+			fm_op.rq_steer.rq_count = rss->queue_num;
+			fm_op.rq_steer.vnic_handle = vnic_h;
+			ret = enic_fm_append_action_op(fm, &fm_op, error);
+			if (ret)
+				return ret;
+			ENICPMD_LOG(DEBUG, "create QUEUE action rq: %u",
+				    fm_op.rq_steer.rq_index);
 			break;
 		}
 		case RTE_FLOW_ACTION_TYPE_PORT_ID: {
@@ -1284,6 +1284,10 @@ enic_fm_copy_action(struct enic_flowman *fm,
 			break;
 		}
 		case RTE_FLOW_ACTION_TYPE_VXLAN_DECAP: {
+			if (overlap & DECAP)
+				goto unsupported;
+			overlap |= DECAP;
+
 			ret = enic_fm_copy_vxlan_decap(fm, fmt, actions,
 				error);
 			if (ret != 0)
@@ -1506,7 +1510,7 @@ enic_fm_dump_tcam_entry(const struct fm_tcam_match_entry *fm_match,
 			const struct fm_action *fm_action,
 			uint8_t ingress)
 {
-	if (rte_log_get_level(enic_pmd_logtype) < (int)RTE_LOG_DEBUG)
+	if (!rte_log_can_log(enic_pmd_logtype, RTE_LOG_DEBUG))
 		return;
 	enic_fm_dump_tcam_match(fm_match, ingress);
 	enic_fm_dump_tcam_actions(fm_action);
@@ -1604,7 +1608,7 @@ enic_fm_more_counters(struct enic_flowman *fm)
 	struct enic_fm_counter *ctrs;
 	struct enic *enic;
 	int i, rc;
-	u64 args[2];
+	uint64_t args[2];
 
 	ENICPMD_FUNC_TRACE();
 	enic = fm->enic;
@@ -1640,7 +1644,7 @@ static int
 enic_fm_counter_zero(struct enic_flowman *fm, struct enic_fm_counter *c)
 {
 	struct enic *enic;
-	u64 args[3];
+	uint64_t args[3];
 	int ret;
 
 	ENICPMD_FUNC_TRACE();
@@ -1682,7 +1686,7 @@ enic_fm_counter_alloc(struct enic_flowman *fm, struct rte_flow_error *error,
 static int
 enic_fm_action_free(struct enic_flowman *fm, uint64_t handle)
 {
-	u64 args[2];
+	uint64_t args[2];
 	int rc;
 
 	ENICPMD_FUNC_TRACE();
@@ -1698,7 +1702,7 @@ enic_fm_action_free(struct enic_flowman *fm, uint64_t handle)
 static int
 enic_fm_entry_free(struct enic_flowman *fm, uint64_t handle)
 {
-	u64 args[2];
+	uint64_t args[2];
 	int rc;
 
 	ENICPMD_FUNC_TRACE();
@@ -1797,7 +1801,7 @@ enic_fm_add_tcam_entry(struct enic_flowman *fm,
 		       struct rte_flow_error *error)
 {
 	struct fm_tcam_match_entry *ftm;
-	u64 args[3];
+	uint64_t args[3];
 	int ret;
 
 	ENICPMD_FUNC_TRACE();
@@ -1830,7 +1834,7 @@ enic_fm_add_exact_entry(struct enic_flowman *fm,
 			struct rte_flow_error *error)
 {
 	struct fm_exact_match_entry *fem;
-	u64 args[3];
+	uint64_t args[3];
 	int ret;
 
 	ENICPMD_FUNC_TRACE();
@@ -1888,7 +1892,7 @@ __enic_fm_flow_add_entry(struct enic_flowman *fm,
 	struct fm_action *fma;
 	uint64_t action_h;
 	uint64_t entry_h;
-	u64 args[3];
+	uint64_t args[3];
 	int ret;
 
 	ENICPMD_FUNC_TRACE();
@@ -2090,7 +2094,7 @@ enic_fm_flow_query_count(struct rte_eth_dev *dev,
 	struct rte_flow_query_count *query;
 	struct enic_fm_flow *fm_flow;
 	struct enic *enic;
-	u64 args[3];
+	uint64_t args[3];
 	int rc;
 
 	ENICPMD_FUNC_TRACE();
@@ -2254,7 +2258,7 @@ enic_fm_flow_flush(struct rte_eth_dev *dev,
 static int
 enic_fm_tbl_free(struct enic_flowman *fm, uint64_t handle)
 {
-	u64 args[2];
+	uint64_t args[2];
 	int rc;
 
 	args[0] = FM_MATCH_TABLE_FREE;
@@ -2272,7 +2276,7 @@ enic_fm_tcam_tbl_alloc(struct enic_flowman *fm, uint32_t direction,
 {
 	struct fm_tcam_match_table *tcam_tbl;
 	struct enic *enic;
-	u64 args[2];
+	uint64_t args[2];
 	int rc;
 
 	ENICPMD_FUNC_TRACE();
@@ -2307,7 +2311,7 @@ static void
 enic_fm_free_all_counters(struct enic_flowman *fm)
 {
 	struct enic *enic;
-	u64 args[2];
+	uint64_t args[2];
 	int rc;
 
 	enic = fm->enic;
@@ -2356,7 +2360,7 @@ int
 enic_fm_init(struct enic *enic)
 {
 	struct enic_flowman *fm;
-	u8 name[NAME_MAX];
+	uint8_t name[RTE_MEMZONE_NAMESIZE];
 	int rc;
 
 	if (enic->flow_filter_mode != FILTER_FLOWMAN)
@@ -2371,7 +2375,7 @@ enic_fm_init(struct enic *enic)
 	TAILQ_INIT(&fm->fet_list);
 	TAILQ_INIT(&fm->jump_list);
 	/* Allocate host memory for flowman commands */
-	snprintf((char *)name, NAME_MAX, "fm-cmd-%s", enic->bdf_name);
+	snprintf((char *)name, sizeof(name), "fm-cmd-%s", enic->bdf_name);
 	fm->cmd.va = enic_alloc_consistent(enic,
 		sizeof(union enic_flowman_cmd_mem), &fm->cmd.pa, name);
 	if (!fm->cmd.va) {

@@ -51,6 +51,8 @@
 #include <rte_memcpy.h>
 #include <rte_common.h>
 
+#include "rte_mempool_trace_fp.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -260,7 +262,8 @@ struct rte_mempool {
 #endif
 }  __rte_cache_aligned;
 
-#define MEMPOOL_F_NO_SPREAD      0x0001 /**< Do not spread among memory channels. */
+#define MEMPOOL_F_NO_SPREAD      0x0001
+		/**< Spreading among memory channels not required. */
 #define MEMPOOL_F_NO_CACHE_ALIGN 0x0002 /**< Do not align objs on cache lines.*/
 #define MEMPOOL_F_SP_PUT         0x0004 /**< Default put is "single-producer".*/
 #define MEMPOOL_F_SC_GET         0x0008 /**< Default get is "single-consumer".*/
@@ -735,6 +738,7 @@ rte_mempool_ops_dequeue_bulk(struct rte_mempool *mp,
 {
 	struct rte_mempool_ops *ops;
 
+	rte_mempool_trace_ops_dequeue_bulk(mp, obj_table, n);
 	ops = rte_mempool_get_ops(mp->ops_index);
 	return ops->dequeue(mp, obj_table, n);
 }
@@ -760,6 +764,7 @@ rte_mempool_ops_dequeue_contig_blocks(struct rte_mempool *mp,
 
 	ops = rte_mempool_get_ops(mp->ops_index);
 	RTE_ASSERT(ops->dequeue_contig_blocks != NULL);
+	rte_mempool_trace_ops_dequeue_contig_blocks(mp, first_obj_table, n);
 	return ops->dequeue_contig_blocks(mp, first_obj_table, n);
 }
 
@@ -782,6 +787,7 @@ rte_mempool_ops_enqueue_bulk(struct rte_mempool *mp, void * const *obj_table,
 {
 	struct rte_mempool_ops *ops;
 
+	rte_mempool_trace_ops_enqueue_bulk(mp, obj_table, n);
 	ops = rte_mempool_get_ops(mp->ops_index);
 	return ops->enqueue(mp, obj_table, n);
 }
@@ -1106,9 +1112,12 @@ rte_mempool_free(struct rte_mempool *mp);
  * @param opaque
  *   An opaque argument passed to free_cb.
  * @return
- *   The number of objects added on success.
+ *   The number of objects added on success (strictly positive).
  *   On error, the chunk is not added in the memory list of the
- *   mempool and a negative errno is returned.
+ *   mempool the following code is returned:
+ *     (0): not enough room in chunk for one object.
+ *     (-ENOSPC): mempool is already populated.
+ *     (-ENOMEM): allocation failure.
  */
 int rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
 	rte_iova_t iova, size_t len, rte_mempool_memchunk_free_cb_t *free_cb,
@@ -1133,9 +1142,12 @@ int rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
  * @param opaque
  *   An opaque argument passed to free_cb.
  * @return
- *   The number of objects added on success.
+ *   The number of objects added on success (strictly positive).
  *   On error, the chunk is not added in the memory list of the
- *   mempool and a negative errno is returned.
+ *   mempool the following code is returned:
+ *     (0): not enough room in chunk for one object.
+ *     (-ENOSPC): mempool is already populated.
+ *     (-ENOMEM): allocation failure.
  */
 int
 rte_mempool_populate_virt(struct rte_mempool *mp, char *addr,
@@ -1167,8 +1179,8 @@ int rte_mempool_populate_default(struct rte_mempool *mp);
  *   A pointer to the mempool structure.
  * @return
  *   The number of objects added on success.
- *   On error, the chunk is not added in the memory list of the
- *   mempool and a negative errno is returned.
+ *   On error, 0 is returned, rte_errno is set, and the chunk is not added in
+ *   the memory list of the mempool.
  */
 int rte_mempool_populate_anon(struct rte_mempool *mp);
 
@@ -1263,6 +1275,8 @@ rte_mempool_default_cache(struct rte_mempool *mp, unsigned lcore_id)
 	if (lcore_id >= RTE_MAX_LCORE)
 		return NULL;
 
+	rte_mempool_trace_default_cache(mp, lcore_id,
+		&mp->local_cache[lcore_id]);
 	return &mp->local_cache[lcore_id];
 }
 
@@ -1282,6 +1296,7 @@ rte_mempool_cache_flush(struct rte_mempool_cache *cache,
 		cache = rte_mempool_default_cache(mp, rte_lcore_id());
 	if (cache == NULL || cache->len == 0)
 		return;
+	rte_mempool_trace_cache_flush(cache, mp);
 	rte_mempool_ops_enqueue_bulk(mp, cache->objs, cache->len);
 	cache->len = 0;
 }
@@ -1361,6 +1376,7 @@ static __rte_always_inline void
 rte_mempool_generic_put(struct rte_mempool *mp, void * const *obj_table,
 			unsigned int n, struct rte_mempool_cache *cache)
 {
+	rte_mempool_trace_generic_put(mp, obj_table, n, cache);
 	__mempool_check_cookies(mp, obj_table, n, 0);
 	__mempool_generic_put(mp, obj_table, n, cache);
 }
@@ -1385,6 +1401,7 @@ rte_mempool_put_bulk(struct rte_mempool *mp, void * const *obj_table,
 {
 	struct rte_mempool_cache *cache;
 	cache = rte_mempool_default_cache(mp, rte_lcore_id());
+	rte_mempool_trace_put_bulk(mp, obj_table, n, cache);
 	rte_mempool_generic_put(mp, obj_table, n, cache);
 }
 
@@ -1506,6 +1523,7 @@ rte_mempool_generic_get(struct rte_mempool *mp, void **obj_table,
 	ret = __mempool_generic_get(mp, obj_table, n, cache);
 	if (ret == 0)
 		__mempool_check_cookies(mp, obj_table, n, 1);
+	rte_mempool_trace_generic_get(mp, obj_table, n, cache);
 	return ret;
 }
 
@@ -1536,6 +1554,7 @@ rte_mempool_get_bulk(struct rte_mempool *mp, void **obj_table, unsigned int n)
 {
 	struct rte_mempool_cache *cache;
 	cache = rte_mempool_default_cache(mp, rte_lcore_id());
+	rte_mempool_trace_get_bulk(mp, obj_table, n, cache);
 	return rte_mempool_generic_get(mp, obj_table, n, cache);
 }
 
@@ -1605,6 +1624,7 @@ rte_mempool_get_contig_blocks(struct rte_mempool *mp,
 		__MEMPOOL_CONTIG_BLOCKS_STAT_ADD(mp, get_fail, n);
 	}
 
+	rte_mempool_trace_get_contig_blocks(mp, first_obj_table, n);
 	return ret;
 }
 
@@ -1653,7 +1673,7 @@ rte_mempool_in_use_count(const struct rte_mempool *mp);
 static inline int
 rte_mempool_full(const struct rte_mempool *mp)
 {
-	return !!(rte_mempool_avail_count(mp) == mp->size);
+	return rte_mempool_avail_count(mp) == mp->size;
 }
 
 /**
@@ -1672,7 +1692,7 @@ rte_mempool_full(const struct rte_mempool *mp)
 static inline int
 rte_mempool_empty(const struct rte_mempool *mp)
 {
-	return !!(rte_mempool_avail_count(mp) == 0);
+	return rte_mempool_avail_count(mp) == 0;
 }
 
 /**

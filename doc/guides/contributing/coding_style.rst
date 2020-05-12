@@ -631,10 +631,10 @@ In the DPDK environment, use the logging interface provided:
 
  /* log in debug level */
  rte_log_set_global_level(RTE_LOG_DEBUG);
- RTE_LOG(DEBUG, my_logtype1, "this is is a debug level message\n");
- RTE_LOG(INFO, my_logtype1, "this is is a info level message\n");
- RTE_LOG(WARNING, my_logtype1, "this is is a warning level message\n");
- RTE_LOG(WARNING, my_logtype2, "this is is a debug level message (not displayed)\n");
+ RTE_LOG(DEBUG, my_logtype1, "this is a debug level message\n");
+ RTE_LOG(INFO, my_logtype1, "this is a info level message\n");
+ RTE_LOG(WARNING, my_logtype1, "this is a warning level message\n");
+ RTE_LOG(WARNING, my_logtype2, "this is a debug level message (not displayed)\n");
 
  /* log in info level */
  rte_log_set_global_level(RTE_LOG_INFO);
@@ -803,9 +803,8 @@ lpm, etc. For drivers, the same format of Makefile is used.
 	CFLAGS += -O3
 	CFLAGS += $(WERROR_FLAGS)
 
-	# the symbol version information for the library, and .so version
+	# the symbol version information for the library
 	EXPORT_MAP := rte_<name>_version.map
-	LIBABIVER := 1
 
 	# all source filenames are stored in SRCS-y
 	SRCS-$(CONFIG_RTE_LIBRTE_<NAME>) += rte_<name>.c
@@ -842,12 +841,6 @@ sources
 
 
 The optional fields are:
-
-allow_experimental_apis
-	**Default Value = false**
-	Used to allow the library to make use of APIs marked as experimental.
-	Set to ``true`` if the C files in the library call any functions
-	marked as experimental in any included header files.
 
 build
 	**Default Value = true**
@@ -955,19 +948,11 @@ use_function_versioning
 	twice with suitable parameters for each of shared or static library
 	builds.
 
-version
-	**Default Value = 1**.
-	Specifies the ABI version of the library, and is used as the major
-	version number of the resulting ``.so`` library.
-
 Meson Build File Contents - Drivers
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 For drivers, the values are largely the same as for libraries. The variables
 supported are:
-
-allow_experimental_apis
-	As above.
 
 build
 	As above.

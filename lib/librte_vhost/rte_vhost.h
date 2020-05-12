@@ -10,6 +10,7 @@
  * Interface to vhost-user
  */
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <sys/eventfd.h>
 
@@ -68,6 +69,10 @@ extern "C" {
 #define VHOST_USER_PROTOCOL_F_PAGEFAULT 8
 #endif
 
+#ifndef VHOST_USER_PROTOCOL_F_CONFIG
+#define VHOST_USER_PROTOCOL_F_CONFIG 9
+#endif
+
 #ifndef VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD
 #define VHOST_USER_PROTOCOL_F_SLAVE_SEND_FD 10
 #endif
@@ -84,6 +89,7 @@ extern "C" {
 #ifndef VHOST_USER_F_PROTOCOL_FEATURES
 #define VHOST_USER_F_PROTOCOL_FEATURES	30
 #endif
+
 
 /**
  * Information relating to memory regions including offsets to
@@ -976,6 +982,20 @@ rte_vhost_extern_callback_register(int vid,
 __rte_experimental
 int
 rte_vhost_get_vdpa_device_id(int vid);
+
+/**
+ * Notify the guest that should get virtio configuration space from backend.
+ *
+ * @param vid
+ *  vhost device ID
+ * @param need_reply
+ *  wait for the master response the status of this operation
+ * @return
+ *  0 on success, < 0 on failure
+ */
+__rte_experimental
+int
+rte_vhost_slave_config_change(int vid, bool need_reply);
 
 #ifdef __cplusplus
 }

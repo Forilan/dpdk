@@ -11,9 +11,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <inttypes.h>
-#ifdef __FreeBSD__
 #include <sys/socket.h>
-#endif
 #include <netinet/in.h>
 
 #include <sys/queue.h>
@@ -42,6 +40,7 @@
 #include <rte_devargs.h>
 #include <rte_flow.h>
 #include <rte_gro.h>
+#include <rte_mbuf_dyn.h>
 
 #include <cmdline_rdline.h>
 #include <cmdline_parse.h>
@@ -81,9 +80,9 @@ struct cmd_help_brief_result {
 	cmdline_fixed_string_t help;
 };
 
-static void cmd_help_brief_parsed(__attribute__((unused)) void *parsed_result,
+static void cmd_help_brief_parsed(__rte_unused void *parsed_result,
                                   struct cmdline *cl,
-                                  __attribute__((unused)) void *data)
+                                  __rte_unused void *data)
 {
 	cmdline_printf(
 		cl,
@@ -96,7 +95,7 @@ static void cmd_help_brief_parsed(__attribute__((unused)) void *parsed_result,
 		"    help ports                      : Configuring ports.\n"
 		"    help registers                  : Reading and setting port registers.\n"
 		"    help filters                    : Filters configuration help.\n"
-		"    help traffic_management         : Traffic Management commmands.\n"
+		"    help traffic_management         : Traffic Management commands.\n"
 		"    help devices                    : Device related cmds.\n"
 		"    help all                        : All of the above sections.\n\n"
 	);
@@ -124,7 +123,7 @@ struct cmd_help_long_result {
 
 static void cmd_help_long_parsed(void *parsed_result,
                                  struct cmdline *cl,
-                                 __attribute__((unused)) void *data)
+                                 __rte_unused void *data)
 {
 	int show_all = 0;
 	struct cmd_help_long_result *res = parsed_result;
@@ -240,6 +239,12 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"show device info (<identifier>|all)"
 			"       Show general information about devices probed.\n\n"
+
+			"show port (port_id) rxq|txq (queue_id) desc (desc_id) status"
+			"       Show status of rx|tx descriptor.\n\n"
+
+			"show port (port_id) macs|mcast_macs"
+			"       Display list of mac addresses added to port.\n\n"
 		);
 	}
 
@@ -668,6 +673,9 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"ptype mapping update (port_id) (hw_ptype) (sw_ptype)\n"
 			"    Update a ptype mapping item on a port\n\n"
 
+			"set port (port_id) ptype_mask (ptype_mask)\n"
+			"    set packet types classification for a specific port\n\n"
+
 			"set port (port_id) queue-region region_id (value) "
 			"queue_start_index (value) queue_num (value)\n"
 			"    Set a queue region on a port\n\n"
@@ -761,7 +769,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    Detach physical or virtual dev by port_id\n\n"
 
 			"port config (port_id|all)"
-			" speed (10|100|1000|10000|25000|40000|50000|100000|auto)"
+			" speed (10|100|1000|10000|25000|40000|50000|100000|200000|auto)"
 			" duplex (half|full|auto)\n"
 			"    Set speed and duplex for all ports or port_id\n\n"
 
@@ -773,6 +781,9 @@ static void cmd_help_long_parsed(void *parsed_result,
 
 			"port config all max-pkt-len (value)\n"
 			"    Set the max packet length.\n\n"
+
+			"port config all max-lro-pkt-size (value)\n"
+			"    Set the max LRO aggregated packet size.\n\n"
 
 			"port config all drop-en (on|off)\n"
 			"    Enable or disable packet drop on all RX queues of all ports when no "
@@ -867,7 +878,7 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"udp_tso|outer_ipv4_cksum|qinq_insert|vxlan_tnl_tso|"
 			"gre_tnl_tso|ipip_tnl_tso|geneve_tnl_tso|"
 			"macsec_insert|mt_lockfree|multi_segs|mbuf_fast_free|"
-			"security|match_metadata on|off\n"
+			"security on|off\n"
 			"    Enable or disable a per port Tx offloading"
 			" on all Tx queues of a port\n\n"
 
@@ -891,6 +902,11 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"port config (port_id) tx_metadata (value)\n"
 			"    Set Tx metadata value per port. Testpmd will add this value"
 			" to any Tx packet sent from this port\n\n"
+
+			"port config (port_id) dynf (name) set|clear\n"
+			"    Register a dynf and Set/clear this flag on Tx. "
+			"Testpmd will set this value to any Tx packet "
+			"sent from this port\n\n"
 		);
 	}
 
@@ -1109,6 +1125,10 @@ static void cmd_help_long_parsed(void *parsed_result,
 			"    Restrict ingress traffic to the defined"
 			" flow rules\n\n"
 
+			"flow aged {port_id} [destroy]\n"
+			"    List and destroy aged flows"
+			" flow rules\n\n"
+
 			"set vxlan ip-version (ipv4|ipv6) vni (vni) udp-src"
 			" (udp-src) udp-dst (udp-dst) ip-src (ip-src) ip-dst"
 			" (ip-dst) eth-src (eth-src) eth-dst (eth-dst)\n"
@@ -1288,8 +1308,8 @@ struct cmd_operate_port_result {
 };
 
 static void cmd_operate_port_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_operate_port_result *res = parsed_result;
 
@@ -1334,8 +1354,8 @@ struct cmd_operate_specific_port_result {
 };
 
 static void cmd_operate_specific_port_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_operate_specific_port_result *res = parsed_result;
 
@@ -1383,8 +1403,8 @@ struct cmd_set_port_setup_on_result {
 };
 
 static void cmd_set_port_setup_on_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_set_port_setup_on_result *res = parsed_result;
 
@@ -1430,12 +1450,12 @@ cmdline_parse_inst_t cmd_set_port_setup_on = {
 struct cmd_operate_attach_port_result {
 	cmdline_fixed_string_t port;
 	cmdline_fixed_string_t keyword;
-	cmdline_fixed_string_t identifier;
+	cmdline_multi_string_t identifier;
 };
 
 static void cmd_operate_attach_port_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_operate_attach_port_result *res = parsed_result;
 
@@ -1453,7 +1473,7 @@ cmdline_parse_token_string_t cmd_operate_attach_port_keyword =
 			keyword, "attach");
 cmdline_parse_token_string_t cmd_operate_attach_port_identifier =
 	TOKEN_STRING_INITIALIZER(struct cmd_operate_attach_port_result,
-			identifier, NULL);
+			identifier, TOKEN_STRING_MULTI);
 
 cmdline_parse_inst_t cmd_operate_attach_port = {
 	.f = cmd_operate_attach_port_parsed,
@@ -1476,15 +1496,17 @@ struct cmd_operate_detach_port_result {
 };
 
 static void cmd_operate_detach_port_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_operate_detach_port_result *res = parsed_result;
 
-	if (!strcmp(res->keyword, "detach"))
+	if (!strcmp(res->keyword, "detach")) {
+		RTE_ETH_VALID_PORTID_OR_RET(res->port_id);
 		detach_port_device(res->port_id);
-	else
+	} else {
 		printf("Unknown parameter\n");
+	}
 }
 
 cmdline_parse_token_string_t cmd_operate_detach_port_port =
@@ -1517,13 +1539,13 @@ struct cmd_operate_detach_device_result {
 };
 
 static void cmd_operate_detach_device_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_operate_detach_device_result *res = parsed_result;
 
 	if (!strcmp(res->keyword, "detach"))
-		detach_device(res->identifier);
+		detach_devargs(res->identifier);
 	else
 		printf("Unknown parameter\n");
 }
@@ -1601,6 +1623,8 @@ parse_and_check_speed_duplex(char *speedstr, char *duplexstr, uint32_t *speed)
 			*speed = ETH_LINK_SPEED_50G;
 		} else if (!strcmp(speedstr, "100000")) {
 			*speed = ETH_LINK_SPEED_100G;
+		} else if (!strcmp(speedstr, "200000")) {
+			*speed = ETH_LINK_SPEED_200G;
 		} else if (!strcmp(speedstr, "auto")) {
 			*speed = ETH_LINK_SPEED_AUTONEG;
 		} else {
@@ -1614,8 +1638,8 @@ parse_and_check_speed_duplex(char *speedstr, char *duplexstr, uint32_t *speed)
 
 static void
 cmd_config_speed_all_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_config_speed_all *res = parsed_result;
 	uint32_t link_speed;
@@ -1648,7 +1672,7 @@ cmdline_parse_token_string_t cmd_config_speed_all_item1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, item1, "speed");
 cmdline_parse_token_string_t cmd_config_speed_all_value1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, value1,
-				"10#100#1000#10000#25000#40000#50000#100000#auto");
+				"10#100#1000#10000#25000#40000#50000#100000#200000#auto");
 cmdline_parse_token_string_t cmd_config_speed_all_item2 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_all, item2, "duplex");
 cmdline_parse_token_string_t cmd_config_speed_all_value2 =
@@ -1659,7 +1683,7 @@ cmdline_parse_inst_t cmd_config_speed_all = {
 	.f = cmd_config_speed_all_parsed,
 	.data = NULL,
 	.help_str = "port config all speed "
-		"10|100|1000|10000|25000|40000|50000|100000|auto duplex "
+		"10|100|1000|10000|25000|40000|50000|100000|200000|auto duplex "
 							"half|full|auto",
 	.tokens = {
 		(void *)&cmd_config_speed_all_port,
@@ -1686,8 +1710,8 @@ struct cmd_config_speed_specific {
 
 static void
 cmd_config_speed_specific_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_config_speed_specific *res = parsed_result;
 	uint32_t link_speed;
@@ -1723,7 +1747,7 @@ cmdline_parse_token_string_t cmd_config_speed_specific_item1 =
 								"speed");
 cmdline_parse_token_string_t cmd_config_speed_specific_value1 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_specific, value1,
-				"10#100#1000#10000#25000#40000#50000#100000#auto");
+				"10#100#1000#10000#25000#40000#50000#100000#200000#auto");
 cmdline_parse_token_string_t cmd_config_speed_specific_item2 =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_speed_specific, item2,
 								"duplex");
@@ -1735,7 +1759,7 @@ cmdline_parse_inst_t cmd_config_speed_specific = {
 	.f = cmd_config_speed_specific_parsed,
 	.data = NULL,
 	.help_str = "port config <port_id> speed "
-		"10|100|1000|10000|25000|40000|50000|100000|auto duplex "
+		"10|100|1000|10000|25000|40000|50000|100000|200000|auto duplex "
 							"half|full|auto",
 	.tokens = {
 		(void *)&cmd_config_speed_specific_port,
@@ -1760,8 +1784,8 @@ struct cmd_config_loopback_all {
 
 static void
 cmd_config_loopback_all_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_config_loopback_all *res = parsed_result;
 	portid_t pid;
@@ -1816,8 +1840,8 @@ struct cmd_config_loopback_specific {
 
 static void
 cmd_config_loopback_specific_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_config_loopback_specific *res = parsed_result;
 
@@ -1876,8 +1900,8 @@ struct cmd_config_rx_tx {
 
 static void
 cmd_config_rx_tx_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_config_rx_tx *res = parsed_result;
 
@@ -1904,18 +1928,13 @@ cmd_config_rx_tx_parsed(void *parsed_result,
 		nb_txq = res->value;
 	}
 	else if (!strcmp(res->name, "rxd")) {
-		if (res->value <= 0 || res->value > RTE_TEST_RX_DESC_MAX) {
-			printf("rxd %d invalid - must be > 0 && <= %d\n",
-					res->value, RTE_TEST_RX_DESC_MAX);
+		if (check_nb_rxd(res->value) != 0)
 			return;
-		}
 		nb_rxd = res->value;
 	} else if (!strcmp(res->name, "txd")) {
-		if (res->value <= 0 || res->value > RTE_TEST_TX_DESC_MAX) {
-			printf("txd %d invalid - must be > 0 && <= %d\n",
-					res->value, RTE_TEST_TX_DESC_MAX);
+		if (check_nb_txd(res->value) != 0)
 			return;
-		}
+
 		nb_txd = res->value;
 	} else {
 		printf("Unknown parameter\n");
@@ -1966,8 +1985,8 @@ struct cmd_config_max_pkt_len_result {
 
 static void
 cmd_config_max_pkt_len_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_config_max_pkt_len_result *res = parsed_result;
 	portid_t pid;
@@ -2037,6 +2056,78 @@ cmdline_parse_inst_t cmd_config_max_pkt_len = {
 	},
 };
 
+/* *** config max LRO aggregated packet size *** */
+struct cmd_config_max_lro_pkt_size_result {
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t keyword;
+	cmdline_fixed_string_t all;
+	cmdline_fixed_string_t name;
+	uint32_t value;
+};
+
+static void
+cmd_config_max_lro_pkt_size_parsed(void *parsed_result,
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
+{
+	struct cmd_config_max_lro_pkt_size_result *res = parsed_result;
+	portid_t pid;
+
+	if (!all_ports_stopped()) {
+		printf("Please stop all ports first\n");
+		return;
+	}
+
+	RTE_ETH_FOREACH_DEV(pid) {
+		struct rte_port *port = &ports[pid];
+
+		if (!strcmp(res->name, "max-lro-pkt-size")) {
+			if (res->value ==
+					port->dev_conf.rxmode.max_lro_pkt_size)
+				return;
+
+			port->dev_conf.rxmode.max_lro_pkt_size = res->value;
+		} else {
+			printf("Unknown parameter\n");
+			return;
+		}
+	}
+
+	init_port_config();
+
+	cmd_reconfig_device_queue(RTE_PORT_ALL, 1, 1);
+}
+
+cmdline_parse_token_string_t cmd_config_max_lro_pkt_size_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_max_lro_pkt_size_result,
+				 port, "port");
+cmdline_parse_token_string_t cmd_config_max_lro_pkt_size_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_max_lro_pkt_size_result,
+				 keyword, "config");
+cmdline_parse_token_string_t cmd_config_max_lro_pkt_size_all =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_max_lro_pkt_size_result,
+				 all, "all");
+cmdline_parse_token_string_t cmd_config_max_lro_pkt_size_name =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_max_lro_pkt_size_result,
+				 name, "max-lro-pkt-size");
+cmdline_parse_token_num_t cmd_config_max_lro_pkt_size_value =
+	TOKEN_NUM_INITIALIZER(struct cmd_config_max_lro_pkt_size_result,
+			      value, UINT32);
+
+cmdline_parse_inst_t cmd_config_max_lro_pkt_size = {
+	.f = cmd_config_max_lro_pkt_size_parsed,
+	.data = NULL,
+	.help_str = "port config all max-lro-pkt-size <value>",
+	.tokens = {
+		(void *)&cmd_config_max_lro_pkt_size_port,
+		(void *)&cmd_config_max_lro_pkt_size_keyword,
+		(void *)&cmd_config_max_lro_pkt_size_all,
+		(void *)&cmd_config_max_lro_pkt_size_name,
+		(void *)&cmd_config_max_lro_pkt_size_value,
+		NULL,
+	},
+};
+
 /* *** configure port MTU *** */
 struct cmd_config_mtu_result {
 	cmdline_fixed_string_t port;
@@ -2048,8 +2139,8 @@ struct cmd_config_mtu_result {
 
 static void
 cmd_config_mtu_parsed(void *parsed_result,
-		      __attribute__((unused)) struct cmdline *cl,
-		      __attribute__((unused)) void *data)
+		      __rte_unused struct cmdline *cl,
+		      __rte_unused void *data)
 {
 	struct cmd_config_mtu_result *res = parsed_result;
 
@@ -2099,8 +2190,8 @@ struct cmd_config_rx_mode_flag {
 
 static void
 cmd_config_rx_mode_flag_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_config_rx_mode_flag *res = parsed_result;
 
@@ -2167,8 +2258,8 @@ struct cmd_config_rss {
 
 static void
 cmd_config_rss_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_config_rss *res = parsed_result;
 	struct rte_eth_rss_conf rss_conf = { .rss_key_len = 0, };
@@ -2180,9 +2271,14 @@ cmd_config_rss_parsed(void *parsed_result,
 	int ret;
 
 	if (!strcmp(res->value, "all"))
-		rss_conf.rss_hf = ETH_RSS_IP | ETH_RSS_TCP |
-				ETH_RSS_UDP | ETH_RSS_SCTP |
-					ETH_RSS_L2_PAYLOAD;
+		rss_conf.rss_hf = ETH_RSS_ETH | ETH_RSS_VLAN | ETH_RSS_IP |
+			ETH_RSS_TCP | ETH_RSS_UDP | ETH_RSS_SCTP |
+			ETH_RSS_L2_PAYLOAD | ETH_RSS_L2TPV3 | ETH_RSS_ESP |
+			ETH_RSS_AH | ETH_RSS_PFCP;
+	else if (!strcmp(res->value, "eth"))
+		rss_conf.rss_hf = ETH_RSS_ETH;
+	else if (!strcmp(res->value, "vlan"))
+		rss_conf.rss_hf = ETH_RSS_VLAN;
 	else if (!strcmp(res->value, "ip"))
 		rss_conf.rss_hf = ETH_RSS_IP;
 	else if (!strcmp(res->value, "udp"))
@@ -2209,6 +2305,18 @@ cmd_config_rss_parsed(void *parsed_result,
 		rss_conf.rss_hf = ETH_RSS_L4_SRC_ONLY;
 	else if (!strcmp(res->value, "l4-dst-only"))
 		rss_conf.rss_hf = ETH_RSS_L4_DST_ONLY;
+	else if (!strcmp(res->value, "l2-src-only"))
+		rss_conf.rss_hf = ETH_RSS_L2_SRC_ONLY;
+	else if (!strcmp(res->value, "l2-dst-only"))
+		rss_conf.rss_hf = ETH_RSS_L2_DST_ONLY;
+	else if (!strcmp(res->value, "l2tpv3"))
+		rss_conf.rss_hf = ETH_RSS_L2TPV3;
+	else if (!strcmp(res->value, "esp"))
+		rss_conf.rss_hf = ETH_RSS_ESP;
+	else if (!strcmp(res->value, "ah"))
+		rss_conf.rss_hf = ETH_RSS_AH;
+	else if (!strcmp(res->value, "pfcp"))
+		rss_conf.rss_hf = ETH_RSS_PFCP;
 	else if (!strcmp(res->value, "none"))
 		rss_conf.rss_hf = 0;
 	else if (!strcmp(res->value, "default"))
@@ -2248,8 +2356,10 @@ cmd_config_rss_parsed(void *parsed_result,
 				i, -diag, strerror(-diag));
 		}
 	}
-	if (all_updated && !use_default)
+	if (all_updated && !use_default) {
 		rss_hf = rss_conf.rss_hf;
+		printf("rss_hf %#"PRIx64"\n", rss_hf);
+	}
 }
 
 cmdline_parse_token_string_t cmd_config_rss_port =
@@ -2267,7 +2377,8 @@ cmdline_parse_inst_t cmd_config_rss = {
 	.f = cmd_config_rss_parsed,
 	.data = NULL,
 	.help_str = "port config all rss "
-		"all|default|ip|tcp|udp|sctp|ether|port|vxlan|geneve|nvgre|vxlan-gpe|none|<flowtype_id>",
+		"all|default|eth|vlan|ip|tcp|udp|sctp|ether|port|vxlan|geneve|"
+		"nvgre|vxlan-gpe|l2tpv3|esp|ah|pfcp|none|<flowtype_id>",
 	.tokens = {
 		(void *)&cmd_config_rss_port,
 		(void *)&cmd_config_rss_keyword,
@@ -2315,8 +2426,8 @@ parse_and_check_key_hexa_digit(char *key, int idx)
 
 static void
 cmd_config_rss_hash_key_parsed(void *parsed_result,
-			       __attribute__((unused)) struct cmdline *cl,
-			       __attribute__((unused)) void *data)
+			       __rte_unused struct cmdline *cl,
+			       __rte_unused void *data)
 {
 	struct cmd_config_rss_hash_key *res = parsed_result;
 	uint8_t hash_key[RSS_HASH_KEY_LENGTH];
@@ -2377,7 +2488,9 @@ cmdline_parse_token_string_t cmd_config_rss_hash_key_rss_type =
 				 "ipv4-other#ipv6#ipv6-frag#ipv6-tcp#ipv6-udp#"
 				 "ipv6-sctp#ipv6-other#l2-payload#ipv6-ex#"
 				 "ipv6-tcp-ex#ipv6-udp-ex#"
-				 "l3-src-only#l3-dst-only#l4-src-only#l4-dst-only");
+				 "l3-src-only#l3-dst-only#l4-src-only#l4-dst-only#"
+				 "l2-src-only#l2-dst-only#s-vlan#c-vlan#"
+				 "l2tpv3#esp#ah#pfcp");
 cmdline_parse_token_string_t cmd_config_rss_hash_key_value =
 	TOKEN_STRING_INITIALIZER(struct cmd_config_rss_hash_key, key, NULL);
 
@@ -2388,7 +2501,9 @@ cmdline_parse_inst_t cmd_config_rss_hash_key = {
 		"ipv4|ipv4-frag|ipv4-tcp|ipv4-udp|ipv4-sctp|ipv4-other|"
 		"ipv6|ipv6-frag|ipv6-tcp|ipv6-udp|ipv6-sctp|ipv6-other|"
 		"l2-payload|ipv6-ex|ipv6-tcp-ex|ipv6-udp-ex|"
-		"l3-src-only|l3-dst-only|l4-src-only|l4-dst-only "
+		"l3-src-only|l3-dst-only|l4-src-only|l4-dst-only|"
+		"l2-src-only|l2-dst-only|s-vlan|c-vlan|"
+		"l2tpv3|esp|ah|pfcp "
 		"<string of hex digits (variable length, NIC dependent)>",
 	.tokens = {
 		(void *)&cmd_config_rss_hash_key_port,
@@ -2414,8 +2529,8 @@ struct cmd_config_rxtx_ring_size {
 
 static void
 cmd_config_rxtx_ring_size_parsed(void *parsed_result,
-				 __attribute__((unused)) struct cmdline *cl,
-				 __attribute__((unused)) void *data)
+				 __rte_unused struct cmdline *cl,
+				 __rte_unused void *data)
 {
 	struct cmd_config_rxtx_ring_size *res = parsed_result;
 	struct rte_port *port;
@@ -2508,8 +2623,8 @@ struct cmd_config_rxtx_queue {
 
 static void
 cmd_config_rxtx_queue_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_config_rxtx_queue *res = parsed_result;
 	uint8_t isrx;
@@ -2603,8 +2718,8 @@ struct cmd_config_deferred_start_rxtx_queue {
 
 static void
 cmd_config_deferred_start_rxtx_queue_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_config_deferred_start_rxtx_queue *res = parsed_result;
 	struct rte_port *port;
@@ -2701,8 +2816,8 @@ cmdline_parse_token_string_t cmd_setup_rxtx_queue_setup =
 static void
 cmd_setup_rxtx_queue_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_setup_rxtx_queue *res = parsed_result;
 	struct rte_port *port;
@@ -2857,8 +2972,8 @@ parse_reta_config(const char *str,
 
 static void
 cmd_set_rss_reta_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	int ret;
 	struct rte_eth_dev_info dev_info;
@@ -2979,8 +3094,8 @@ showport_parse_reta_config(struct rte_eth_rss_reta_entry64 *conf,
 
 static void
 cmd_showport_reta_parsed(void *parsed_result,
-			 __attribute__((unused)) struct cmdline *cl,
-			 __attribute__((unused)) void *data)
+			 __rte_unused struct cmdline *cl,
+			 __rte_unused void *data)
 {
 	struct cmd_showport_reta *res = parsed_result;
 	struct rte_eth_rss_reta_entry64 reta_conf[8];
@@ -3052,7 +3167,7 @@ struct cmd_showport_rss_hash {
 };
 
 static void cmd_showport_rss_hash_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
+				__rte_unused struct cmdline *cl,
 				void *show_rss_key)
 {
 	struct cmd_showport_rss_hash *res = parsed_result;
@@ -3114,8 +3229,8 @@ struct cmd_config_dcb {
 
 static void
 cmd_config_dcb_parsed(void *parsed_result,
-                        __attribute__((unused)) struct cmdline *cl,
-                        __attribute__((unused)) void *data)
+                        __rte_unused struct cmdline *cl,
+                        __rte_unused void *data)
 {
 	struct cmd_config_dcb *res = parsed_result;
 	portid_t port_id = res->port_id;
@@ -3212,8 +3327,8 @@ struct cmd_config_burst {
 
 static void
 cmd_config_burst_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_config_burst *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
@@ -3303,8 +3418,8 @@ struct cmd_config_thresh {
 
 static void
 cmd_config_thresh_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_config_thresh *res = parsed_result;
 
@@ -3372,8 +3487,8 @@ struct cmd_config_threshold {
 
 static void
 cmd_config_threshold_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_config_threshold *res = parsed_result;
 
@@ -3430,9 +3545,9 @@ struct cmd_stop_result {
 	cmdline_fixed_string_t stop;
 };
 
-static void cmd_stop_parsed(__attribute__((unused)) void *parsed_result,
-			    __attribute__((unused)) struct cmdline *cl,
-			    __attribute__((unused)) void *data)
+static void cmd_stop_parsed(__rte_unused void *parsed_result,
+			    __rte_unused struct cmdline *cl,
+			    __rte_unused void *data)
 {
 	stop_packet_forwarding();
 }
@@ -3523,8 +3638,8 @@ struct cmd_set_list_result {
 };
 
 static void cmd_set_list_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_set_list_result *res;
 	union {
@@ -3591,8 +3706,8 @@ struct cmd_setmask_result {
 };
 
 static void cmd_set_mask_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_setmask_result *res = parsed_result;
 
@@ -3639,8 +3754,8 @@ struct cmd_set_result {
 };
 
 static void cmd_set_parsed(void *parsed_result,
-			   __attribute__((unused)) struct cmdline *cl,
-			   __attribute__((unused)) void *data)
+			   __rte_unused struct cmdline *cl,
+			   __rte_unused void *data)
 {
 	struct cmd_set_result *res = parsed_result;
 	if (!strcmp(res->what, "nbport")) {
@@ -3686,8 +3801,8 @@ struct cmd_set_log_result {
 
 static void
 cmd_set_log_parsed(void *parsed_result,
-		   __attribute__((unused)) struct cmdline *cl,
-		   __attribute__((unused)) void *data)
+		   __rte_unused struct cmdline *cl,
+		   __rte_unused void *data)
 {
 	struct cmd_set_log_result *res;
 	int ret;
@@ -3734,8 +3849,8 @@ struct cmd_set_txpkts_result {
 
 static void
 cmd_set_txpkts_parsed(void *parsed_result,
-		      __attribute__((unused)) struct cmdline *cl,
-		      __attribute__((unused)) void *data)
+		      __rte_unused struct cmdline *cl,
+		      __rte_unused void *data)
 {
 	struct cmd_set_txpkts_result *res;
 	unsigned seg_lengths[RTE_MAX_SEGS_PER_PKT];
@@ -3780,8 +3895,8 @@ struct cmd_set_txsplit_result {
 
 static void
 cmd_set_txsplit_parsed(void *parsed_result,
-		      __attribute__((unused)) struct cmdline *cl,
-		      __attribute__((unused)) void *data)
+		      __rte_unused struct cmdline *cl,
+		      __rte_unused void *data)
 {
 	struct cmd_set_txsplit_result *res;
 
@@ -3821,8 +3936,8 @@ struct cmd_rx_vlan_filter_all_result {
 
 static void
 cmd_rx_vlan_filter_all_parsed(void *parsed_result,
-			      __attribute__((unused)) struct cmdline *cl,
-			      __attribute__((unused)) void *data)
+			      __rte_unused struct cmdline *cl,
+			      __rte_unused void *data)
 {
 	struct cmd_rx_vlan_filter_all_result *res = parsed_result;
 
@@ -3872,8 +3987,8 @@ struct cmd_vlan_offload_result {
 
 static void
 cmd_vlan_offload_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	int on;
 	struct cmd_vlan_offload_result *res = parsed_result;
@@ -3976,8 +4091,8 @@ struct cmd_vlan_tpid_result {
 
 static void
 cmd_vlan_tpid_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_vlan_tpid_result *res = parsed_result;
 	enum rte_vlan_type vlan_type;
@@ -4038,8 +4153,8 @@ struct cmd_rx_vlan_filter_result {
 
 static void
 cmd_rx_vlan_filter_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_rx_vlan_filter_result *res = parsed_result;
 
@@ -4087,8 +4202,8 @@ struct cmd_tx_vlan_set_result {
 
 static void
 cmd_tx_vlan_set_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	struct cmd_tx_vlan_set_result *res = parsed_result;
 
@@ -4141,8 +4256,8 @@ struct cmd_tx_vlan_set_qinq_result {
 
 static void
 cmd_tx_vlan_set_qinq_parsed(void *parsed_result,
-			    __attribute__((unused)) struct cmdline *cl,
-			    __attribute__((unused)) void *data)
+			    __rte_unused struct cmdline *cl,
+			    __rte_unused void *data)
 {
 	struct cmd_tx_vlan_set_qinq_result *res = parsed_result;
 
@@ -4200,8 +4315,8 @@ struct cmd_tx_vlan_set_pvid_result {
 
 static void
 cmd_tx_vlan_set_pvid_parsed(void *parsed_result,
-			    __attribute__((unused)) struct cmdline *cl,
-			    __attribute__((unused)) void *data)
+			    __rte_unused struct cmdline *cl,
+			    __rte_unused void *data)
 {
 	struct cmd_tx_vlan_set_pvid_result *res = parsed_result;
 
@@ -4254,8 +4369,8 @@ struct cmd_tx_vlan_reset_result {
 
 static void
 cmd_tx_vlan_reset_parsed(void *parsed_result,
-			 __attribute__((unused)) struct cmdline *cl,
-			 __attribute__((unused)) void *data)
+			 __rte_unused struct cmdline *cl,
+			 __rte_unused void *data)
 {
 	struct cmd_tx_vlan_reset_result *res = parsed_result;
 
@@ -4376,8 +4491,8 @@ cmd_config_queue_tx_offloads(struct rte_port *port)
 
 static void
 cmd_csum_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	struct cmd_csum_result *res = parsed_result;
 	int hw = 0;
@@ -4527,8 +4642,8 @@ struct cmd_csum_tunnel_result {
 
 static void
 cmd_csum_tunnel_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	struct cmd_csum_tunnel_result *res = parsed_result;
 
@@ -4580,8 +4695,8 @@ struct cmd_tso_set_result {
 
 static void
 cmd_tso_set_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	struct cmd_tso_set_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
@@ -4719,8 +4834,8 @@ check_tunnel_tso_nic_support(portid_t port_id)
 
 static void
 cmd_tunnel_tso_set_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_tunnel_tso_set_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
@@ -4840,8 +4955,8 @@ struct cmd_gro_enable_result {
 
 static void
 cmd_gro_enable_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_gro_enable_result *res;
 
@@ -4890,8 +5005,8 @@ struct cmd_gro_show_result {
 
 static void
 cmd_gro_show_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_gro_show_result *res;
 
@@ -4936,8 +5051,8 @@ struct cmd_gro_flush_result {
 
 static void
 cmd_gro_flush_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_gro_flush_result *res;
 
@@ -4984,8 +5099,8 @@ struct cmd_gso_enable_result {
 
 static void
 cmd_gso_enable_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_gso_enable_result *res;
 
@@ -5034,14 +5149,14 @@ struct cmd_gso_size_result {
 
 static void
 cmd_gso_size_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	struct cmd_gso_size_result *res = parsed_result;
 
 	if (test_done == 0) {
 		printf("Before setting GSO segsz, please first"
-				" stop fowarding\n");
+				" stop forwarding\n");
 		return;
 	}
 
@@ -5092,8 +5207,8 @@ struct cmd_gso_show_result {
 
 static void
 cmd_gso_show_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	struct cmd_gso_show_result *res = parsed_result;
 
@@ -5149,8 +5264,8 @@ struct cmd_set_flush_rx {
 
 static void
 cmd_set_flush_rx_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_set_flush_rx *res = parsed_result;
 	no_flush_rx = (uint8_t)((strcmp(res->mode, "on") == 0) ? 0 : 1);
@@ -5188,8 +5303,8 @@ struct cmd_set_link_check {
 
 static void
 cmd_set_link_check_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_set_link_check *res = parsed_result;
 	no_link_check = (uint8_t)((strcmp(res->mode, "on") == 0) ? 0 : 1);
@@ -5230,8 +5345,8 @@ struct cmd_set_bypass_mode_result {
 
 static void
 cmd_set_bypass_mode_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_set_bypass_mode_result *res = parsed_result;
 	portid_t port_id = res->port_id;
@@ -5298,8 +5413,8 @@ struct cmd_set_bypass_event_result {
 
 static void
 cmd_set_bypass_event_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	int32_t rc = -EINVAL;
 	struct cmd_set_bypass_event_result *res = parsed_result;
@@ -5405,8 +5520,8 @@ struct cmd_set_bypass_timeout_result {
 
 static void
 cmd_set_bypass_timeout_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	__rte_unused struct cmd_set_bypass_timeout_result *res = parsed_result;
 
@@ -5467,8 +5582,8 @@ struct cmd_show_bypass_config_result {
 
 static void
 cmd_show_bypass_config_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_show_bypass_config_result *res = parsed_result;
 	portid_t port_id = res->port_id;
@@ -5477,7 +5592,7 @@ cmd_show_bypass_config_parsed(void *parsed_result,
 	uint32_t event_mode;
 	uint32_t bypass_mode;
 	uint32_t timeout = bypass_timeout;
-	int i;
+	unsigned int i;
 
 	static const char * const timeouts[RTE_PMD_IXGBE_BYPASS_TMT_NUM] =
 		{"off", "1.5", "2", "3", "4", "8", "16", "32"};
@@ -5490,7 +5605,6 @@ cmd_show_bypass_config_parsed(void *parsed_result,
 		"OS/board off",
 		"power supply off",
 		"timeout"};
-	int num_events = (sizeof events) / (sizeof events[0]);
 
 	/* Display the bypass mode.*/
 	if (rte_pmd_ixgbe_bypass_state_show(port_id, &bypass_mode) != 0) {
@@ -5511,7 +5625,7 @@ cmd_show_bypass_config_parsed(void *parsed_result,
 	printf("\tbypass timeout = %s\n", timeouts[timeout]);
 
 	/* Display the bypass events and associated modes. */
-	for (i = RTE_PMD_IXGBE_BYPASS_EVENT_START; i < num_events; i++) {
+	for (i = RTE_PMD_IXGBE_BYPASS_EVENT_START; i < RTE_DIM(events); i++) {
 
 		if (rte_pmd_ixgbe_bypass_event_show(port_id, i, &event_mode)) {
 			printf("\tFailed to get bypass mode for event = %s\n",
@@ -5568,8 +5682,8 @@ struct cmd_set_bonding_mode_result {
 };
 
 static void cmd_set_bonding_mode_parsed(void *parsed_result,
-		__attribute__((unused))  struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused  struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_set_bonding_mode_result *res = parsed_result;
 	portid_t port_id = res->port_id;
@@ -5621,8 +5735,8 @@ struct cmd_set_bonding_lacp_dedicated_queues_result {
 };
 
 static void cmd_set_bonding_lacp_dedicated_queues_parsed(void *parsed_result,
-		__attribute__((unused))  struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused  struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_set_bonding_lacp_dedicated_queues_result *res = parsed_result;
 	portid_t port_id = res->port_id;
@@ -5699,8 +5813,8 @@ struct cmd_set_bonding_balance_xmit_policy_result {
 };
 
 static void cmd_set_bonding_balance_xmit_policy_parsed(void *parsed_result,
-		__attribute__((unused))  struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused  struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_set_bonding_balance_xmit_policy_result *res = parsed_result;
 	portid_t port_id = res->port_id;
@@ -5765,8 +5879,8 @@ struct cmd_show_bonding_config_result {
 };
 
 static void cmd_show_bonding_config_parsed(void *parsed_result,
-		__attribute__((unused))  struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused  struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_show_bonding_config_result *res = parsed_result;
 	int bonding_mode, agg_mode;
@@ -5909,8 +6023,8 @@ struct cmd_set_bonding_primary_result {
 };
 
 static void cmd_set_bonding_primary_parsed(void *parsed_result,
-		__attribute__((unused))  struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused  struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_set_bonding_primary_result *res = parsed_result;
 	portid_t master_port_id = res->port_id;
@@ -5966,8 +6080,8 @@ struct cmd_add_bonding_slave_result {
 };
 
 static void cmd_add_bonding_slave_parsed(void *parsed_result,
-		__attribute__((unused))  struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused  struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_add_bonding_slave_result *res = parsed_result;
 	portid_t master_port_id = res->port_id;
@@ -6024,8 +6138,8 @@ struct cmd_remove_bonding_slave_result {
 };
 
 static void cmd_remove_bonding_slave_parsed(void *parsed_result,
-		__attribute__((unused))  struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused  struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_remove_bonding_slave_result *res = parsed_result;
 	portid_t master_port_id = res->port_id;
@@ -6084,8 +6198,8 @@ struct cmd_create_bonded_device_result {
 static int bond_dev_num = 0;
 
 static void cmd_create_bonded_device_parsed(void *parsed_result,
-		__attribute__((unused))  struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused  struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_create_bonded_device_result *res = parsed_result;
 	char ethdev_name[RTE_ETH_NAME_MAX_LEN];
@@ -6164,8 +6278,8 @@ struct cmd_set_bond_mac_addr_result {
 };
 
 static void cmd_set_bond_mac_addr_parsed(void *parsed_result,
-		__attribute__((unused))  struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused  struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_set_bond_mac_addr_result *res = parsed_result;
 	int ret;
@@ -6219,8 +6333,8 @@ struct cmd_set_bond_mon_period_result {
 };
 
 static void cmd_set_bond_mon_period_parsed(void *parsed_result,
-		__attribute__((unused))  struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused  struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_set_bond_mon_period_result *res = parsed_result;
 	int ret;
@@ -6275,8 +6389,8 @@ struct cmd_set_bonding_agg_mode_policy_result {
 
 static void
 cmd_set_bonding_agg_mode(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_set_bonding_agg_mode_policy_result *res = parsed_result;
 	uint8_t policy = AGG_BANDWIDTH;
@@ -6337,8 +6451,8 @@ struct cmd_set_fwd_mode_result {
 };
 
 static void cmd_set_fwd_mode_parsed(void *parsed_result,
-				    __attribute__((unused)) struct cmdline *cl,
-				    __attribute__((unused)) void *data)
+				    __rte_unused struct cmdline *cl,
+				    __rte_unused void *data)
 {
 	struct cmd_set_fwd_mode_result *res = parsed_result;
 
@@ -6397,8 +6511,8 @@ struct cmd_set_fwd_retry_mode_result {
 };
 
 static void cmd_set_fwd_retry_mode_parsed(void *parsed_result,
-			    __attribute__((unused)) struct cmdline *cl,
-			    __attribute__((unused)) void *data)
+			    __rte_unused struct cmdline *cl,
+			    __rte_unused void *data)
 {
 	struct cmd_set_fwd_retry_mode_result *res = parsed_result;
 
@@ -6468,8 +6582,8 @@ struct cmd_set_burst_tx_retry_result {
 };
 
 static void cmd_set_burst_tx_retry_parsed(void *parsed_result,
-					__attribute__((unused)) struct cmdline *cl,
-					__attribute__((unused)) void *data)
+					__rte_unused struct cmdline *cl,
+					__rte_unused void *data)
 {
 	struct cmd_set_burst_tx_retry_result *res = parsed_result;
 
@@ -6524,7 +6638,7 @@ struct cmd_set_promisc_mode_result {
 };
 
 static void cmd_set_promisc_mode_parsed(void *parsed_result,
-					__attribute__((unused)) struct cmdline *cl,
+					__rte_unused struct cmdline *cl,
 					void *allports)
 {
 	struct cmd_set_promisc_mode_result *res = parsed_result;
@@ -6596,7 +6710,7 @@ struct cmd_set_allmulti_mode_result {
 };
 
 static void cmd_set_allmulti_mode_parsed(void *parsed_result,
-					__attribute__((unused)) struct cmdline *cl,
+					__rte_unused struct cmdline *cl,
 					void *allports)
 {
 	struct cmd_set_allmulti_mode_result *res = parsed_result;
@@ -6895,7 +7009,7 @@ cmdline_parse_inst_t cmd_link_flow_control_set_autoneg = {
 
 static void
 cmd_link_flow_ctrl_set_parsed(void *parsed_result,
-			      __attribute__((unused)) struct cmdline *cl,
+			      __rte_unused struct cmdline *cl,
 			      void *data)
 {
 	struct cmd_link_flow_ctrl_set_result *res = parsed_result;
@@ -6984,8 +7098,8 @@ struct cmd_priority_flow_ctrl_set_result {
 
 static void
 cmd_priority_flow_ctrl_set_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	struct cmd_priority_flow_ctrl_set_result *res = parsed_result;
 	struct rte_eth_pfc_conf pfc_conf;
@@ -6999,9 +7113,10 @@ cmd_priority_flow_ctrl_set_parsed(void *parsed_result,
 	 * the RTE_FC_RX_PAUSE, Respond to the pause frame at the Tx side.
 	 */
 	static enum rte_eth_fc_mode rx_tx_onoff_2_pfc_mode[2][2] = {
-			{RTE_FC_NONE, RTE_FC_RX_PAUSE}, {RTE_FC_TX_PAUSE, RTE_FC_FULL}
+		{RTE_FC_NONE, RTE_FC_TX_PAUSE}, {RTE_FC_RX_PAUSE, RTE_FC_FULL}
 	};
 
+	memset(&pfc_conf, 0, sizeof(struct rte_eth_pfc_conf));
 	rx_fc_enable = (!strncmp(res->rx_pfc_mode, "on",2)) ? 1 : 0;
 	tx_fc_enable = (!strncmp(res->tx_pfc_mode, "on",2)) ? 1 : 0;
 	pfc_conf.fc.mode       = rx_tx_onoff_2_pfc_mode[rx_fc_enable][tx_fc_enable];
@@ -7077,9 +7192,9 @@ struct cmd_reset_result {
 	cmdline_fixed_string_t def;
 };
 
-static void cmd_reset_parsed(__attribute__((unused)) void *parsed_result,
+static void cmd_reset_parsed(__rte_unused void *parsed_result,
 			     struct cmdline *cl,
-			     __attribute__((unused)) void *data)
+			     __rte_unused void *data)
 {
 	cmdline_printf(cl, "Reset to default forwarding configuration...\n");
 	set_def_fwd_config();
@@ -7110,9 +7225,9 @@ struct cmd_start_result {
 cmdline_parse_token_string_t cmd_start_start =
 	TOKEN_STRING_INITIALIZER(struct cmd_start_result, start, "start");
 
-static void cmd_start_parsed(__attribute__((unused)) void *parsed_result,
-			     __attribute__((unused)) struct cmdline *cl,
-			     __attribute__((unused)) void *data)
+static void cmd_start_parsed(__rte_unused void *parsed_result,
+			     __rte_unused struct cmdline *cl,
+			     __rte_unused void *data)
 {
 	start_packet_forwarding(0);
 }
@@ -7134,9 +7249,9 @@ struct cmd_start_tx_first_result {
 };
 
 static void
-cmd_start_tx_first_parsed(__attribute__((unused)) void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+cmd_start_tx_first_parsed(__rte_unused void *parsed_result,
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	start_packet_forwarding(1);
 }
@@ -7169,8 +7284,8 @@ struct cmd_start_tx_first_n_result {
 
 static void
 cmd_start_tx_first_n_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_start_tx_first_n_result *res = parsed_result;
 
@@ -7218,9 +7333,9 @@ cmdline_parse_token_string_t cmd_set_link_up_port =
 cmdline_parse_token_num_t cmd_set_link_up_port_id =
 	TOKEN_NUM_INITIALIZER(struct cmd_set_link_up_result, port_id, UINT16);
 
-static void cmd_set_link_up_parsed(__attribute__((unused)) void *parsed_result,
-			     __attribute__((unused)) struct cmdline *cl,
-			     __attribute__((unused)) void *data)
+static void cmd_set_link_up_parsed(__rte_unused void *parsed_result,
+			     __rte_unused struct cmdline *cl,
+			     __rte_unused void *data)
 {
 	struct cmd_set_link_up_result *res = parsed_result;
 	dev_set_link_up(res->port_id);
@@ -7258,9 +7373,9 @@ cmdline_parse_token_num_t cmd_set_link_down_port_id =
 	TOKEN_NUM_INITIALIZER(struct cmd_set_link_down_result, port_id, UINT16);
 
 static void cmd_set_link_down_parsed(
-				__attribute__((unused)) void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused void *parsed_result,
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_set_link_down_result *res = parsed_result;
 	dev_set_link_down(res->port_id);
@@ -7287,8 +7402,8 @@ struct cmd_showcfg_result {
 };
 
 static void cmd_showcfg_parsed(void *parsed_result,
-			       __attribute__((unused)) struct cmdline *cl,
-			       __attribute__((unused)) void *data)
+			       __rte_unused struct cmdline *cl,
+			       __rte_unused void *data)
 {
 	struct cmd_showcfg_result *res = parsed_result;
 	if (!strcmp(res->what, "rxtx"))
@@ -7330,8 +7445,8 @@ struct cmd_showportall_result {
 };
 
 static void cmd_showportall_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	portid_t i;
 
@@ -7404,8 +7519,8 @@ struct cmd_showport_result {
 };
 
 static void cmd_showport_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_showport_result *res = parsed_result;
 	if (!strcmp(res->show, "clear")) {
@@ -7468,8 +7583,8 @@ struct cmd_showdevice_result {
 };
 
 static void cmd_showdevice_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_showdevice_result *res = parsed_result;
 	if (!strcmp(res->what, "info")) {
@@ -7515,8 +7630,8 @@ struct cmd_showqueue_result {
 
 static void
 cmd_showqueue_parsed(void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_showqueue_result *res = parsed_result;
 
@@ -7604,8 +7719,8 @@ struct cmd_read_reg_result {
 
 static void
 cmd_read_reg_parsed(void *parsed_result,
-		    __attribute__((unused)) struct cmdline *cl,
-		    __attribute__((unused)) void *data)
+		    __rte_unused struct cmdline *cl,
+		    __rte_unused void *data)
 {
 	struct cmd_read_reg_result *res = parsed_result;
 	port_reg_display(res->port_id, res->reg_off);
@@ -7645,8 +7760,8 @@ struct cmd_read_reg_bit_field_result {
 
 static void
 cmd_read_reg_bit_field_parsed(void *parsed_result,
-			      __attribute__((unused)) struct cmdline *cl,
-			      __attribute__((unused)) void *data)
+			      __rte_unused struct cmdline *cl,
+			      __rte_unused void *data)
 {
 	struct cmd_read_reg_bit_field_result *res = parsed_result;
 	port_reg_bit_field_display(res->port_id, res->reg_off,
@@ -7699,8 +7814,8 @@ struct cmd_read_reg_bit_result {
 
 static void
 cmd_read_reg_bit_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_read_reg_bit_result *res = parsed_result;
 	port_reg_bit_display(res->port_id, res->reg_off, res->bit_pos);
@@ -7743,8 +7858,8 @@ struct cmd_write_reg_result {
 
 static void
 cmd_write_reg_parsed(void *parsed_result,
-		     __attribute__((unused)) struct cmdline *cl,
-		     __attribute__((unused)) void *data)
+		     __rte_unused struct cmdline *cl,
+		     __rte_unused void *data)
 {
 	struct cmd_write_reg_result *res = parsed_result;
 	port_reg_set(res->port_id, res->reg_off, res->value);
@@ -7788,8 +7903,8 @@ struct cmd_write_reg_bit_field_result {
 
 static void
 cmd_write_reg_bit_field_parsed(void *parsed_result,
-			       __attribute__((unused)) struct cmdline *cl,
-			       __attribute__((unused)) void *data)
+			       __rte_unused struct cmdline *cl,
+			       __rte_unused void *data)
 {
 	struct cmd_write_reg_bit_field_result *res = parsed_result;
 	port_reg_bit_field_set(res->port_id, res->reg_off,
@@ -7848,8 +7963,8 @@ struct cmd_write_reg_bit_result {
 
 static void
 cmd_write_reg_bit_parsed(void *parsed_result,
-			 __attribute__((unused)) struct cmdline *cl,
-			 __attribute__((unused)) void *data)
+			 __rte_unused struct cmdline *cl,
+			 __rte_unused void *data)
 {
 	struct cmd_write_reg_bit_result *res = parsed_result;
 	port_reg_bit_set(res->port_id, res->reg_off, res->bit_pos, res->value);
@@ -7897,8 +8012,8 @@ struct cmd_read_rxd_txd_result {
 
 static void
 cmd_read_rxd_txd_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_read_rxd_txd_result *res = parsed_result;
 
@@ -7939,9 +8054,9 @@ struct cmd_quit_result {
 	cmdline_fixed_string_t quit;
 };
 
-static void cmd_quit_parsed(__attribute__((unused)) void *parsed_result,
+static void cmd_quit_parsed(__rte_unused void *parsed_result,
 			    struct cmdline *cl,
-			    __attribute__((unused)) void *data)
+			    __rte_unused void *data)
 {
 	cmdline_quit(cl);
 }
@@ -7968,8 +8083,8 @@ struct cmd_mac_addr_result {
 };
 
 static void cmd_mac_addr_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_mac_addr_result *res = parsed_result;
 	int ret;
@@ -8023,8 +8138,8 @@ struct cmd_eth_peer_result {
 };
 
 static void cmd_set_eth_peer_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 		struct cmd_eth_peer_result *res = parsed_result;
 
@@ -8071,8 +8186,8 @@ struct cmd_set_qmap_result {
 
 static void
 cmd_set_qmap_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	struct cmd_set_qmap_result *res = parsed_result;
 	int is_rx = (strcmp(res->what, "tx") == 0) ? 0 : 1;
@@ -8124,8 +8239,8 @@ struct cmd_set_xstats_hide_zero_result {
 
 static void
 cmd_set_xstats_hide_zero_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_set_xstats_hide_zero_result *res;
 	uint16_t on_off = 0;
@@ -8169,8 +8284,8 @@ struct cmd_set_uc_hash_table {
 
 static void
 cmd_set_uc_hash_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	int ret=0;
 	struct cmd_set_uc_hash_table *res = parsed_result;
@@ -8230,8 +8345,8 @@ struct cmd_set_uc_all_hash_table {
 
 static void
 cmd_set_uc_all_hash_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	int ret=0;
 	struct cmd_set_uc_all_hash_table *res = parsed_result;
@@ -8294,8 +8409,8 @@ struct cmd_set_vf_macvlan_filter {
 
 static void
 cmd_set_vf_macvlan_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	int is_on, ret = 0;
 	struct cmd_set_vf_macvlan_filter *res = parsed_result;
@@ -8397,8 +8512,8 @@ struct cmd_set_vf_traffic {
 
 static void
 cmd_set_vf_traffic_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	struct cmd_set_vf_traffic *res = parsed_result;
 	int is_rx = (strcmp(res->what, "rx") == 0) ? 1 : 0;
@@ -8459,8 +8574,8 @@ struct cmd_set_vf_rxmode {
 
 static void
 cmd_set_vf_rxmode_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	int ret = -ENOTSUP;
 	uint16_t vf_rxmode = 0;
@@ -8550,8 +8665,8 @@ struct cmd_vf_mac_addr_result {
 };
 
 static void cmd_vf_mac_addr_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_vf_mac_addr_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -8627,8 +8742,8 @@ struct cmd_vf_rx_vlan_filter {
 
 static void
 cmd_vf_rx_vlan_filter_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_vf_rx_vlan_filter *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -8720,8 +8835,8 @@ struct cmd_queue_rate_limit_result {
 };
 
 static void cmd_queue_rate_limit_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_queue_rate_limit_result *res = parsed_result;
 	int ret = 0;
@@ -8789,8 +8904,8 @@ struct cmd_vf_rate_limit_result {
 };
 
 static void cmd_vf_rate_limit_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_vf_rate_limit_result *res = parsed_result;
 	int ret = 0;
@@ -8871,8 +8986,8 @@ struct cmd_tunnel_filter_result {
 
 static void
 cmd_tunnel_filter_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_tunnel_filter_result *res = parsed_result;
 	struct rte_eth_tunnel_filter_conf tunnel_filter_conf;
@@ -9015,8 +9130,8 @@ struct cmd_tunnel_udp_config {
 
 static void
 cmd_tunnel_udp_config_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_tunnel_udp_config *res = parsed_result;
 	struct rte_eth_udp_tunnel tunnel_udp;
@@ -9077,8 +9192,8 @@ struct cmd_config_tunnel_udp_port {
 
 static void
 cmd_cfg_tunnel_udp_port_parsed(void *parsed_result,
-			       __attribute__((unused)) struct cmdline *cl,
-			       __attribute__((unused)) void *data)
+			       __rte_unused struct cmdline *cl,
+			       __rte_unused void *data)
 {
 	struct cmd_config_tunnel_udp_port *res = parsed_result;
 	struct rte_eth_udp_tunnel tunnel_udp;
@@ -9160,8 +9275,8 @@ struct cmd_global_config_result {
 
 static void
 cmd_global_config_parsed(void *parsed_result,
-			 __attribute__((unused)) struct cmdline *cl,
-			 __attribute__((unused)) void *data)
+			 __rte_unused struct cmdline *cl,
+			 __rte_unused void *data)
 {
 	struct cmd_global_config_result *res = parsed_result;
 	struct rte_eth_global_cfg conf;
@@ -9250,8 +9365,8 @@ cmdline_parse_token_string_t cmd_mirror_mask_on =
 
 static void
 cmd_set_mirror_mask_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	int ret,nb_item,i;
 	struct cmd_set_mirror_mask_result *res = parsed_result;
@@ -9361,8 +9476,8 @@ cmdline_parse_token_string_t cmd_mirror_link_on =
 
 static void
 cmd_set_mirror_link_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	int ret;
 	struct cmd_set_mirror_link_result *res = parsed_result;
@@ -9435,8 +9550,8 @@ cmdline_parse_token_num_t cmd_rm_mirror_rule_ruleid =
 
 static void
 cmd_reset_mirror_rule_parsed(void *parsed_result,
-		       __attribute__((unused)) struct cmdline *cl,
-		       __attribute__((unused)) void *data)
+		       __rte_unused struct cmdline *cl,
+		       __rte_unused void *data)
 {
 	int ret;
 	struct cmd_set_mirror_link_result *res = parsed_result;
@@ -9476,14 +9591,66 @@ dump_struct_sizes(void)
 #undef DUMP_SIZE
 }
 
+
+/* Dump the socket memory statistics on console */
+static void
+dump_socket_mem(FILE *f)
+{
+	struct rte_malloc_socket_stats socket_stats;
+	unsigned int i;
+	size_t total = 0;
+	size_t alloc = 0;
+	size_t free = 0;
+	unsigned int n_alloc = 0;
+	unsigned int n_free = 0;
+	static size_t last_allocs;
+	static size_t last_total;
+
+
+	for (i = 0; i < RTE_MAX_NUMA_NODES; i++) {
+		if (rte_malloc_get_socket_stats(i, &socket_stats) ||
+		    !socket_stats.heap_totalsz_bytes)
+			continue;
+		total += socket_stats.heap_totalsz_bytes;
+		alloc += socket_stats.heap_allocsz_bytes;
+		free += socket_stats.heap_freesz_bytes;
+		n_alloc += socket_stats.alloc_count;
+		n_free += socket_stats.free_count;
+		fprintf(f,
+			"Socket %u: size(M) total: %.6lf alloc: %.6lf(%.3lf%%) free: %.6lf \tcount alloc: %-4u free: %u\n",
+			i,
+			(double)socket_stats.heap_totalsz_bytes / (1024 * 1024),
+			(double)socket_stats.heap_allocsz_bytes / (1024 * 1024),
+			(double)socket_stats.heap_allocsz_bytes * 100 /
+			(double)socket_stats.heap_totalsz_bytes,
+			(double)socket_stats.heap_freesz_bytes / (1024 * 1024),
+			socket_stats.alloc_count,
+			socket_stats.free_count);
+	}
+	fprintf(f,
+		"Total   : size(M) total: %.6lf alloc: %.6lf(%.3lf%%) free: %.6lf \tcount alloc: %-4u free: %u\n",
+		(double)total / (1024 * 1024), (double)alloc / (1024 * 1024),
+		(double)alloc * 100 / (double)total,
+		(double)free / (1024 * 1024),
+		n_alloc, n_free);
+	if (last_allocs)
+		fprintf(stdout, "Memory total change: %.6lf(M), allocation change: %.6lf(M)\n",
+			((double)total - (double)last_total) / (1024 * 1024),
+			(double)(alloc - (double)last_allocs) / 1024 / 1024);
+	last_allocs = alloc;
+	last_total = total;
+}
+
 static void cmd_dump_parsed(void *parsed_result,
-			    __attribute__((unused)) struct cmdline *cl,
-			    __attribute__((unused)) void *data)
+			    __rte_unused struct cmdline *cl,
+			    __rte_unused void *data)
 {
 	struct cmd_dump_result *res = parsed_result;
 
 	if (!strcmp(res->dump, "dump_physmem"))
 		rte_dump_physmem_layout(stdout);
+	else if (!strcmp(res->dump, "dump_socket_mem"))
+		dump_socket_mem(stdout);
 	else if (!strcmp(res->dump, "dump_memzone"))
 		rte_memzone_dump(stdout);
 	else if (!strcmp(res->dump, "dump_struct_sizes"))
@@ -9502,6 +9669,7 @@ cmdline_parse_token_string_t cmd_dump_dump =
 	TOKEN_STRING_INITIALIZER(struct cmd_dump_result, dump,
 		"dump_physmem#"
 		"dump_memzone#"
+		"dump_socket_mem#"
 		"dump_struct_sizes#"
 		"dump_ring#"
 		"dump_mempool#"
@@ -9526,7 +9694,7 @@ struct cmd_dump_one_result {
 };
 
 static void cmd_dump_one_parsed(void *parsed_result, struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused void *data)
 {
 	struct cmd_dump_one_result *res = parsed_result;
 
@@ -9580,8 +9748,8 @@ struct cmd_syn_filter_result {
 
 static void
 cmd_syn_filter_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_syn_filter_result *res = parsed_result;
 	struct rte_eth_syn_filter syn_filter;
@@ -9674,8 +9842,8 @@ struct cmd_queue_region_result {
 
 static void
 cmd_queue_region_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_queue_region_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -9773,8 +9941,8 @@ struct cmd_region_flowtype_result {
 
 static void
 cmd_region_flowtype_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_region_flowtype_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -9864,8 +10032,8 @@ struct cmd_user_priority_region_result {
 
 static void
 cmd_user_priority_region_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_user_priority_region_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -9955,8 +10123,8 @@ struct cmd_flush_queue_region_result {
 
 static void
 cmd_flush_queue_region_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_flush_queue_region_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -10037,8 +10205,8 @@ struct cmd_show_queue_region_info {
 
 static void
 cmd_show_queue_region_info_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct cmd_show_queue_region_info *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -10121,8 +10289,8 @@ struct cmd_2tuple_filter_result {
 
 static void
 cmd_2tuple_filter_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct rte_eth_ntuple_filter filter;
 	struct cmd_2tuple_filter_result *res = parsed_result;
@@ -10276,8 +10444,8 @@ struct cmd_5tuple_filter_result {
 
 static void
 cmd_5tuple_filter_parsed(void *parsed_result,
-			__attribute__((unused)) struct cmdline *cl,
-			__attribute__((unused)) void *data)
+			__rte_unused struct cmdline *cl,
+			__rte_unused void *data)
 {
 	struct rte_eth_ntuple_filter filter;
 	struct cmd_5tuple_filter_result *res = parsed_result;
@@ -10484,8 +10652,8 @@ static int xdigit2val(unsigned char c)
 
 static void
 cmd_flex_filter_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	int ret = 0;
 	struct rte_eth_flex_filter filter;
@@ -10691,8 +10859,8 @@ cmdline_parse_token_num_t cmd_ethertype_filter_queue_id =
 
 static void
 cmd_ethertype_filter_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_ethertype_filter_result *res = parsed_result;
 	struct rte_eth_ethertype_filter filter;
@@ -10915,8 +11083,8 @@ do { \
 
 static void
 cmd_flow_director_filter_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_flow_director_result *res = parsed_result;
 	struct rte_eth_fdir_filter entry;
@@ -11535,8 +11703,8 @@ cmdline_parse_token_num_t cmd_flush_flow_director_port_id =
 
 static void
 cmd_flush_flow_director_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_flow_director_result *res = parsed_result;
 	int ret = 0;
@@ -11593,8 +11761,8 @@ struct cmd_flow_director_mask_result {
 
 static void
 cmd_flow_director_mask_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_flow_director_mask_result *res = parsed_result;
 	struct rte_eth_fdir_masks *mask;
@@ -11785,8 +11953,8 @@ struct cmd_flow_director_flex_mask_result {
 
 static void
 cmd_flow_director_flex_mask_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_flow_director_flex_mask_result *res = parsed_result;
 	struct rte_eth_fdir_info fdir_info;
@@ -11939,8 +12107,8 @@ parse_offsets(const char *q_arg, uint16_t *offsets, uint16_t max_num)
 
 static void
 cmd_flow_director_flxpld_parsed(void *parsed_result,
-			  __attribute__((unused)) struct cmdline *cl,
-			  __attribute__((unused)) void *data)
+			  __rte_unused struct cmdline *cl,
+			  __rte_unused void *data)
 {
 	struct cmd_flow_director_flexpayload_result *res = parsed_result;
 	struct rte_eth_flex_payload_cfg flex_cfg;
@@ -12543,8 +12711,8 @@ struct cmd_mcast_addr_result {
 };
 
 static void cmd_mcast_addr_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_mcast_addr_result *res = parsed_result;
 
@@ -12658,8 +12826,8 @@ str2fdir_l2_tunnel_type(char *string)
 static void
 cmd_config_l2_tunnel_eth_type_all_parsed
 	(void *parsed_result,
-	 __attribute__((unused)) struct cmdline *cl,
-	 __attribute__((unused)) void *data)
+	 __rte_unused struct cmdline *cl,
+	 __rte_unused void *data)
 {
 	struct cmd_config_l2_tunnel_eth_type_result *res = parsed_result;
 	struct rte_eth_l2_tunnel_conf entry;
@@ -12693,8 +12861,8 @@ cmdline_parse_inst_t cmd_config_l2_tunnel_eth_type_all = {
 static void
 cmd_config_l2_tunnel_eth_type_specific_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_config_l2_tunnel_eth_type_result *res =
 		 parsed_result;
@@ -12769,8 +12937,8 @@ cmdline_parse_token_string_t cmd_config_l2_tunnel_en_dis_en_dis =
 static void
 cmd_config_l2_tunnel_en_dis_all_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_config_l2_tunnel_en_dis_result *res = parsed_result;
 	struct rte_eth_l2_tunnel_conf entry;
@@ -12811,8 +12979,8 @@ cmdline_parse_inst_t cmd_config_l2_tunnel_en_dis_all = {
 static void
 cmd_config_l2_tunnel_en_dis_specific_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_config_l2_tunnel_en_dis_result *res =
 		parsed_result;
@@ -12967,8 +13135,8 @@ cmdline_parse_token_num_t cmd_config_e_tag_vf_id =
 static void
 cmd_config_e_tag_insertion_en_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_config_e_tag_result *res =
 		parsed_result;
@@ -12989,8 +13157,8 @@ cmd_config_e_tag_insertion_en_parsed(
 static void
 cmd_config_e_tag_insertion_dis_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_config_e_tag_result *res =
 		parsed_result;
@@ -13048,8 +13216,8 @@ cmdline_parse_inst_t cmd_config_e_tag_insertion_dis = {
 static void
 cmd_config_e_tag_stripping_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_config_e_tag_result *res =
 		parsed_result;
@@ -13093,8 +13261,8 @@ cmdline_parse_inst_t cmd_config_e_tag_stripping_en_dis = {
 static void
 cmd_config_e_tag_forwarding_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_config_e_tag_result *res = parsed_result;
 	struct rte_eth_l2_tunnel_conf entry;
@@ -13137,8 +13305,8 @@ cmdline_parse_inst_t cmd_config_e_tag_forwarding_en_dis = {
 static void
 cmd_config_e_tag_filter_add_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_config_e_tag_result *res = parsed_result;
 	struct rte_eth_l2_tunnel_conf entry;
@@ -13195,8 +13363,8 @@ cmdline_parse_inst_t cmd_config_e_tag_filter_add = {
 static void
 cmd_config_e_tag_filter_del_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_config_e_tag_result *res = parsed_result;
 	struct rte_eth_l2_tunnel_conf entry;
@@ -13293,8 +13461,8 @@ cmdline_parse_token_string_t cmd_vf_vlan_anti_spoof_on_off =
 static void
 cmd_set_vf_vlan_anti_spoof_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_vlan_anti_spoof_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -13399,8 +13567,8 @@ cmdline_parse_token_string_t cmd_vf_mac_anti_spoof_on_off =
 static void
 cmd_set_vf_mac_anti_spoof_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_mac_anti_spoof_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -13505,8 +13673,8 @@ cmdline_parse_token_string_t cmd_vf_vlan_stripq_on_off =
 static void
 cmd_set_vf_vlan_stripq_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_vlan_stripq_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -13611,8 +13779,8 @@ cmdline_parse_token_num_t cmd_vf_vlan_insert_vlan_id =
 static void
 cmd_set_vf_vlan_insert_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_vlan_insert_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -13705,8 +13873,8 @@ cmdline_parse_token_string_t cmd_tx_loopback_on_off =
 static void
 cmd_set_tx_loopback_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_tx_loopback_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -13805,8 +13973,8 @@ cmdline_parse_token_string_t cmd_all_queues_drop_en_on_off =
 static void
 cmd_set_all_queues_drop_en_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_all_queues_drop_en_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -13901,8 +14069,8 @@ cmdline_parse_token_string_t cmd_vf_split_drop_en_on_off =
 static void
 cmd_set_vf_split_drop_en_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_split_drop_en_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -13994,8 +14162,8 @@ cmdline_parse_token_etheraddr_t cmd_set_vf_mac_addr_mac_addr =
 static void
 cmd_set_vf_mac_addr_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_vf_mac_addr_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -14108,8 +14276,8 @@ cmdline_parse_token_string_t cmd_macsec_offload_on_rp_on_off =
 static void
 cmd_set_macsec_offload_on_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_macsec_offload_on_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -14207,8 +14375,8 @@ cmdline_parse_token_string_t cmd_macsec_offload_off_off =
 static void
 cmd_set_macsec_offload_off_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_macsec_offload_off_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -14306,8 +14474,8 @@ cmdline_parse_token_num_t cmd_macsec_sc_pi =
 static void
 cmd_set_macsec_sc_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_macsec_sc_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -14406,8 +14574,8 @@ cmdline_parse_token_string_t cmd_macsec_sa_key =
 static void
 cmd_set_macsec_sa_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_macsec_sa_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -14518,8 +14686,8 @@ cmdline_parse_token_string_t cmd_vf_promisc_on_off =
 static void
 cmd_set_vf_promisc_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_promisc_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -14608,8 +14776,8 @@ cmdline_parse_token_string_t cmd_vf_allmulti_on_off =
 static void
 cmd_set_vf_allmulti_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_allmulti_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -14698,8 +14866,8 @@ cmdline_parse_token_string_t cmd_set_vf_broadcast_on_off =
 static void
 cmd_set_vf_broadcast_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_vf_broadcast_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -14792,8 +14960,8 @@ cmdline_parse_token_string_t cmd_set_vf_vlan_tag_on_off =
 static void
 cmd_set_vf_vlan_tag_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_vf_vlan_tag_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -14915,8 +15083,8 @@ cmdline_parse_token_num_t cmd_vf_tc_bw_tc_map =
 static void
 cmd_vf_max_bw_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_tc_bw_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -15009,8 +15177,8 @@ vf_tc_min_bw_parse_bw_list(uint8_t *bw_list,
 static void
 cmd_vf_tc_min_bw_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_tc_bw_result *res = parsed_result;
 	uint8_t tc_num;
@@ -15067,8 +15235,8 @@ cmdline_parse_inst_t cmd_vf_tc_min_bw = {
 static void
 cmd_tc_min_bw_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_tc_bw_result *res = parsed_result;
 	struct rte_port *port;
@@ -15130,8 +15298,8 @@ cmdline_parse_inst_t cmd_tc_min_bw = {
 static void
 cmd_vf_tc_max_bw_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_tc_bw_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -15217,8 +15385,8 @@ cmdline_parse_token_num_t cmd_set_port_tm_hierarchy_default_port_id =
 			port_id, UINT16);
 
 static void cmd_set_port_tm_hierarchy_default_parsed(void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_port_tm_hierarchy_default_result *res = parsed_result;
 	struct rte_port *p;
@@ -15342,8 +15510,8 @@ cmdline_parse_token_etheraddr_t cmd_set_vxlan_eth_dst_value =
 	TOKEN_ETHERADDR_INITIALIZER(struct cmd_set_vxlan_result, eth_dst);
 
 static void cmd_set_vxlan_parsed(void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_vxlan_result *res = parsed_result;
 	union {
@@ -15542,8 +15710,8 @@ cmdline_parse_token_etheraddr_t cmd_set_nvgre_eth_dst_value =
 	TOKEN_ETHERADDR_INITIALIZER(struct cmd_set_nvgre_result, eth_dst);
 
 static void cmd_set_nvgre_parsed(void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_nvgre_result *res = parsed_result;
 	union {
@@ -15673,8 +15841,8 @@ cmdline_parse_token_etheraddr_t cmd_set_l2_encap_eth_dst_value =
 	TOKEN_ETHERADDR_INITIALIZER(struct cmd_set_l2_encap_result, eth_dst);
 
 static void cmd_set_l2_encap_parsed(void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_l2_encap_result *res = parsed_result;
 
@@ -15752,8 +15920,8 @@ cmdline_parse_token_string_t cmd_set_l2_decap_l2_decap_with_vlan =
 				 "l2_decap-with-vlan");
 
 static void cmd_set_l2_decap_parsed(void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_l2_decap_result *res = parsed_result;
 
@@ -15851,8 +16019,8 @@ cmdline_parse_token_etheraddr_t cmd_set_mplsogre_encap_eth_dst_value =
 				    eth_dst);
 
 static void cmd_set_mplsogre_encap_parsed(void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_mplsogre_encap_result *res = parsed_result;
 	union {
@@ -15966,8 +16134,8 @@ cmdline_parse_token_string_t cmd_set_mplsogre_decap_ip_version_value =
 				 ip_version, "ipv4#ipv6");
 
 static void cmd_set_mplsogre_decap_parsed(void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_mplsogre_decap_result *res = parsed_result;
 
@@ -16087,8 +16255,8 @@ cmdline_parse_token_etheraddr_t cmd_set_mplsoudp_encap_eth_dst_value =
 				    eth_dst);
 
 static void cmd_set_mplsoudp_encap_parsed(void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_mplsoudp_encap_result *res = parsed_result;
 	union {
@@ -16213,8 +16381,8 @@ cmdline_parse_token_string_t cmd_set_mplsoudp_decap_ip_version_value =
 				 ip_version, "ipv4#ipv6");
 
 static void cmd_set_mplsoudp_decap_parsed(void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_set_mplsoudp_decap_result *res = parsed_result;
 
@@ -16258,8 +16426,8 @@ cmdline_parse_inst_t cmd_set_mplsoudp_decap_with_vlan = {
 static void
 cmd_strict_link_prio_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_vf_tc_bw_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -16322,8 +16490,8 @@ cmdline_parse_token_string_t cmd_ddp_add_filepath =
 static void
 cmd_ddp_add_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_ddp_add_result *res = parsed_result;
 	uint8_t *buff;
@@ -16402,8 +16570,8 @@ cmdline_parse_token_string_t cmd_ddp_del_filepath =
 static void
 cmd_ddp_del_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_ddp_del_result *res = parsed_result;
 	uint8_t *buff;
@@ -16467,8 +16635,8 @@ cmdline_parse_token_string_t cmd_ddp_info_filepath =
 static void
 cmd_ddp_info_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_ddp_info_result *res = parsed_result;
 	uint8_t *pkg;
@@ -16706,9 +16874,9 @@ cmdline_parse_token_num_t cmd_ddp_get_list_port_id =
 
 static void
 cmd_ddp_get_list_parsed(
-	__attribute__((unused)) void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused void *parsed_result,
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 #ifdef RTE_LIBRTE_I40E_PMD
 	struct cmd_ddp_get_list_result *res = parsed_result;
@@ -16723,8 +16891,10 @@ cmd_ddp_get_list_parsed(
 #ifdef RTE_LIBRTE_I40E_PMD
 	size = PROFILE_INFO_SIZE * MAX_PROFILE_NUM + 4;
 	p_list = (struct rte_pmd_i40e_profile_list *)malloc(size);
-	if (!p_list)
+	if (!p_list) {
 		printf("%s: Failed to malloc buffer\n", __func__);
+		return;
+	}
 
 	if (ret == -ENOTSUP)
 		ret = rte_pmd_i40e_get_ddp_list(res->port_id,
@@ -16782,9 +16952,9 @@ struct cmd_cfg_input_set_result {
 
 static void
 cmd_cfg_input_set_parsed(
-	__attribute__((unused)) void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused void *parsed_result,
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 #ifdef RTE_LIBRTE_I40E_PMD
 	struct cmd_cfg_input_set_result *res = parsed_result;
@@ -16905,9 +17075,9 @@ struct cmd_clear_input_set_result {
 
 static void
 cmd_clear_input_set_parsed(
-	__attribute__((unused)) void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused void *parsed_result,
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 #ifdef RTE_LIBRTE_I40E_PMD
 	struct cmd_clear_input_set_result *res = parsed_result;
@@ -17024,8 +17194,8 @@ cmdline_parse_token_num_t cmd_show_vf_stats_vf_id =
 static void
 cmd_show_vf_stats_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_show_vf_stats_result *res = parsed_result;
 	struct rte_eth_stats stats;
@@ -17133,8 +17303,8 @@ cmdline_parse_token_num_t cmd_clear_vf_stats_vf_id =
 static void
 cmd_clear_vf_stats_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_clear_vf_stats_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -17225,8 +17395,8 @@ cmdline_parse_token_string_t cmd_pctype_mapping_reset_reset =
 static void
 cmd_pctype_mapping_reset_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_pctype_mapping_reset_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -17303,8 +17473,8 @@ cmdline_parse_token_string_t cmd_pctype_mapping_get_mapping =
 static void
 cmd_pctype_mapping_get_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_pctype_mapping_get_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -17419,8 +17589,8 @@ cmdline_parse_token_num_t cmd_pctype_mapping_update_flow_type =
 static void
 cmd_pctype_mapping_update_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_pctype_mapping_update_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -17517,8 +17687,8 @@ cmdline_parse_token_num_t cmd_ptype_mapping_get_valid_only =
 static void
 cmd_ptype_mapping_get_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_ptype_mapping_get_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -17622,8 +17792,8 @@ cmdline_parse_token_num_t cmd_ptype_mapping_replace_pkt_type =
 static void
 cmd_ptype_mapping_replace_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_ptype_mapping_replace_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -17704,8 +17874,8 @@ cmdline_parse_token_num_t cmd_ptype_mapping_reset_port_id =
 static void
 cmd_ptype_mapping_reset_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_ptype_mapping_reset_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -17785,8 +17955,8 @@ cmdline_parse_token_num_t cmd_ptype_mapping_update_sw_ptype =
 static void
 cmd_ptype_mapping_update_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_ptype_mapping_update_result *res = parsed_result;
 	int ret = -ENOTSUP;
@@ -17852,8 +18022,8 @@ cmdline_parse_token_string_t cmd_load_cmdfile_filename =
 static void
 cmd_load_from_file_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_cmdfile_result *res = parsed_result;
 
@@ -17927,8 +18097,8 @@ print_rx_offloads(uint64_t offloads)
 static void
 cmd_rx_offload_get_capa_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_rx_offload_get_capa_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
@@ -18001,8 +18171,8 @@ cmdline_parse_token_string_t cmd_rx_offload_get_configuration_configuration =
 static void
 cmd_rx_offload_get_configuration_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_rx_offload_get_configuration_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
@@ -18081,7 +18251,7 @@ cmdline_parse_token_string_t cmd_config_per_port_rx_offload_result_offload =
 		 offload, "vlan_strip#ipv4_cksum#udp_cksum#tcp_cksum#tcp_lro#"
 			   "qinq_strip#outer_ipv4_cksum#macsec_strip#"
 			   "header_split#vlan_filter#vlan_extend#jumbo_frame#"
-			   "scatter#timestamp#security#keep_crc");
+			   "scatter#timestamp#security#keep_crc#rss_hash");
 cmdline_parse_token_string_t cmd_config_per_port_rx_offload_result_on_off =
 	TOKEN_STRING_INITIALIZER
 		(struct cmd_config_per_port_rx_offload_result,
@@ -18113,8 +18283,8 @@ search_rx_offload(const char *name)
 
 static void
 cmd_config_per_port_rx_offload_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_config_per_port_rx_offload_result *res = parsed_result;
 	portid_t port_id = res->port_id;
@@ -18161,7 +18331,7 @@ cmdline_parse_inst_t cmd_config_per_port_rx_offload = {
 	.help_str = "port config <port_id> rx_offload vlan_strip|ipv4_cksum|"
 		    "udp_cksum|tcp_cksum|tcp_lro|qinq_strip|outer_ipv4_cksum|"
 		    "macsec_strip|header_split|vlan_filter|vlan_extend|"
-		    "jumbo_frame|scatter|timestamp|security|keep_crc "
+		    "jumbo_frame|scatter|timestamp|security|keep_crc|rss_hash "
 		    "on|off",
 	.tokens = {
 		(void *)&cmd_config_per_port_rx_offload_result_port,
@@ -18219,8 +18389,8 @@ cmdline_parse_token_string_t cmd_config_per_queue_rx_offload_result_on_off =
 
 static void
 cmd_config_per_queue_rx_offload_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_config_per_queue_rx_offload_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
@@ -18337,8 +18507,8 @@ print_tx_offloads(uint64_t offloads)
 static void
 cmd_tx_offload_get_capa_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_tx_offload_get_capa_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
@@ -18411,8 +18581,8 @@ cmdline_parse_token_string_t cmd_tx_offload_get_configuration_configuration =
 static void
 cmd_tx_offload_get_configuration_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 	struct cmd_tx_offload_get_configuration_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
@@ -18492,8 +18662,7 @@ cmdline_parse_token_string_t cmd_config_per_port_tx_offload_result_offload =
 			  "sctp_cksum#tcp_tso#udp_tso#outer_ipv4_cksum#"
 			  "qinq_insert#vxlan_tnl_tso#gre_tnl_tso#"
 			  "ipip_tnl_tso#geneve_tnl_tso#macsec_insert#"
-			  "mt_lockfree#multi_segs#mbuf_fast_free#security#"
-			  "match_metadata");
+			  "mt_lockfree#multi_segs#mbuf_fast_free#security");
 cmdline_parse_token_string_t cmd_config_per_port_tx_offload_result_on_off =
 	TOKEN_STRING_INITIALIZER
 		(struct cmd_config_per_port_tx_offload_result,
@@ -18528,8 +18697,8 @@ search_tx_offload(const char *name)
 
 static void
 cmd_config_per_port_tx_offload_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_config_per_port_tx_offload_result *res = parsed_result;
 	portid_t port_id = res->port_id;
@@ -18578,8 +18747,7 @@ cmdline_parse_inst_t cmd_config_per_port_tx_offload = {
 		    "sctp_cksum|tcp_tso|udp_tso|outer_ipv4_cksum|"
 		    "qinq_insert|vxlan_tnl_tso|gre_tnl_tso|"
 		    "ipip_tnl_tso|geneve_tnl_tso|macsec_insert|"
-		    "mt_lockfree|multi_segs|mbuf_fast_free|security|"
-		    "match_metadata on|off",
+		    "mt_lockfree|multi_segs|mbuf_fast_free|security on|off",
 	.tokens = {
 		(void *)&cmd_config_per_port_tx_offload_result_port,
 		(void *)&cmd_config_per_port_tx_offload_result_config,
@@ -18637,8 +18805,8 @@ cmdline_parse_token_string_t cmd_config_per_queue_tx_offload_result_on_off =
 
 static void
 cmd_config_per_queue_tx_offload_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_config_per_queue_tx_offload_result *res = parsed_result;
 	struct rte_eth_dev_info dev_info;
@@ -18711,19 +18879,20 @@ struct cmd_config_tx_metadata_specific_result {
 
 static void
 cmd_config_tx_metadata_specific_parsed(void *parsed_result,
-				__attribute__((unused)) struct cmdline *cl,
-				__attribute__((unused)) void *data)
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
 {
 	struct cmd_config_tx_metadata_specific_result *res = parsed_result;
 
 	if (port_id_is_invalid(res->port_id, ENABLED_WARN))
 		return;
-	ports[res->port_id].tx_metadata = rte_cpu_to_be_32(res->value);
+	ports[res->port_id].tx_metadata = res->value;
 	/* Add/remove callback to insert valid metadata in every Tx packet. */
 	if (ports[res->port_id].tx_metadata)
 		add_tx_md_callback(res->port_id);
 	else
 		remove_tx_md_callback(res->port_id);
+	rte_flow_dynf_metadata_register();
 }
 
 cmdline_parse_token_string_t cmd_config_tx_metadata_specific_port =
@@ -18756,6 +18925,89 @@ cmdline_parse_inst_t cmd_config_tx_metadata_specific = {
 	},
 };
 
+/* *** set dynf *** */
+struct cmd_config_tx_dynf_specific_result {
+	cmdline_fixed_string_t port;
+	cmdline_fixed_string_t keyword;
+	uint16_t port_id;
+	cmdline_fixed_string_t item;
+	cmdline_fixed_string_t name;
+	cmdline_fixed_string_t value;
+};
+
+static void
+cmd_config_dynf_specific_parsed(void *parsed_result,
+				__rte_unused struct cmdline *cl,
+				__rte_unused void *data)
+{
+	struct cmd_config_tx_dynf_specific_result *res = parsed_result;
+	struct rte_mbuf_dynflag desc_flag;
+	int flag;
+	uint64_t old_port_flags;
+
+	if (port_id_is_invalid(res->port_id, ENABLED_WARN))
+		return;
+	flag = rte_mbuf_dynflag_lookup(res->name, NULL);
+	if (flag <= 0) {
+		if (strlcpy(desc_flag.name, res->name,
+			    RTE_MBUF_DYN_NAMESIZE) >= RTE_MBUF_DYN_NAMESIZE) {
+			printf("Flag name too long\n");
+			return;
+		}
+		desc_flag.flags = 0;
+		flag = rte_mbuf_dynflag_register(&desc_flag);
+		if (flag < 0) {
+			printf("Can't register flag\n");
+			return;
+		}
+		strcpy(dynf_names[flag], desc_flag.name);
+	}
+	old_port_flags = ports[res->port_id].mbuf_dynf;
+	if (!strcmp(res->value, "set")) {
+		ports[res->port_id].mbuf_dynf |= 1UL << flag;
+		if (old_port_flags == 0)
+			add_tx_dynf_callback(res->port_id);
+	} else {
+		ports[res->port_id].mbuf_dynf &= ~(1UL << flag);
+		if (ports[res->port_id].mbuf_dynf == 0)
+			remove_tx_dynf_callback(res->port_id);
+	}
+}
+
+cmdline_parse_token_string_t cmd_config_tx_dynf_specific_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_tx_dynf_specific_result,
+			keyword, "port");
+cmdline_parse_token_string_t cmd_config_tx_dynf_specific_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_tx_dynf_specific_result,
+			keyword, "config");
+cmdline_parse_token_num_t cmd_config_tx_dynf_specific_port_id =
+	TOKEN_NUM_INITIALIZER(struct cmd_config_tx_dynf_specific_result,
+			port_id, UINT16);
+cmdline_parse_token_string_t cmd_config_tx_dynf_specific_item =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_tx_dynf_specific_result,
+			item, "dynf");
+cmdline_parse_token_string_t cmd_config_tx_dynf_specific_name =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_tx_dynf_specific_result,
+			name, NULL);
+cmdline_parse_token_string_t cmd_config_tx_dynf_specific_value =
+	TOKEN_STRING_INITIALIZER(struct cmd_config_tx_dynf_specific_result,
+			value, "set#clear");
+
+cmdline_parse_inst_t cmd_config_tx_dynf_specific = {
+	.f = cmd_config_dynf_specific_parsed,
+	.data = NULL,
+	.help_str = "port config <port id> dynf <name> set|clear",
+	.tokens = {
+		(void *)&cmd_config_tx_dynf_specific_port,
+		(void *)&cmd_config_tx_dynf_specific_keyword,
+		(void *)&cmd_config_tx_dynf_specific_port_id,
+		(void *)&cmd_config_tx_dynf_specific_item,
+		(void *)&cmd_config_tx_dynf_specific_name,
+		(void *)&cmd_config_tx_dynf_specific_value,
+		NULL,
+	},
+};
+
 /* *** display tx_metadata per port configuration *** */
 struct cmd_show_tx_metadata_result {
 	cmdline_fixed_string_t cmd_show;
@@ -18766,8 +19018,8 @@ struct cmd_show_tx_metadata_result {
 
 static void
 cmd_show_tx_metadata_parsed(void *parsed_result,
-		__attribute__((unused)) struct cmdline *cl,
-		__attribute__((unused)) void *data)
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
 {
 	struct cmd_show_tx_metadata_result *res = parsed_result;
 
@@ -18777,7 +19029,7 @@ cmd_show_tx_metadata_parsed(void *parsed_result,
 	}
 	if (!strcmp(res->cmd_keyword, "tx_metadata")) {
 		printf("Port %u tx_metadata: %u\n", res->cmd_pid,
-			rte_be_to_cpu_32(ports[res->cmd_pid].tx_metadata));
+		       ports[res->cmd_pid].tx_metadata);
 	}
 }
 
@@ -18838,8 +19090,8 @@ cmdline_parse_token_string_t cmd_show_port_supported_ptypes_ptypes =
 static void
 cmd_show_port_supported_ptypes_parsed(
 	void *parsed_result,
-	__attribute__((unused)) struct cmdline *cl,
-	__attribute__((unused)) void *data)
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
 {
 #define RSVD_PTYPE_MASK       0xf0000000
 #define MAX_PTYPES_PER_LAYER  16
@@ -18911,6 +19163,234 @@ cmdline_parse_inst_t cmd_show_port_supported_ptypes = {
 		(void *)&cmd_show_port_supported_ptypes_port,
 		(void *)&cmd_show_port_supported_ptypes_port_id,
 		(void *)&cmd_show_port_supported_ptypes_ptypes,
+		NULL,
+	},
+};
+
+/* *** display rx/tx descriptor status *** */
+struct cmd_show_rx_tx_desc_status_result {
+	cmdline_fixed_string_t cmd_show;
+	cmdline_fixed_string_t cmd_port;
+	cmdline_fixed_string_t cmd_keyword;
+	cmdline_fixed_string_t cmd_desc;
+	cmdline_fixed_string_t cmd_status;
+	portid_t cmd_pid;
+	portid_t cmd_qid;
+	portid_t cmd_did;
+};
+
+static void
+cmd_show_rx_tx_desc_status_parsed(void *parsed_result,
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
+{
+	struct cmd_show_rx_tx_desc_status_result *res = parsed_result;
+	int rc;
+
+	if (!rte_eth_dev_is_valid_port(res->cmd_pid)) {
+		printf("invalid port id %u\n", res->cmd_pid);
+		return;
+	}
+
+	if (!strcmp(res->cmd_keyword, "rxq")) {
+		rc = rte_eth_rx_descriptor_status(res->cmd_pid, res->cmd_qid,
+					     res->cmd_did);
+		if (rc < 0) {
+			printf("Invalid queueid = %d\n", res->cmd_qid);
+			return;
+		}
+		if (rc == RTE_ETH_RX_DESC_AVAIL)
+			printf("Desc status = AVAILABLE\n");
+		else if (rc == RTE_ETH_RX_DESC_DONE)
+			printf("Desc status = DONE\n");
+		else
+			printf("Desc status = UNAVAILABLE\n");
+	} else if (!strcmp(res->cmd_keyword, "txq")) {
+		rc = rte_eth_tx_descriptor_status(res->cmd_pid, res->cmd_qid,
+					     res->cmd_did);
+		if (rc < 0) {
+			printf("Invalid queueid = %d\n", res->cmd_qid);
+			return;
+		}
+		if (rc == RTE_ETH_TX_DESC_FULL)
+			printf("Desc status = FULL\n");
+		else if (rc == RTE_ETH_TX_DESC_DONE)
+			printf("Desc status = DONE\n");
+		else
+			printf("Desc status = UNAVAILABLE\n");
+	}
+}
+
+cmdline_parse_token_string_t cmd_show_rx_tx_desc_status_show =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_rx_tx_desc_status_result,
+			cmd_show, "show");
+cmdline_parse_token_string_t cmd_show_rx_tx_desc_status_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_rx_tx_desc_status_result,
+			cmd_port, "port");
+cmdline_parse_token_num_t cmd_show_rx_tx_desc_status_pid =
+	TOKEN_NUM_INITIALIZER(struct cmd_show_rx_tx_desc_status_result,
+			cmd_pid, UINT16);
+cmdline_parse_token_string_t cmd_show_rx_tx_desc_status_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_rx_tx_desc_status_result,
+			cmd_keyword, "rxq#txq");
+cmdline_parse_token_num_t cmd_show_rx_tx_desc_status_qid =
+	TOKEN_NUM_INITIALIZER(struct cmd_show_rx_tx_desc_status_result,
+			cmd_qid, UINT16);
+cmdline_parse_token_string_t cmd_show_rx_tx_desc_status_desc =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_rx_tx_desc_status_result,
+			cmd_desc, "desc");
+cmdline_parse_token_num_t cmd_show_rx_tx_desc_status_did =
+	TOKEN_NUM_INITIALIZER(struct cmd_show_rx_tx_desc_status_result,
+			cmd_did, UINT16);
+cmdline_parse_token_string_t cmd_show_rx_tx_desc_status_status =
+	TOKEN_STRING_INITIALIZER(struct cmd_show_rx_tx_desc_status_result,
+			cmd_status, "status");
+cmdline_parse_inst_t cmd_show_rx_tx_desc_status = {
+	.f = cmd_show_rx_tx_desc_status_parsed,
+	.data = NULL,
+	.help_str = "show port <port_id> rxq|txq <queue_id> desc <desc_id> "
+		"status",
+	.tokens = {
+		(void *)&cmd_show_rx_tx_desc_status_show,
+		(void *)&cmd_show_rx_tx_desc_status_port,
+		(void *)&cmd_show_rx_tx_desc_status_pid,
+		(void *)&cmd_show_rx_tx_desc_status_keyword,
+		(void *)&cmd_show_rx_tx_desc_status_qid,
+		(void *)&cmd_show_rx_tx_desc_status_desc,
+		(void *)&cmd_show_rx_tx_desc_status_did,
+		(void *)&cmd_show_rx_tx_desc_status_status,
+		NULL,
+	},
+};
+
+/* Common result structure for set port ptypes */
+struct cmd_set_port_ptypes_result {
+	cmdline_fixed_string_t set;
+	cmdline_fixed_string_t port;
+	portid_t port_id;
+	cmdline_fixed_string_t ptype_mask;
+	uint32_t mask;
+};
+
+/* Common CLI fields for set port ptypes */
+cmdline_parse_token_string_t cmd_set_port_ptypes_set =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_set_port_ptypes_result,
+		 set, "set");
+cmdline_parse_token_string_t cmd_set_port_ptypes_port =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_set_port_ptypes_result,
+		 port, "port");
+cmdline_parse_token_num_t cmd_set_port_ptypes_port_id =
+	TOKEN_NUM_INITIALIZER
+		(struct cmd_set_port_ptypes_result,
+		 port_id, UINT16);
+cmdline_parse_token_string_t cmd_set_port_ptypes_mask_str =
+	TOKEN_STRING_INITIALIZER
+		(struct cmd_set_port_ptypes_result,
+		 ptype_mask, "ptype_mask");
+cmdline_parse_token_num_t cmd_set_port_ptypes_mask_u32 =
+	TOKEN_NUM_INITIALIZER
+		(struct cmd_set_port_ptypes_result,
+		 mask, UINT32);
+
+static void
+cmd_set_port_ptypes_parsed(
+	void *parsed_result,
+	__rte_unused struct cmdline *cl,
+	__rte_unused void *data)
+{
+	struct cmd_set_port_ptypes_result *res = parsed_result;
+#define PTYPE_NAMESIZE        256
+	char ptype_name[PTYPE_NAMESIZE];
+	uint16_t port_id = res->port_id;
+	uint32_t ptype_mask = res->mask;
+	int ret, i;
+
+	ret = rte_eth_dev_get_supported_ptypes(port_id, RTE_PTYPE_ALL_MASK,
+					       NULL, 0);
+	if (ret <= 0) {
+		printf("Port %d doesn't support any ptypes.\n", port_id);
+		return;
+	}
+
+	uint32_t ptypes[ret];
+
+	ret = rte_eth_dev_set_ptypes(port_id, ptype_mask, ptypes, ret);
+	if (ret < 0) {
+		printf("Unable to set requested ptypes for Port %d\n", port_id);
+		return;
+	}
+
+	printf("Successfully set following ptypes for Port %d\n", port_id);
+	for (i = 0; i < ret && ptypes[i] != RTE_PTYPE_UNKNOWN; i++) {
+		rte_get_ptype_name(ptypes[i], ptype_name, sizeof(ptype_name));
+		printf("%s\n", ptype_name);
+	}
+
+	clear_ptypes = false;
+}
+
+cmdline_parse_inst_t cmd_set_port_ptypes = {
+	.f = cmd_set_port_ptypes_parsed,
+	.data = NULL,
+	.help_str = "set port <port_id> ptype_mask <mask>",
+	.tokens = {
+		(void *)&cmd_set_port_ptypes_set,
+		(void *)&cmd_set_port_ptypes_port,
+		(void *)&cmd_set_port_ptypes_port_id,
+		(void *)&cmd_set_port_ptypes_mask_str,
+		(void *)&cmd_set_port_ptypes_mask_u32,
+		NULL,
+	},
+};
+
+/* *** display mac addresses added to a port *** */
+struct cmd_showport_macs_result {
+	cmdline_fixed_string_t cmd_show;
+	cmdline_fixed_string_t cmd_port;
+	cmdline_fixed_string_t cmd_keyword;
+	portid_t cmd_pid;
+};
+
+static void
+cmd_showport_macs_parsed(void *parsed_result,
+		__rte_unused struct cmdline *cl,
+		__rte_unused void *data)
+{
+	struct cmd_showport_macs_result *res = parsed_result;
+
+	if (port_id_is_invalid(res->cmd_pid, ENABLED_WARN))
+		return;
+
+	if (!strcmp(res->cmd_keyword, "macs"))
+		show_macs(res->cmd_pid);
+	else if (!strcmp(res->cmd_keyword, "mcast_macs"))
+		show_mcast_macs(res->cmd_pid);
+}
+
+cmdline_parse_token_string_t cmd_showport_macs_show =
+	TOKEN_STRING_INITIALIZER(struct cmd_showport_macs_result,
+			cmd_show, "show");
+cmdline_parse_token_string_t cmd_showport_macs_port =
+	TOKEN_STRING_INITIALIZER(struct cmd_showport_macs_result,
+			cmd_port, "port");
+cmdline_parse_token_num_t cmd_showport_macs_pid =
+	TOKEN_NUM_INITIALIZER(struct cmd_showport_macs_result,
+			cmd_pid, UINT16);
+cmdline_parse_token_string_t cmd_showport_macs_keyword =
+	TOKEN_STRING_INITIALIZER(struct cmd_showport_macs_result,
+			cmd_keyword, "macs#mcast_macs");
+
+cmdline_parse_inst_t cmd_showport_macs = {
+	.f = cmd_showport_macs_parsed,
+	.data = NULL,
+	.help_str = "show port <port_id> macs|mcast_macs",
+	.tokens = {
+		(void *)&cmd_showport_macs_show,
+		(void *)&cmd_showport_macs_port,
+		(void *)&cmd_showport_macs_pid,
+		(void *)&cmd_showport_macs_keyword,
 		NULL,
 	},
 };
@@ -19024,6 +19504,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_config_rx_tx,
 	(cmdline_parse_inst_t *)&cmd_config_mtu,
 	(cmdline_parse_inst_t *)&cmd_config_max_pkt_len,
+	(cmdline_parse_inst_t *)&cmd_config_max_lro_pkt_size,
 	(cmdline_parse_inst_t *)&cmd_config_rx_mode_flag,
 	(cmdline_parse_inst_t *)&cmd_config_rss,
 	(cmdline_parse_inst_t *)&cmd_config_rxtx_ring_size,
@@ -19032,6 +19513,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_setup_rxtx_queue,
 	(cmdline_parse_inst_t *)&cmd_config_rss_reta,
 	(cmdline_parse_inst_t *)&cmd_showport_reta,
+	(cmdline_parse_inst_t *)&cmd_showport_macs,
 	(cmdline_parse_inst_t *)&cmd_config_burst,
 	(cmdline_parse_inst_t *)&cmd_config_thresh,
 	(cmdline_parse_inst_t *)&cmd_config_threshold,
@@ -19154,6 +19636,7 @@ cmdline_parse_ctx_t main_ctx[] = {
 	(cmdline_parse_inst_t *)&cmd_show_vf_stats,
 	(cmdline_parse_inst_t *)&cmd_clear_vf_stats,
 	(cmdline_parse_inst_t *)&cmd_show_port_supported_ptypes,
+	(cmdline_parse_inst_t *)&cmd_set_port_ptypes,
 	(cmdline_parse_inst_t *)&cmd_ptype_mapping_get,
 	(cmdline_parse_inst_t *)&cmd_ptype_mapping_replace,
 	(cmdline_parse_inst_t *)&cmd_ptype_mapping_reset,
@@ -19204,9 +19687,11 @@ cmdline_parse_ctx_t main_ctx[] = {
 #endif
 	(cmdline_parse_inst_t *)&cmd_config_tx_metadata_specific,
 	(cmdline_parse_inst_t *)&cmd_show_tx_metadata,
+	(cmdline_parse_inst_t *)&cmd_show_rx_tx_desc_status,
 	(cmdline_parse_inst_t *)&cmd_set_raw,
 	(cmdline_parse_inst_t *)&cmd_show_set_raw,
 	(cmdline_parse_inst_t *)&cmd_show_set_raw_all,
+	(cmdline_parse_inst_t *)&cmd_config_tx_dynf_specific,
 	NULL,
 };
 

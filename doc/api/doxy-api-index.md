@@ -42,6 +42,7 @@ The public API headers are grouped by topics:
   [KNI]                (@ref rte_kni.h),
   [ixgbe]              (@ref rte_pmd_ixgbe.h),
   [i40e]               (@ref rte_pmd_i40e.h),
+  [ice]                (@ref rte_pmd_ice.h),
   [bnxt]               (@ref rte_pmd_bnxt.h),
   [dpaa]               (@ref rte_pmd_dpaa.h),
   [dpaa2]              (@ref rte_pmd_dpaa2.h),
@@ -158,6 +159,11 @@ The public API headers are grouped by topics:
   * [pipeline]         (@ref rte_pipeline.h)
     [port_in_action]   (@ref rte_port_in_action.h)
     [table_action]     (@ref rte_table_action.h)
+  * [graph]            (@ref rte_graph.h):
+    [graph_worker]     (@ref rte_graph_worker.h)
+  * graph_nodes:
+    [eth_node]         (@ref rte_node_eth_api.h),
+    [ip4_node]         (@ref rte_node_ip4_api.h)
 
 - **basic**:
   [approx fraction]    (@ref rte_approx.h),
@@ -173,7 +179,9 @@ The public API headers are grouped by topics:
   [hexdump]            (@ref rte_hexdump.h),
   [debug]              (@ref rte_debug.h),
   [log]                (@ref rte_log.h),
-  [errno]              (@ref rte_errno.h)
+  [errno]              (@ref rte_errno.h),
+  [trace]              (@ref rte_trace.h),
+  [trace_point]        (@ref rte_trace_point.h)
 
 - **misc**:
   [EAL config]         (@ref rte_eal.h),

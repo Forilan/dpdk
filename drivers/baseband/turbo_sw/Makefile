@@ -7,7 +7,6 @@ include $(RTE_SDK)/mk/rte.vars.mk
 LIB = librte_pmd_bbdev_turbo_sw.a
 
 # build flags
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring -lrte_kvargs
@@ -46,9 +45,6 @@ LDLIBS += -L$(FLEXRAN_SDK)/lib_ldpc_decoder_5gnr -lldpc_decoder_5gnr
 LDLIBS += -L$(FLEXRAN_SDK)/lib_LDPC_ratematch_5gnr -lLDPC_ratematch_5gnr
 LDLIBS += -L$(FLEXRAN_SDK)/lib_rate_dematching_5gnr -lrate_dematching_5gnr
 endif
-
-# library version
-LIBABIVER := 1
 
 # library source files
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_BBDEV_TURBO_SW) += bbdev_turbo_software.c

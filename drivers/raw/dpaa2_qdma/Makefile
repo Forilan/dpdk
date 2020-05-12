@@ -8,7 +8,6 @@ include $(RTE_SDK)/mk/rte.vars.mk
 #
 LIB = librte_rawdev_dpaa2_qdma.a
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 
@@ -26,8 +25,6 @@ LDLIBS += -lrte_ring
 LDLIBS += -lrte_common_dpaax
 
 EXPORT_MAP := rte_rawdev_dpaa2_qdma_version.map
-
-LIBABIVER := 3
 
 #
 # all source are stored in SRCS-y

@@ -11,11 +11,11 @@ LIB = librte_pmd_octeontx2_event.a
 
 CFLAGS += $(WERROR_FLAGS)
 CFLAGS += -I$(RTE_SDK)/drivers/common/octeontx2
+CFLAGS += -I$(RTE_SDK)/drivers/crypto/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/mempool/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/event/octeontx2
 CFLAGS += -I$(RTE_SDK)/drivers/net/octeontx2
 CFLAGS += -O3
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 ifneq ($(CONFIG_RTE_ARCH_64),y)
 CFLAGS += -Wno-int-to-pointer-cast
@@ -26,8 +26,6 @@ endif
 endif
 
 EXPORT_MAP := rte_pmd_octeontx2_event_version.map
-
-LIBABIVER := 1
 
 #
 # all source are stored in SRCS-y

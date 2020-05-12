@@ -154,20 +154,20 @@ To define classification for the IPv6 2-tuple: <protocol, IPv6 source address> o
 
 .. code-block:: c
 
-    struct struct rte_ipv6_hdr {
+    struct rte_ipv6_hdr {
         uint32_t vtc_flow;     /* IP version, traffic class & flow label. */
         uint16_t payload_len;  /* IP packet length - includes sizeof(ip_header). */
         uint8_t proto;         /* Protocol, next header. */
         uint8_t hop_limits;    /* Hop limits. */
         uint8_t src_addr[16];  /* IP address of source host. */
         uint8_t dst_addr[16];  /* IP address of destination host(s). */
-    } __attribute__((__packed__));
+    } __rte_packed;
 
 The following array of field definitions can be used:
 
 .. code-block:: c
 
-    struct struct rte_acl_field_def ipv6_2tuple_defs[5] = {
+    struct rte_acl_field_def ipv6_2tuple_defs[5] = {
         {
             .type = RTE_ACL_FIELD_TYPE_BITMASK,
             .size = sizeof (uint8_t),

@@ -15,6 +15,9 @@
 #include <rte_lcore.h>
 #include <rte_memory.h>
 #include <rte_log.h>
+#ifndef RTE_EXEC_ENV_WINDOWS
+#include <rte_trace_point.h>
+#endif
 
 #include "eal_internal_cfg.h"
 #include "eal_private.h"
@@ -61,7 +64,7 @@ eal_cpuset_socket_id(rte_cpuset_t *cpusetp)
 			break;
 		}
 
-	} while (++cpu < RTE_MAX_LCORE);
+	} while (++cpu < CPU_SETSIZE);
 
 	return socket_id;
 }
@@ -118,7 +121,7 @@ eal_thread_dump_affinity(char *str, unsigned size)
 
 	rte_thread_get_affinity(&cpuset);
 
-	for (cpu = 0; cpu < RTE_MAX_LCORE; cpu++) {
+	for (cpu = 0; cpu < CPU_SETSIZE; cpu++) {
 		if (!CPU_ISSET(cpu, &cpuset))
 			continue;
 
@@ -152,9 +155,13 @@ struct rte_thread_ctrl_params {
 static void *rte_thread_init(void *arg)
 {
 	int ret;
+	rte_cpuset_t *cpuset = &internal_config.ctrl_cpuset;
 	struct rte_thread_ctrl_params *params = arg;
 	void *(*start_routine)(void *) = params->start_routine;
 	void *routine_arg = params->arg;
+
+	/* Store cpuset in TLS for quick access */
+	memmove(&RTE_PER_LCORE(_cpuset), cpuset, sizeof(rte_cpuset_t));
 
 	ret = pthread_barrier_wait(&params->configured);
 	if (ret == PTHREAD_BARRIER_SERIAL_THREAD) {
@@ -162,6 +169,9 @@ static void *rte_thread_init(void *arg)
 		free(params);
 	}
 
+#ifndef RTE_EXEC_ENV_WINDOWS
+	__rte_trace_mem_per_thread_alloc();
+#endif
 	return start_routine(routine_arg);
 }
 

@@ -11,15 +11,12 @@ LIB = librte_pmd_i40e.a
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS) -DPF_DRIVER -DVF_DRIVER -DINTEGRATED_VF
 CFLAGS += -DX722_A0_SUPPORT
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool -lrte_ring
 LDLIBS += -lrte_ethdev -lrte_net -lrte_kvargs -lrte_hash
 LDLIBS += -lrte_bus_pci
 
 EXPORT_MAP := rte_pmd_i40e_version.map
-
-LIBABIVER := 2
 
 #
 # Add extra flags for base driver files (also known as shared code)
@@ -33,7 +30,6 @@ CFLAGS_BASE_DRIVER += -Wno-unused-value
 CFLAGS_BASE_DRIVER += -Wno-unused-parameter
 CFLAGS_BASE_DRIVER += -Wno-strict-aliasing
 CFLAGS_BASE_DRIVER += -Wno-format
-CFLAGS_BASE_DRIVER += -Wno-missing-field-initializers
 CFLAGS_BASE_DRIVER += -Wno-pointer-to-int-cast
 CFLAGS_BASE_DRIVER += -Wno-format-nonliteral
 CFLAGS_BASE_DRIVER += -Wno-unused-variable
@@ -43,7 +39,6 @@ CFLAGS_BASE_DRIVER += -Wno-unused-value
 CFLAGS_BASE_DRIVER += -Wno-unused-parameter
 CFLAGS_BASE_DRIVER += -Wno-strict-aliasing
 CFLAGS_BASE_DRIVER += -Wno-format
-CFLAGS_BASE_DRIVER += -Wno-missing-field-initializers
 CFLAGS_BASE_DRIVER += -Wno-pointer-to-int-cast
 CFLAGS_BASE_DRIVER += -Wno-format-nonliteral
 CFLAGS_BASE_DRIVER += -Wno-format-security

@@ -461,6 +461,9 @@ fm10k_dev_configure(struct rte_eth_dev *dev)
 
 	PMD_INIT_FUNC_TRACE();
 
+	if (dev->data->dev_conf.rxmode.mq_mode & ETH_MQ_RX_RSS_FLAG)
+		dev->data->dev_conf.rxmode.offloads |= DEV_RX_OFFLOAD_RSS_HASH;
+
 	/* multipe queue mode checking */
 	ret  = fm10k_check_mq_mode(dev);
 	if (ret != 0) {
@@ -1805,7 +1808,8 @@ static uint64_t fm10k_get_rx_port_offloads_capa(struct rte_eth_dev *dev)
 			   DEV_RX_OFFLOAD_UDP_CKSUM   |
 			   DEV_RX_OFFLOAD_TCP_CKSUM   |
 			   DEV_RX_OFFLOAD_JUMBO_FRAME |
-			   DEV_RX_OFFLOAD_HEADER_SPLIT);
+			   DEV_RX_OFFLOAD_HEADER_SPLIT |
+			   DEV_RX_OFFLOAD_RSS_HASH);
 }
 
 static int
@@ -2954,7 +2958,7 @@ fm10k_xmit_pkts_vec(void *tx_queue, struct rte_mbuf **tx_pkts,
 	return nb_tx;
 }
 
-static void __attribute__((cold))
+static void __rte_cold
 fm10k_set_tx_function(struct rte_eth_dev *dev)
 {
 	struct fm10k_tx_queue *txq;
@@ -3003,7 +3007,7 @@ fm10k_set_tx_function(struct rte_eth_dev *dev)
 	}
 }
 
-static void __attribute__((cold))
+static void __rte_cold
 fm10k_set_rx_function(struct rte_eth_dev *dev)
 {
 	struct fm10k_dev_info *dev_info =
@@ -3206,19 +3210,19 @@ eth_fm10k_dev_init(struct rte_eth_dev *dev)
 
 	/* Make sure Switch Manager is ready before going forward. */
 	if (hw->mac.type == fm10k_mac_pf) {
-		int switch_ready = 0;
+		bool switch_ready = false;
 
 		for (i = 0; i < MAX_QUERY_SWITCH_STATE_TIMES; i++) {
 			fm10k_mbx_lock(hw);
 			hw->mac.ops.get_host_state(hw, &switch_ready);
 			fm10k_mbx_unlock(hw);
-			if (switch_ready)
+			if (switch_ready == true)
 				break;
 			/* Delay some time to acquire async LPORT_MAP info. */
 			rte_delay_us(WAIT_SWITCH_MSG_US);
 		}
 
-		if (switch_ready == 0) {
+		if (switch_ready == false) {
 			PMD_INIT_LOG(ERR, "switch is not ready");
 			return -1;
 		}

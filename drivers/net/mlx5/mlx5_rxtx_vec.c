@@ -3,7 +3,6 @@
  * Copyright 2017 Mellanox Technologies, Ltd
  */
 
-#include <assert.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
@@ -23,13 +22,14 @@
 #include <rte_mempool.h>
 #include <rte_prefetch.h>
 
+#include <mlx5_prm.h>
+
+#include "mlx5_defs.h"
 #include "mlx5.h"
 #include "mlx5_utils.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_rxtx_vec.h"
 #include "mlx5_autoconf.h"
-#include "mlx5_defs.h"
-#include "mlx5_prm.h"
 
 #if defined RTE_ARCH_X86_64
 #include "mlx5_rxtx_vec_sse.h"
@@ -121,7 +121,7 @@ mlx5_rx_burst_vec(void *dpdk_rxq, struct rte_mbuf **pkts, uint16_t pkts_n)
  * @return
  *   1 if supported, negative errno value if not.
  */
-int __attribute__((cold))
+int __rte_cold
 mlx5_rxq_check_vec_support(struct mlx5_rxq_data *rxq)
 {
 	struct mlx5_rxq_ctrl *ctrl =
@@ -145,7 +145,7 @@ mlx5_rxq_check_vec_support(struct mlx5_rxq_data *rxq)
  * @return
  *   1 if supported, negative errno value if not.
  */
-int __attribute__((cold))
+int __rte_cold
 mlx5_check_vec_rx_support(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;

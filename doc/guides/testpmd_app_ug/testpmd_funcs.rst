@@ -33,7 +33,7 @@ If you type a partial command and hit ``<TAB>`` you get a list of the available 
 
 .. note::
 
-   Some examples in this document are too long to fit on one line are are shown wrapped at `"\\"` for display purposes::
+   Some examples in this document are too long to fit on one line are shown wrapped at `"\\"` for display purposes::
 
       testpmd> set flow_ctrl rx (on|off) tx (on|off) (high_water) (low_water) \
                (pause_time) (send_xon) (port_id)
@@ -237,7 +237,7 @@ Display the RSS hash functions and RSS hash key of a port::
 clear port
 ~~~~~~~~~~
 
-Clear the port statistics for a given port or for all ports::
+Clear the port statistics and forward engine statistics for a given port or for all ports::
 
    testpmd> clear port (info|stats|xstats|fdir|stat_qmap) (port_id|all)
 
@@ -251,6 +251,14 @@ show (rxq|txq)
 Display information for a given port's RX/TX queue::
 
    testpmd> show (rxq|txq) info (port_id) (queue_id)
+
+show desc status(rxq|txq)
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Display information for a given port's RX/TX descriptor status::
+
+   testpmd> show port (port_id) (rxq|txq) (queue_id) desc (desc_id) status
+
 
 show config
 ~~~~~~~~~~~
@@ -472,6 +480,28 @@ Show ptypes supported for a specific port::
 
    testpmd> show port (port_id) ptypes
 
+set port supported ptypes
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+set packet types classification for a specific port::
+
+   testpmd> set port (port_id) ptypes_mask (mask)
+
+show port mac addresses info
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Show mac addresses added for a specific port::
+
+   testpmd> show port (port_id) macs
+
+
+show port multicast mac addresses info
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Show multicast mac addresses added for a specific port::
+
+   testpmd> show port (port_id) mcast_macs
+
 show device info
 ~~~~~~~~~~~~~~~~
 
@@ -509,6 +539,12 @@ Dumps the layout of all memory zones::
 
    testpmd> dump_memzone
 
+dump socket memory
+~~~~~~~~~~~~~~~~~~
+
+Dumps the memory usage of all sockets::
+
+   testpmd> dump_socket_mem
 
 dump struct size
 ~~~~~~~~~~~~~~~~
@@ -1672,7 +1708,7 @@ Enable or disable a per port Rx offloading on all Rx queues of a port::
                   vlan_strip, ipv4_cksum, udp_cksum, tcp_cksum, tcp_lro,
                   qinq_strip, outer_ipv4_cksum, macsec_strip,
                   header_split, vlan_filter, vlan_extend, jumbo_frame,
-                  scatter, timestamp, security, keep_crc
+                  scatter, timestamp, security, keep_crc, rss_hash
 
 This command should be run when the port is stopped, or else it will fail.
 
@@ -1703,8 +1739,7 @@ Enable or disable a per port Tx offloading on all Tx queues of a port::
                   sctp_cksum, tcp_tso, udp_tso, outer_ipv4_cksum,
                   qinq_insert, vxlan_tnl_tso, gre_tnl_tso,
                   ipip_tnl_tso, geneve_tnl_tso, macsec_insert,
-                  mt_lockfree, multi_segs, mbuf_fast_free, security,
-                  match_metadata
+                  mt_lockfree, multi_segs, mbuf_fast_free, security
 
 This command should be run when the port is stopped, or else it will fail.
 
@@ -2118,7 +2153,7 @@ port config - speed
 
 Set the speed and duplex mode for all ports or a specific port::
 
-   testpmd> port config (port_id|all) speed (10|100|1000|10000|25000|40000|50000|100000|auto) \
+   testpmd> port config (port_id|all) speed (10|100|1000|10000|25000|40000|50000|100000|200000|auto) \
             duplex (half|full|auto)
 
 port config - queues/descriptors
@@ -2139,6 +2174,15 @@ Set the maximum packet length::
 
 This is equivalent to the ``--max-pkt-len`` command-line option.
 
+port config - max-lro-pkt-size
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Set the maximum LRO aggregated packet size::
+
+   testpmd> port config all max-lro-pkt-size (value)
+
+This is equivalent to the ``--max-lro-pkt-size`` command-line option.
+
 port config - Drop Packets
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -2155,12 +2199,14 @@ port config - RSS
 
 Set the RSS (Receive Side Scaling) mode on or off::
 
-   testpmd> port config all rss (all|default|ip|tcp|udp|sctp|ether|port|vxlan|geneve|nvgre|vxlan-gpe|none)
+   testpmd> port config all rss (all|default|eth|vlan|ip|tcp|udp|sctp|ether|port|vxlan|geneve|nvgre|vxlan-gpe|l2tpv3|esp|ah|pfcp|none)
 
 RSS is on by default.
 
-The ``all`` option is equivalent to ip|tcp|udp|sctp|ether.
+The ``all`` option is equivalent to eth|vlan|ip|tcp|udp|sctp|ether|l2tpv3|esp|ah|pfcp.
+
 The ``default`` option enables all supported RSS types reported by device info.
+
 The ``none`` option is equivalent to the ``--disable-rss`` command-line option.
 
 port config - RSS Reta
@@ -2278,6 +2324,16 @@ Set Tx metadata value per port.
 testpmd will add this value to any Tx packet sent from this port::
 
    testpmd> port config (port_id) tx_metadata (value)
+
+port config dynf
+~~~~~~~~~~~~~~~~
+
+Set/clear dynamic flag per port.
+testpmd will register this flag in the mbuf (same registration
+for both Tx and Rx). Then set/clear this flag for each Tx
+packet sent from this port. The set bit only works for Tx packet::
+
+   testpmd> port config (port_id) dynf (name) (set|clear)
 
 port config mtu
 ~~~~~~~~~~~~~~~
@@ -2736,7 +2792,7 @@ Traffic Management
 ------------------
 
 The following section shows functions for configuring traffic management on
-on the ethernet device through the use of generic TM API.
+the ethernet device through the use of generic TM API.
 
 show port traffic management capability
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -3556,6 +3612,14 @@ following sections.
 
    flow isolate {port_id} {boolean}
 
+- Dump internal representation information of all flows in hardware::
+
+   flow dump {port_id} {output_file}
+
+- List and destroy aged flow rules::
+
+   flow aged {port_id} [destroy]
+
 Validating flow rules
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -3931,6 +3995,19 @@ This section lists supported pattern items and their attributes, if any.
 
   - ``proto_id {unsigned}``: PPP protocol identifier.
 
+- ``l2tpv3oip``: match L2TPv3 over IP header.
+
+  - ``session_id {unsigned}``: L2TPv3 over IP session identifier.
+
+- ``ah``: match AH header.
+
+  - ``spi {unsigned}``: security parameters index.
+
+- ``pfcp``: match PFCP header.
+
+  - ``s_field {unsigned}``: S field.
+  - ``seid {unsigned}``: session endpoint identifier.
+
 Actions list
 ^^^^^^^^^^^^
 
@@ -4190,6 +4267,14 @@ This section lists supported actions and their attributes, if any.
 
   - ``value {unsigned}``: Value to decrease TCP acknowledgment number by.
 
+- ``set_ipv4_dscp``: Set IPv4 DSCP value with specified value
+
+  - ``dscp_value {unsigned}``: The new DSCP value to be set
+
+- ``set_ipv6_dscp``: Set IPv6 DSCP value with specified value
+
+  - ``dscp_value {unsigned}``: The new DSCP value to be set
+
 Destroying flow rules
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -4405,6 +4490,80 @@ Disabling isolated mode::
  testpmd> flow isolate 0 false
  Ingress traffic on port 0 is not restricted anymore to the defined flow rules
  testpmd>
+
+Dumping HW internal information
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``flow dump`` dumps the hardware's internal representation information of
+all flows. It is bound to ``rte_flow_dev_dump()``::
+
+   flow dump {port_id} {output_file}
+
+If successful, it will show::
+
+   Flow dump finished
+
+Otherwise, it will complain error occurred::
+
+   Caught error type [...] ([...]): [...]
+
+Listing and destroying aged flow rules
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``flow aged`` simply lists aged flow rules be get from api ``rte_flow_get_aged_flows``,
+and ``destroy`` parameter can be used to destroy those flow rules in PMD.
+
+   flow aged {port_id} [destroy]
+
+Listing current aged flow rules::
+
+   testpmd> flow aged 0
+   Port 0 total aged flows: 0
+   testpmd> flow create 0 ingress pattern eth / ipv4 src is 2.2.2.14 / end
+      actions age timeout 5 / queue index 0 /  end
+   Flow rule #0 created
+   testpmd> flow create 0 ingress pattern eth / ipv4 src is 2.2.2.15 / end
+      actions age timeout 4 / queue index 0 /  end
+   Flow rule #1 created
+   testpmd> flow create 0 ingress pattern eth / ipv4 src is 2.2.2.16 / end
+      actions age timeout 2 / queue index 0 /  end
+   Flow rule #2 created
+   testpmd> flow create 0 ingress pattern eth / ipv4 src is 2.2.2.17 / end
+      actions age timeout 3 / queue index 0 /  end
+   Flow rule #3 created
+
+
+Aged Rules are simply list as command ``flow list {port_id}``, but strip the detail rule
+information, all the aged flows are sorted by the longest timeout time. For example, if
+those rules be configured in the same time, ID 2 will be the first aged out rule, the next
+will be ID 3, ID 1, ID 0::
+
+   testpmd> flow aged 0
+   Port 0 total aged flows: 4
+   ID      Group   Prio    Attr
+   2       0       0       i--
+   3       0       0       i--
+   1       0       0       i--
+   0       0       0       i--
+
+If attach ``destroy`` parameter, the command will destroy all the list aged flow rules.
+
+   testpmd> flow aged 0 destroy
+   Port 0 total aged flows: 4
+   ID      Group   Prio    Attr
+   2       0       0       i--
+   3       0       0       i--
+   1       0       0       i--
+   0       0       0       i--
+
+   Flow rule #2 destroyed
+   Flow rule #3 destroyed
+   Flow rule #1 destroyed
+   Flow rule #0 destroyed
+   4 flows be destroyed
+   testpmd> flow aged 0
+   Port 0 total aged flows: 0
+
 
 Sample QinQ flow rules
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -4727,6 +4886,49 @@ Decapsulating VxLAN::
  testpmd> set raw_decap eth / ipv4 / udp / vxlan / end_set
  testpmd> flow create 0 ingress pattern eth / ipv4 / udp / vxlan / eth / ipv4 /
         end actions raw_decap / queue index 0 / end
+
+Sample ESP rules
+~~~~~~~~~~~~~~~~
+
+ESP rules can be created by the following commands::
+
+ testpmd> flow create 0 ingress pattern eth / ipv4 / esp spi is 1 / end actions
+        queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv4 / udp / esp spi is 1 / end
+        actions queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv6 / esp spi is 1 / end actions
+        queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv6 / udp / esp spi is 1 / end
+        actions queue index 3 / end
+
+Sample AH rules
+~~~~~~~~~~~~~~~~
+
+AH rules can be created by the following commands::
+
+ testpmd> flow create 0 ingress pattern eth / ipv4 / ah spi is 1 / end actions
+        queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv4 / udp / ah spi is 1 / end
+        actions queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv6 / ah spi is 1 / end actions
+        queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv6 / udp / ah spi is 1 / end
+        actions queue index 3 / end
+
+Sample PFCP rules
+~~~~~~~~~~~~~~~~~
+
+PFCP rules can be created by the following commands(s_field need to be 1
+if seid is set)::
+
+ testpmd> flow create 0 ingress pattern eth / ipv4 / pfcp s_field is 0 / end
+        actions queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv4 / pfcp s_field is 1
+        seid is 1 / end actions queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv6 / pfcp s_field is 0 / end
+        actions queue index 3 / end
+ testpmd> flow create 0 ingress pattern eth / ipv6 / pfcp s_field is 1
+        seid is 1 / end actions queue index 3 / end
 
 BPF Functions
 --------------

@@ -13,9 +13,7 @@
 #include <errno.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
-#ifdef __FreeBSD__
 #include <sys/socket.h>
-#endif
 
 #include <rte_string_fns.h>
 

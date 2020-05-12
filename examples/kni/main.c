@@ -176,9 +176,13 @@ signal_handler(int signum)
 		return;
 	}
 
-	/* When we receive a RTMIN or SIGINT signal, stop kni processing */
-	if (signum == SIGRTMIN || signum == SIGINT){
-		printf("\nSIGRTMIN/SIGINT received. KNI processing stopping.\n");
+	/*
+	 * When we receive a RTMIN or SIGINT or SIGTERM signal,
+	 * stop kni processing
+	 */
+	if (signum == SIGRTMIN || signum == SIGINT || signum == SIGTERM) {
+		printf("\nSIGRTMIN/SIGINT/SIGTERM received. "
+			"KNI processing stopping.\n");
 		rte_atomic32_inc(&kni_stop);
 		return;
         }
@@ -679,7 +683,7 @@ check_all_ports_link_status(uint32_t port_mask)
 					"Port%d Link Up - speed %uMbps - %s\n",
 						portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex\n"));
+					("full-duplex") : ("half-duplex"));
 				else
 					printf("Port %d Link Down\n", portid);
 				continue;
@@ -1006,6 +1010,7 @@ main(int argc, char** argv)
 	signal(SIGUSR2, signal_handler);
 	signal(SIGRTMIN, signal_handler);
 	signal(SIGINT, signal_handler);
+	signal(SIGTERM, signal_handler);
 
 	/* Initialise EAL */
 	ret = rte_eal_init(argc, argv);

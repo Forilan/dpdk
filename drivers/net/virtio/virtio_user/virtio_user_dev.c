@@ -315,9 +315,9 @@ virtio_user_fill_intr_handle(struct virtio_user_dev *dev)
 
 static void
 virtio_user_mem_event_cb(enum rte_mem_event type __rte_unused,
-						 const void *addr __rte_unused,
-						 size_t len __rte_unused,
-						 void *arg)
+			 const void *addr,
+			 size_t len __rte_unused,
+			 void *arg)
 {
 	struct virtio_user_dev *dev = arg;
 	struct rte_memseg_list *msl;
@@ -537,7 +537,8 @@ virtio_user_dev_uninit(struct virtio_user_dev *dev)
 		close(dev->kickfds[i]);
 	}
 
-	close(dev->vhostfd);
+	if (dev->vhostfd >= 0)
+		close(dev->vhostfd);
 
 	if (dev->is_server && dev->listenfd >= 0) {
 		close(dev->listenfd);
@@ -545,8 +546,11 @@ virtio_user_dev_uninit(struct virtio_user_dev *dev)
 	}
 
 	if (dev->vhostfds) {
-		for (i = 0; i < dev->max_queue_pairs; ++i)
+		for (i = 0; i < dev->max_queue_pairs; ++i) {
 			close(dev->vhostfds[i]);
+			if (dev->tapfds[i] >= 0)
+				close(dev->tapfds[i]);
+		}
 		free(dev->vhostfds);
 		free(dev->tapfds);
 	}
@@ -613,6 +617,10 @@ virtio_user_handle_ctrl_msg(struct virtio_user_dev *dev, struct vring *vring,
 
 		queues = *(uint16_t *)(uintptr_t)vring->desc[idx_data].addr;
 		status = virtio_user_handle_mq(dev, queues);
+	} else if (hdr->class == VIRTIO_NET_CTRL_RX  ||
+		   hdr->class == VIRTIO_NET_CTRL_MAC ||
+		   hdr->class == VIRTIO_NET_CTRL_VLAN) {
+		status = 0;
 	}
 
 	/* Update status */
@@ -664,6 +672,10 @@ virtio_user_handle_ctrl_msg_packed(struct virtio_user_dev *dev,
 		queues = *(uint16_t *)(uintptr_t)
 				vring->desc[idx_data].addr;
 		status = virtio_user_handle_mq(dev, queues);
+	} else if (hdr->class == VIRTIO_NET_CTRL_RX  ||
+		   hdr->class == VIRTIO_NET_CTRL_MAC ||
+		   hdr->class == VIRTIO_NET_CTRL_VLAN) {
+		status = 0;
 	}
 
 	/* Update status */
@@ -718,8 +730,10 @@ virtio_user_handle_cq(struct virtio_user_dev *dev, uint16_t queue_idx)
 	struct vring *vring = &dev->vrings[queue_idx];
 
 	/* Consume avail ring, using used ring idx as first one */
-	while (vring->used->idx != vring->avail->idx) {
-		avail_idx = (vring->used->idx) & (vring->num - 1);
+	while (__atomic_load_n(&vring->used->idx, __ATOMIC_RELAXED)
+	       != vring->avail->idx) {
+		avail_idx = __atomic_load_n(&vring->used->idx, __ATOMIC_RELAXED)
+			    & (vring->num - 1);
 		desc_idx = vring->avail->ring[avail_idx];
 
 		n_descs = virtio_user_handle_ctrl_msg(dev, vring, desc_idx);
@@ -729,6 +743,6 @@ virtio_user_handle_cq(struct virtio_user_dev *dev, uint16_t queue_idx)
 		uep->id = desc_idx;
 		uep->len = n_descs;
 
-		vring->used->idx++;
+		__atomic_add_fetch(&vring->used->idx, 1, __ATOMIC_RELAXED);
 	}
 }

@@ -281,7 +281,7 @@ l2fwd_main_loop(void)
 }
 
 static int
-l2fwd_launch_one_lcore(__attribute__((unused)) void *dummy)
+l2fwd_launch_one_lcore(__rte_unused void *dummy)
 {
 	l2fwd_main_loop();
 	return 0;
@@ -478,7 +478,7 @@ check_all_ports_link_status(uint32_t port_mask)
 					"Port%d Link Up. Speed %u Mbps - %s\n",
 						portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex\n"));
+					("full-duplex") : ("half-duplex"));
 				else
 					printf("Port %d Link Down\n", portid);
 				continue;
@@ -713,6 +713,11 @@ main(int argc, char **argv)
 			"Cannot set error callback for tx buffer on port %u\n",
 				 portid);
 
+		ret = rte_eth_dev_set_ptypes(portid, RTE_PTYPE_UNKNOWN, NULL,
+					     0);
+		if (ret < 0)
+			printf("Port %u, Failed to disable Ptype parsing\n",
+					portid);
 		/* Start device */
 		ret = rte_eth_dev_start(portid);
 		if (ret < 0)

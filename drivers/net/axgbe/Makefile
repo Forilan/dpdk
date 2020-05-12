@@ -10,11 +10,8 @@ LIB = librte_pmd_axgbe.a
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 
 EXPORT_MAP := rte_pmd_axgbe_version.map
-
-LIBABIVER := 1
 
 LDLIBS += -lrte_eal -lrte_mbuf -lrte_mempool
 LDLIBS += -lrte_pci -lrte_bus_pci

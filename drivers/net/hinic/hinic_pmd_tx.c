@@ -16,6 +16,7 @@
 #include "base/hinic_pmd_hwif.h"
 #include "base/hinic_pmd_wq.h"
 #include "base/hinic_pmd_nicio.h"
+#include "base/hinic_pmd_niccfg.h"
 #include "hinic_pmd_ethdev.h"
 #include "hinic_pmd_tx.h"
 
@@ -333,7 +334,16 @@ static inline bool hinic_mbuf_dma_map_sge(struct hinic_txq *txq,
 		i = 0;
 		for (sge_idx = sges; (u64)sge_idx <= txq->sq_bot_sge_addr;
 		     sge_idx++) {
+			if (unlikely(mbuf == NULL)) {
+				txq->txq_stats.mbuf_null++;
+				return false;
+			}
+
 			dma_addr = rte_mbuf_data_iova(mbuf);
+			if (unlikely(mbuf->data_len == 0)) {
+				txq->txq_stats.sge_len0++;
+				return false;
+			}
 			hinic_set_sge((struct hinic_sge *)sge_idx, dma_addr,
 				      mbuf->data_len);
 			mbuf = mbuf->next;
@@ -344,7 +354,16 @@ static inline bool hinic_mbuf_dma_map_sge(struct hinic_txq *txq,
 		sge_idx = (struct hinic_sq_bufdesc *)
 				((void *)txq->sq_head_addr);
 		for (; i < nb_segs; i++) {
+			if (unlikely(mbuf == NULL)) {
+				txq->txq_stats.mbuf_null++;
+				return false;
+			}
+
 			dma_addr = rte_mbuf_data_iova(mbuf);
+			if (unlikely(mbuf->data_len == 0)) {
+				txq->txq_stats.sge_len0++;
+				return false;
+			}
 			hinic_set_sge((struct hinic_sge *)sge_idx, dma_addr,
 				      mbuf->data_len);
 			mbuf = mbuf->next;
@@ -356,7 +375,16 @@ static inline bool hinic_mbuf_dma_map_sge(struct hinic_txq *txq,
 	} else {
 		/* wqe is in continuous space */
 		for (i = 0; i < nb_segs; i++) {
+			if (unlikely(mbuf == NULL)) {
+				txq->txq_stats.mbuf_null++;
+				return false;
+			}
+
 			dma_addr = rte_mbuf_data_iova(mbuf);
+			if (unlikely(mbuf->data_len == 0)) {
+				txq->txq_stats.sge_len0++;
+				return false;
+			}
 			hinic_set_sge((struct hinic_sge *)sge_idx, dma_addr,
 				      mbuf->data_len);
 			mbuf = mbuf->next;
@@ -377,6 +405,10 @@ static inline bool hinic_mbuf_dma_map_sge(struct hinic_txq *txq,
 
 		/* deal with the last mbuf */
 		dma_addr = rte_mbuf_data_iova(mbuf);
+		if (unlikely(mbuf->data_len == 0)) {
+			txq->txq_stats.sge_len0++;
+			return false;
+		}
 		hinic_set_sge((struct hinic_sge *)sge_idx, dma_addr,
 			      mbuf->data_len);
 		if (unlikely(sqe_info->around))
@@ -811,7 +843,8 @@ hinic_tx_offload_pkt_prepare(struct rte_mbuf *m,
 
 	if (ol_flags & PKT_TX_TUNNEL_VXLAN) {
 		if ((ol_flags & PKT_TX_OUTER_IP_CKSUM) ||
-		    (ol_flags & PKT_TX_OUTER_IPV6)) {
+		    (ol_flags & PKT_TX_OUTER_IPV6) ||
+		    (ol_flags & PKT_TX_TCP_SEG)) {
 			inner_l3_offset = m->l2_len + m->outer_l2_len +
 				m->outer_l3_len;
 			off_info->outer_l2_len = m->outer_l2_len;
@@ -1215,7 +1248,8 @@ int hinic_setup_tx_resources(struct hinic_txq *txq)
 	u64 tx_info_sz;
 
 	tx_info_sz = txq->q_depth * sizeof(*txq->tx_info);
-	txq->tx_info = kzalloc_aligned(tx_info_sz, GFP_KERNEL);
+	txq->tx_info = rte_zmalloc_socket("tx_info", tx_info_sz,
+			RTE_CACHE_LINE_SIZE, txq->socket_id);
 	if (!txq->tx_info)
 		return -ENOMEM;
 
@@ -1227,11 +1261,12 @@ void hinic_free_tx_resources(struct hinic_txq *txq)
 	if (txq->tx_info == NULL)
 		return;
 
-	kfree(txq->tx_info);
+	rte_free(txq->tx_info);
 	txq->tx_info = NULL;
 }
 
-int hinic_create_sq(struct hinic_hwdev *hwdev, u16 q_id, u16 sq_depth)
+int hinic_create_sq(struct hinic_hwdev *hwdev, u16 q_id,
+			u16 sq_depth, unsigned int socket_id)
 {
 	int err;
 	struct hinic_nic_io *nic_io = hwdev->nic_io;
@@ -1245,7 +1280,8 @@ int hinic_create_sq(struct hinic_hwdev *hwdev, u16 q_id, u16 sq_depth)
 
 	/* alloc wq */
 	err = hinic_wq_allocate(nic_io->hwdev, &nic_io->sq_wq[q_id],
-				HINIC_SQ_WQEBB_SHIFT, nic_io->sq_depth);
+				HINIC_SQ_WQEBB_SHIFT, nic_io->sq_depth,
+				socket_id);
 	if (err) {
 		PMD_DRV_LOG(ERR, "Failed to allocate WQ for SQ");
 		return err;

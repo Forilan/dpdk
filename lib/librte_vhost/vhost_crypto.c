@@ -40,7 +40,8 @@
 		(1 << VIRTIO_RING_F_EVENT_IDX) |			\
 		(1 << VIRTIO_CRYPTO_SERVICE_CIPHER) |			\
 		(1 << VIRTIO_CRYPTO_SERVICE_MAC) |			\
-		(1 << VIRTIO_NET_F_CTRL_VQ))
+		(1 << VIRTIO_NET_F_CTRL_VQ) |				\
+		(1 << VHOST_USER_PROTOCOL_F_CONFIG))
 
 #define IOVA_TO_VVA(t, r, a, l, p)					\
 	((t)(uintptr_t)vhost_iova_to_vva(r->dev, r->vq, a, l, p))
@@ -1539,18 +1540,18 @@ rte_vhost_crypto_fetch_requests(int vid, uint32_t qid,
 
 	if (unlikely(dev == NULL)) {
 		VC_LOG_ERR("Invalid vid %i", vid);
-		return -EINVAL;
+		return 0;
 	}
 
 	if (unlikely(qid >= VHOST_MAX_QUEUE_PAIRS)) {
 		VC_LOG_ERR("Invalid qid %u", qid);
-		return -EINVAL;
+		return 0;
 	}
 
 	vcrypto = (struct vhost_crypto *)dev->extern_data;
 	if (unlikely(vcrypto == NULL)) {
 		VC_LOG_ERR("Cannot find required data, is it initialized?");
-		return -ENOENT;
+		return 0;
 	}
 
 	vq = dev->virtqueue[qid];
@@ -1572,7 +1573,7 @@ rte_vhost_crypto_fetch_requests(int vid, uint32_t qid,
 		if (unlikely(rte_mempool_get_bulk(vcrypto->mbuf_pool,
 				(void **)mbufs, count * 2) < 0)) {
 			VC_LOG_ERR("Insufficient memory");
-			return -ENOMEM;
+			return 0;
 		}
 
 		for (i = 0; i < count; i++) {
@@ -1602,7 +1603,7 @@ rte_vhost_crypto_fetch_requests(int vid, uint32_t qid,
 		if (unlikely(rte_mempool_get_bulk(vcrypto->mbuf_pool,
 				(void **)mbufs, count) < 0)) {
 			VC_LOG_ERR("Insufficient memory");
-			return -ENOMEM;
+			return 0;
 		}
 
 		for (i = 0; i < count; i++) {

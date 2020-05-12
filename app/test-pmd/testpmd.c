@@ -78,6 +78,7 @@
 #endif
 
 #define EXTMEM_HEAP_NAME "extmem"
+#define EXTBUF_ZONE_SIZE RTE_PGSIZE_2M
 
 uint16_t verbose_level = 0; /**< Silent by default. */
 int testpmd_logtype; /**< Log type for testpmd logs */
@@ -234,6 +235,7 @@ uint8_t dcb_test = 0;
 /*
  * Configurable number of RX/TX queues.
  */
+queueid_t nb_hairpinq; /**< Number of hairpin queues per port. */
 queueid_t nb_rxq = 1; /**< Number of RX queues per port. */
 queueid_t nb_txq = 1; /**< Number of TX queues per port. */
 
@@ -358,6 +360,9 @@ uint8_t hot_plug = 0; /**< hotplug disabled by default. */
 /* After attach, port setup is called on event or by iterator */
 bool setup_on_probe_event = true;
 
+/* Clear ptypes on port initialization. */
+uint8_t clear_ptypes = true;
+
 /* Pretty printing of ethdev events */
 static const char * const eth_event_desc[] = {
 	[RTE_ETH_EVENT_UNKNOWN] = "unknown",
@@ -370,6 +375,7 @@ static const char * const eth_event_desc[] = {
 	[RTE_ETH_EVENT_INTR_RMV] = "device removal",
 	[RTE_ETH_EVENT_NEW] = "device probed",
 	[RTE_ETH_EVENT_DESTROY] = "device released",
+	[RTE_ETH_EVENT_FLOW_AGED] = "flow aged",
 	[RTE_ETH_EVENT_MAX] = NULL,
 };
 
@@ -383,7 +389,8 @@ uint32_t event_print_mask = (UINT32_C(1) << RTE_ETH_EVENT_UNKNOWN) |
 			    (UINT32_C(1) << RTE_ETH_EVENT_INTR_RESET) |
 			    (UINT32_C(1) << RTE_ETH_EVENT_IPSEC) |
 			    (UINT32_C(1) << RTE_ETH_EVENT_MACSEC) |
-			    (UINT32_C(1) << RTE_ETH_EVENT_INTR_RMV);
+			    (UINT32_C(1) << RTE_ETH_EVENT_INTR_RMV) |
+			    (UINT32_C(1) << RTE_ETH_EVENT_FLOW_AGED);
 /*
  * Decide if all memory are locked for performance.
  */
@@ -477,6 +484,11 @@ uint8_t bitrate_enabled;
 struct gro_status gro_ports[RTE_MAX_ETHPORTS];
 uint8_t gro_flush_cycles = GRO_DEFAULT_FLUSH_CYCLES;
 
+/*
+ * hexadecimal bitmask of RX mq mode can be enabled.
+ */
+enum rte_eth_rx_mq_mode rx_mq_mode = ETH_MQ_RX_VMDQ_DCB_RSS;
+
 /* Forward function declarations */
 static void setup_attached_port(portid_t pi);
 static void map_port_queue_stats_mapping_registers(portid_t pi,
@@ -497,6 +509,9 @@ static int all_ports_started(void);
 
 struct gso_status gso_ports[RTE_MAX_ETHPORTS];
 uint16_t gso_max_segment_size = RTE_ETHER_MAX_LEN - RTE_ETHER_CRC_LEN;
+
+/* Holds the registered mbuf dynamic flags names. */
+char dynf_names[64][RTE_MBUF_DYN_NAMESIZE];
 
 /*
  * Helper function to check if socket is already discovered.
@@ -861,6 +876,66 @@ dma_map_cb(struct rte_mempool *mp __rte_unused, void *opaque __rte_unused,
 	}
 }
 
+static unsigned int
+setup_extbuf(uint32_t nb_mbufs, uint16_t mbuf_sz, unsigned int socket_id,
+	    char *pool_name, struct rte_pktmbuf_extmem **ext_mem)
+{
+	struct rte_pktmbuf_extmem *xmem;
+	unsigned int ext_num, zone_num, elt_num;
+	uint16_t elt_size;
+
+	elt_size = RTE_ALIGN_CEIL(mbuf_sz, RTE_CACHE_LINE_SIZE);
+	elt_num = EXTBUF_ZONE_SIZE / elt_size;
+	zone_num = (nb_mbufs + elt_num - 1) / elt_num;
+
+	xmem = malloc(sizeof(struct rte_pktmbuf_extmem) * zone_num);
+	if (xmem == NULL) {
+		TESTPMD_LOG(ERR, "Cannot allocate memory for "
+				 "external buffer descriptors\n");
+		*ext_mem = NULL;
+		return 0;
+	}
+	for (ext_num = 0; ext_num < zone_num; ext_num++) {
+		struct rte_pktmbuf_extmem *xseg = xmem + ext_num;
+		const struct rte_memzone *mz;
+		char mz_name[RTE_MEMZONE_NAMESIZE];
+		int ret;
+
+		ret = snprintf(mz_name, sizeof(mz_name),
+			RTE_MEMPOOL_MZ_FORMAT "_xb_%u", pool_name, ext_num);
+		if (ret < 0 || ret >= (int)sizeof(mz_name)) {
+			errno = ENAMETOOLONG;
+			ext_num = 0;
+			break;
+		}
+		mz = rte_memzone_reserve_aligned(mz_name, EXTBUF_ZONE_SIZE,
+						 socket_id,
+						 RTE_MEMZONE_IOVA_CONTIG |
+						 RTE_MEMZONE_1GB |
+						 RTE_MEMZONE_SIZE_HINT_ONLY,
+						 EXTBUF_ZONE_SIZE);
+		if (mz == NULL) {
+			/*
+			 * The caller exits on external buffer creation
+			 * error, so there is no need to free memzones.
+			 */
+			errno = ENOMEM;
+			ext_num = 0;
+			break;
+		}
+		xseg->buf_ptr = mz->addr;
+		xseg->buf_iova = mz->iova;
+		xseg->buf_len = EXTBUF_ZONE_SIZE;
+		xseg->elt_size = elt_size;
+	}
+	if (ext_num == 0 && xmem != NULL) {
+		free(xmem);
+		xmem = NULL;
+	}
+	*ext_mem = xmem;
+	return ext_num;
+}
+
 /*
  * Configuration initialisation done once at init time.
  */
@@ -929,6 +1004,26 @@ mbuf_pool_create(uint16_t mbuf_seg_size, unsigned nb_mbuf,
 					heap_socket);
 			break;
 		}
+	case MP_ALLOC_XBUF:
+		{
+			struct rte_pktmbuf_extmem *ext_mem;
+			unsigned int ext_num;
+
+			ext_num = setup_extbuf(nb_mbuf,	mbuf_seg_size,
+					       socket_id, pool_name, &ext_mem);
+			if (ext_num == 0)
+				rte_exit(EXIT_FAILURE,
+					 "Can't create pinned data buffers\n");
+
+			TESTPMD_LOG(INFO, "preferred mempool ops selected: %s\n",
+					rte_mbuf_best_mempool_ops());
+			rte_mp = rte_pktmbuf_pool_create_extbuf
+					(pool_name, nb_mbuf, mb_mempool_cache,
+					 0, mbuf_seg_size, socket_id,
+					 ext_mem, ext_num);
+			free(ext_mem);
+			break;
+		}
 	default:
 		{
 			rte_exit(EXIT_FAILURE, "Invalid mempool creation mode\n");
@@ -975,7 +1070,7 @@ check_socket_id(const unsigned int socket_id)
 queueid_t
 get_allowed_max_nb_rxq(portid_t *pid)
 {
-	queueid_t allowed_max_rxq = MAX_QUEUE_ID;
+	queueid_t allowed_max_rxq = RTE_MAX_QUEUES_PER_PORT;
 	bool max_rxq_valid = false;
 	portid_t pi;
 	struct rte_eth_dev_info dev_info;
@@ -1025,7 +1120,7 @@ check_nb_rxq(queueid_t rxq)
 queueid_t
 get_allowed_max_nb_txq(portid_t *pid)
 {
-	queueid_t allowed_max_txq = MAX_QUEUE_ID;
+	queueid_t allowed_max_txq = RTE_MAX_QUEUES_PER_PORT;
 	bool max_txq_valid = false;
 	portid_t pi;
 	struct rte_eth_dev_info dev_info;
@@ -1062,6 +1157,224 @@ check_nb_txq(queueid_t txq)
 		       txq,
 		       allowed_max_txq,
 		       pid);
+		return -1;
+	}
+	return 0;
+}
+
+/*
+ * Get the allowed maximum number of RXDs of every rx queue.
+ * *pid return the port id which has minimal value of
+ * max_rxd in all queues of all ports.
+ */
+static uint16_t
+get_allowed_max_nb_rxd(portid_t *pid)
+{
+	uint16_t allowed_max_rxd = UINT16_MAX;
+	portid_t pi;
+	struct rte_eth_dev_info dev_info;
+
+	RTE_ETH_FOREACH_DEV(pi) {
+		if (eth_dev_info_get_print_err(pi, &dev_info) != 0)
+			continue;
+
+		if (dev_info.rx_desc_lim.nb_max < allowed_max_rxd) {
+			allowed_max_rxd = dev_info.rx_desc_lim.nb_max;
+			*pid = pi;
+		}
+	}
+	return allowed_max_rxd;
+}
+
+/*
+ * Get the allowed minimal number of RXDs of every rx queue.
+ * *pid return the port id which has minimal value of
+ * min_rxd in all queues of all ports.
+ */
+static uint16_t
+get_allowed_min_nb_rxd(portid_t *pid)
+{
+	uint16_t allowed_min_rxd = 0;
+	portid_t pi;
+	struct rte_eth_dev_info dev_info;
+
+	RTE_ETH_FOREACH_DEV(pi) {
+		if (eth_dev_info_get_print_err(pi, &dev_info) != 0)
+			continue;
+
+		if (dev_info.rx_desc_lim.nb_min > allowed_min_rxd) {
+			allowed_min_rxd = dev_info.rx_desc_lim.nb_min;
+			*pid = pi;
+		}
+	}
+
+	return allowed_min_rxd;
+}
+
+/*
+ * Check input rxd is valid or not.
+ * If input rxd is not greater than any of maximum number
+ * of RXDs of every Rx queues and is not less than any of
+ * minimal number of RXDs of every Rx queues, it is valid.
+ * if valid, return 0, else return -1
+ */
+int
+check_nb_rxd(queueid_t rxd)
+{
+	uint16_t allowed_max_rxd;
+	uint16_t allowed_min_rxd;
+	portid_t pid = 0;
+
+	allowed_max_rxd = get_allowed_max_nb_rxd(&pid);
+	if (rxd > allowed_max_rxd) {
+		printf("Fail: input rxd (%u) can't be greater "
+		       "than max_rxds (%u) of port %u\n",
+		       rxd,
+		       allowed_max_rxd,
+		       pid);
+		return -1;
+	}
+
+	allowed_min_rxd = get_allowed_min_nb_rxd(&pid);
+	if (rxd < allowed_min_rxd) {
+		printf("Fail: input rxd (%u) can't be less "
+		       "than min_rxds (%u) of port %u\n",
+		       rxd,
+		       allowed_min_rxd,
+		       pid);
+		return -1;
+	}
+
+	return 0;
+}
+
+/*
+ * Get the allowed maximum number of TXDs of every rx queues.
+ * *pid return the port id which has minimal value of
+ * max_txd in every tx queue.
+ */
+static uint16_t
+get_allowed_max_nb_txd(portid_t *pid)
+{
+	uint16_t allowed_max_txd = UINT16_MAX;
+	portid_t pi;
+	struct rte_eth_dev_info dev_info;
+
+	RTE_ETH_FOREACH_DEV(pi) {
+		if (eth_dev_info_get_print_err(pi, &dev_info) != 0)
+			continue;
+
+		if (dev_info.tx_desc_lim.nb_max < allowed_max_txd) {
+			allowed_max_txd = dev_info.tx_desc_lim.nb_max;
+			*pid = pi;
+		}
+	}
+	return allowed_max_txd;
+}
+
+/*
+ * Get the allowed maximum number of TXDs of every tx queues.
+ * *pid return the port id which has minimal value of
+ * min_txd in every tx queue.
+ */
+static uint16_t
+get_allowed_min_nb_txd(portid_t *pid)
+{
+	uint16_t allowed_min_txd = 0;
+	portid_t pi;
+	struct rte_eth_dev_info dev_info;
+
+	RTE_ETH_FOREACH_DEV(pi) {
+		if (eth_dev_info_get_print_err(pi, &dev_info) != 0)
+			continue;
+
+		if (dev_info.tx_desc_lim.nb_min > allowed_min_txd) {
+			allowed_min_txd = dev_info.tx_desc_lim.nb_min;
+			*pid = pi;
+		}
+	}
+
+	return allowed_min_txd;
+}
+
+/*
+ * Check input txd is valid or not.
+ * If input txd is not greater than any of maximum number
+ * of TXDs of every Rx queues, it is valid.
+ * if valid, return 0, else return -1
+ */
+int
+check_nb_txd(queueid_t txd)
+{
+	uint16_t allowed_max_txd;
+	uint16_t allowed_min_txd;
+	portid_t pid = 0;
+
+	allowed_max_txd = get_allowed_max_nb_txd(&pid);
+	if (txd > allowed_max_txd) {
+		printf("Fail: input txd (%u) can't be greater "
+		       "than max_txds (%u) of port %u\n",
+		       txd,
+		       allowed_max_txd,
+		       pid);
+		return -1;
+	}
+
+	allowed_min_txd = get_allowed_min_nb_txd(&pid);
+	if (txd < allowed_min_txd) {
+		printf("Fail: input txd (%u) can't be less "
+		       "than min_txds (%u) of port %u\n",
+		       txd,
+		       allowed_min_txd,
+		       pid);
+		return -1;
+	}
+	return 0;
+}
+
+
+/*
+ * Get the allowed maximum number of hairpin queues.
+ * *pid return the port id which has minimal value of
+ * max_hairpin_queues in all ports.
+ */
+queueid_t
+get_allowed_max_nb_hairpinq(portid_t *pid)
+{
+	queueid_t allowed_max_hairpinq = RTE_MAX_QUEUES_PER_PORT;
+	portid_t pi;
+	struct rte_eth_hairpin_cap cap;
+
+	RTE_ETH_FOREACH_DEV(pi) {
+		if (rte_eth_dev_hairpin_capability_get(pi, &cap) != 0) {
+			*pid = pi;
+			return 0;
+		}
+		if (cap.max_nb_queues < allowed_max_hairpinq) {
+			allowed_max_hairpinq = cap.max_nb_queues;
+			*pid = pi;
+		}
+	}
+	return allowed_max_hairpinq;
+}
+
+/*
+ * Check input hairpin is valid or not.
+ * If input hairpin is not greater than any of maximum number
+ * of hairpin queues of all ports, it is valid.
+ * if valid, return 0, else return -1
+ */
+int
+check_nb_hairpinq(queueid_t hairpinq)
+{
+	queueid_t allowed_max_hairpinq;
+	portid_t pid = 0;
+
+	allowed_max_hairpinq = get_allowed_max_nb_hairpinq(&pid);
+	if (hairpinq > allowed_max_hairpinq) {
+		printf("Fail: input hairpin (%u) can't be greater "
+		       "than max_hairpin_queues (%u) of port %u\n",
+		       hairpinq, allowed_max_hairpinq, pid);
 		return -1;
 	}
 	return 0;
@@ -1119,10 +1432,6 @@ init_config(void)
 		      DEV_TX_OFFLOAD_MBUF_FAST_FREE))
 			port->dev_conf.txmode.offloads &=
 				~DEV_TX_OFFLOAD_MBUF_FAST_FREE;
-		if (!(port->dev_info.tx_offload_capa &
-			DEV_TX_OFFLOAD_MATCH_METADATA))
-			port->dev_conf.txmode.offloads &=
-				~DEV_TX_OFFLOAD_MATCH_METADATA;
 		if (numa_support) {
 			if (port_numa[pid] != NUMA_NO_CONFIG)
 				port_per_socket[port_numa[pid]]++;
@@ -2020,6 +2329,63 @@ port_is_started(portid_t port_id)
 	return 1;
 }
 
+/* Configure the Rx and Tx hairpin queues for the selected port. */
+static int
+setup_hairpin_queues(portid_t pi)
+{
+	queueid_t qi;
+	struct rte_eth_hairpin_conf hairpin_conf = {
+		.peer_count = 1,
+	};
+	int i;
+	int diag;
+	struct rte_port *port = &ports[pi];
+
+	for (qi = nb_txq, i = 0; qi < nb_hairpinq + nb_txq; qi++) {
+		hairpin_conf.peers[0].port = pi;
+		hairpin_conf.peers[0].queue = i + nb_rxq;
+		diag = rte_eth_tx_hairpin_queue_setup
+			(pi, qi, nb_txd, &hairpin_conf);
+		i++;
+		if (diag == 0)
+			continue;
+
+		/* Fail to setup rx queue, return */
+		if (rte_atomic16_cmpset(&(port->port_status),
+					RTE_PORT_HANDLING,
+					RTE_PORT_STOPPED) == 0)
+			printf("Port %d can not be set back "
+					"to stopped\n", pi);
+		printf("Fail to configure port %d hairpin "
+				"queues\n", pi);
+		/* try to reconfigure queues next time */
+		port->need_reconfig_queues = 1;
+		return -1;
+	}
+	for (qi = nb_rxq, i = 0; qi < nb_hairpinq + nb_rxq; qi++) {
+		hairpin_conf.peers[0].port = pi;
+		hairpin_conf.peers[0].queue = i + nb_txq;
+		diag = rte_eth_rx_hairpin_queue_setup
+			(pi, qi, nb_rxd, &hairpin_conf);
+		i++;
+		if (diag == 0)
+			continue;
+
+		/* Fail to setup rx queue, return */
+		if (rte_atomic16_cmpset(&(port->port_status),
+					RTE_PORT_HANDLING,
+					RTE_PORT_STOPPED) == 0)
+			printf("Port %d can not be set back "
+					"to stopped\n", pi);
+		printf("Fail to configure port %d hairpin "
+				"queues\n", pi);
+		/* try to reconfigure queues next time */
+		port->need_reconfig_queues = 1;
+		return -1;
+	}
+	return 0;
+}
+
 int
 start_port(portid_t pid)
 {
@@ -2028,6 +2394,7 @@ start_port(portid_t pid)
 	queueid_t qi;
 	struct rte_port *port;
 	struct rte_ether_addr mac_addr;
+	struct rte_eth_hairpin_cap cap;
 
 	if (port_id_is_invalid(pid, ENABLED_WARN))
 		return 0;
@@ -2060,9 +2427,16 @@ start_port(portid_t pid)
 			configure_rxtx_dump_callbacks(0);
 			printf("Configuring Port %d (socket %u)\n", pi,
 					port->socket_id);
+			if (nb_hairpinq > 0 &&
+			    rte_eth_dev_hairpin_capability_get(pi, &cap)) {
+				printf("Port %d doesn't support hairpin "
+				       "queues\n", pi);
+				return -1;
+			}
 			/* configure port */
-			diag = rte_eth_dev_configure(pi, nb_rxq, nb_txq,
-						&(port->dev_conf));
+			diag = rte_eth_dev_configure(pi, nb_rxq + nb_hairpinq,
+						     nb_txq + nb_hairpinq,
+						     &(port->dev_conf));
 			if (diag != 0) {
 				if (rte_atomic16_cmpset(&(port->port_status),
 				RTE_PORT_HANDLING, RTE_PORT_STOPPED) == 0)
@@ -2155,8 +2529,20 @@ start_port(portid_t pid)
 				port->need_reconfig_queues = 1;
 				return -1;
 			}
+			/* setup hairpin queues */
+			if (setup_hairpin_queues(pi) != 0)
+				return -1;
 		}
 		configure_rxtx_dump_callbacks(verbose_level);
+		if (clear_ptypes) {
+			diag = rte_eth_dev_set_ptypes(pi, RTE_PTYPE_UNKNOWN,
+					NULL, 0);
+			if (diag < 0)
+				printf(
+				"Port %d: Failed to disable Ptype parsing\n",
+				pi);
+		}
+
 		/* start port */
 		if (rte_eth_dev_start(pi) < 0) {
 			printf("Fail to start port %d\n", pi);
@@ -2425,29 +2811,17 @@ setup_attached_port(portid_t pi)
 	printf("Done\n");
 }
 
-void
-detach_port_device(portid_t port_id)
+static void
+detach_device(struct rte_device *dev)
 {
-	struct rte_device *dev;
 	portid_t sibling;
 
-	printf("Removing a device...\n");
-
-	dev = rte_eth_devices[port_id].device;
 	if (dev == NULL) {
 		printf("Device already removed\n");
 		return;
 	}
 
-	if (ports[port_id].port_status != RTE_PORT_CLOSED) {
-		if (ports[port_id].port_status != RTE_PORT_STOPPED) {
-			printf("Port not stopped\n");
-			return;
-		}
-		printf("Port was not closed\n");
-		if (ports[port_id].flow_list)
-			port_flow_flush(port_id);
-	}
+	printf("Removing a device...\n");
 
 	if (rte_dev_remove(dev) < 0) {
 		TESTPMD_LOG(ERR, "Failed to detach device %s\n", dev->name);
@@ -2465,14 +2839,33 @@ detach_port_device(portid_t port_id)
 
 	remove_invalid_ports();
 
-	printf("Device of port %u is detached\n", port_id);
+	printf("Device is detached\n");
 	printf("Now total ports is %d\n", nb_ports);
 	printf("Done\n");
 	return;
 }
 
 void
-detach_device(char *identifier)
+detach_port_device(portid_t port_id)
+{
+	if (port_id_is_invalid(port_id, ENABLED_WARN))
+		return;
+
+	if (ports[port_id].port_status != RTE_PORT_CLOSED) {
+		if (ports[port_id].port_status != RTE_PORT_STOPPED) {
+			printf("Port not stopped\n");
+			return;
+		}
+		printf("Port was not closed\n");
+		if (ports[port_id].flow_list)
+			port_flow_flush(port_id);
+	}
+
+	detach_device(rte_eth_devices[port_id].device);
+}
+
+void
+detach_devargs(char *identifier)
 {
 	struct rte_dev_iterator iterator;
 	struct rte_devargs da;
@@ -2492,6 +2885,7 @@ detach_device(char *identifier)
 		if (ports[port_id].port_status != RTE_PORT_CLOSED) {
 			if (ports[port_id].port_status != RTE_PORT_STOPPED) {
 				printf("Port %u not stopped\n", port_id);
+				rte_eth_iterator_cleanup(&iterator);
 				return;
 			}
 
@@ -2584,8 +2978,6 @@ struct pmd_test_command {
 	cmd_func_t cmd_func;
 };
 
-#define PMD_TEST_CMD_NB (sizeof(pmd_test_menu) / sizeof(pmd_test_menu[0]))
-
 /* Check the link status of all ports in up to 9s, and print them finally */
 static void
 check_all_ports_link_status(uint32_t port_mask)
@@ -2620,7 +3012,7 @@ check_all_ports_link_status(uint32_t port_mask)
 					"Port%d Link Up. speed %u Mbps- %s\n",
 					portid, link.link_speed,
 				(link.link_duplex == ETH_LINK_FULL_DUPLEX) ?
-					("full-duplex") : ("half-duplex\n"));
+					("full-duplex") : ("half-duplex"));
 				else
 					printf("Port %d Link Down\n", portid);
 				continue;
@@ -2662,6 +3054,7 @@ rmv_port_callback(void *arg)
 	int need_to_start = 0;
 	int org_no_link_check = no_link_check;
 	portid_t port_id = (intptr_t)arg;
+	struct rte_device *dev;
 
 	RTE_ETH_VALID_PORTID_OR_RET(port_id);
 
@@ -2672,8 +3065,12 @@ rmv_port_callback(void *arg)
 	no_link_check = 1;
 	stop_port(port_id);
 	no_link_check = org_no_link_check;
+
+	/* Save rte_device pointer before closing ethdev port */
+	dev = rte_eth_devices[port_id].device;
 	close_port(port_id);
-	detach_port_device(port_id);
+	detach_device(dev); /* might be already removed or have more ports */
+
 	if (need_to_start)
 		start_packet_forwarding(0);
 }
@@ -2947,7 +3344,9 @@ init_port_config(void)
 
 		if (port->dcb_flag == 0) {
 			if( port->dev_conf.rx_adv_conf.rss_conf.rss_hf != 0)
-				port->dev_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
+				port->dev_conf.rxmode.mq_mode =
+					(enum rte_eth_rx_mq_mode)
+						(rx_mq_mode & ETH_MQ_RX_RSS);
 			else
 				port->dev_conf.rxmode.mq_mode = ETH_MQ_RX_NONE;
 		}
@@ -3048,7 +3447,9 @@ get_eth_dcb_conf(portid_t pid, struct rte_eth_conf *eth_conf,
 		}
 
 		/* set DCB mode of RX and TX of multiple queues */
-		eth_conf->rxmode.mq_mode = ETH_MQ_RX_VMDQ_DCB;
+		eth_conf->rxmode.mq_mode =
+				(enum rte_eth_rx_mq_mode)
+					(rx_mq_mode & ETH_MQ_RX_VMDQ_DCB);
 		eth_conf->txmode.mq_mode = ETH_MQ_TX_VMDQ_DCB;
 	} else {
 		struct rte_eth_dcb_rx_conf *rx_conf =
@@ -3068,7 +3469,9 @@ get_eth_dcb_conf(portid_t pid, struct rte_eth_conf *eth_conf,
 			tx_conf->dcb_tc[i] = i % num_tcs;
 		}
 
-		eth_conf->rxmode.mq_mode = ETH_MQ_RX_DCB_RSS;
+		eth_conf->rxmode.mq_mode =
+				(enum rte_eth_rx_mq_mode)
+					(rx_mq_mode & ETH_MQ_RX_DCB_RSS);
 		eth_conf->rx_adv_conf.rss_conf = rss_conf;
 		eth_conf->txmode.mq_mode = ETH_MQ_TX_DCB;
 	}
@@ -3442,5 +3845,10 @@ main(int argc, char** argv)
 			return 1;
 	}
 
-	return 0;
+	ret = rte_eal_cleanup();
+	if (ret != 0)
+		rte_exit(EXIT_FAILURE,
+			 "EAL cleanup failed: %s\n", strerror(-ret));
+
+	return EXIT_SUCCESS;
 }

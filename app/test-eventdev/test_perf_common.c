@@ -133,8 +133,9 @@ perf_event_timer_producer(void *arg)
 	fflush(stdout);
 	rte_delay_ms(1000);
 	printf("%s(): lcore %d Average event timer arm latency = %.3f us\n",
-			__func__, rte_lcore_id(), (float)(arm_latency / count) /
-			(rte_get_timer_hz() / 1000000));
+			__func__, rte_lcore_id(),
+			count ? (float)(arm_latency / count) /
+			(rte_get_timer_hz() / 1000000) : 0);
 	return 0;
 }
 
@@ -194,8 +195,9 @@ perf_event_timer_producer_burst(void *arg)
 	fflush(stdout);
 	rte_delay_ms(1000);
 	printf("%s(): lcore %d Average event timer arm latency = %.3f us\n",
-			__func__, rte_lcore_id(), (float)(arm_latency / count) /
-			(rte_get_timer_hz() / 1000000));
+			__func__, rte_lcore_id(),
+			count ? (float)(arm_latency / count) /
+			(rte_get_timer_hz() / 1000000) : 0);
 	return 0;
 }
 
@@ -439,7 +441,7 @@ perf_event_timer_adapter_setup(struct test_perf *t)
 
 		if (!(adapter_info.caps &
 				RTE_EVENT_TIMER_ADAPTER_CAP_INTERNAL_PORT)) {
-			uint32_t service_id;
+			uint32_t service_id = -1U;
 
 			rte_event_timer_adapter_service_id_get(wl,
 					&service_id);

@@ -47,9 +47,6 @@
 #include "testpmd.h"
 
 #define IP_DEFTTL  64   /* from RFC 1340. */
-#define IP_VERSION 0x40
-#define IP_HDRLEN  0x05 /* default IP header length == five 32-bits words. */
-#define IP_VHL_DEF (IP_VERSION | IP_HDRLEN)
 
 #define GRE_CHECKSUM_PRESENT	0x8000
 #define GRE_KEY_PRESENT		0x2000
@@ -89,7 +86,7 @@ struct testpmd_offload_info {
 struct simple_gre_hdr {
 	uint16_t flags;
 	uint16_t proto;
-} __attribute__((__packed__));
+} __rte_packed;
 
 static uint16_t
 get_udptcp_checksum(void *l3_hdr, void *l4_hdr, uint16_t ethertype)
@@ -142,22 +139,23 @@ parse_ipv6(struct rte_ipv6_hdr *ipv6_hdr, struct testpmd_offload_info *info)
 
 /*
  * Parse an ethernet header to fill the ethertype, l2_len, l3_len and
- * ipproto. This function is able to recognize IPv4/IPv6 with one optional vlan
- * header. The l4_len argument is only set in case of TCP (useful for TSO).
+ * ipproto. This function is able to recognize IPv4/IPv6 with optional VLAN
+ * headers. The l4_len argument is only set in case of TCP (useful for TSO).
  */
 static void
 parse_ethernet(struct rte_ether_hdr *eth_hdr, struct testpmd_offload_info *info)
 {
 	struct rte_ipv4_hdr *ipv4_hdr;
 	struct rte_ipv6_hdr *ipv6_hdr;
+	struct rte_vlan_hdr *vlan_hdr;
 
 	info->l2_len = sizeof(struct rte_ether_hdr);
 	info->ethertype = eth_hdr->ether_type;
 
-	if (info->ethertype == _htons(RTE_ETHER_TYPE_VLAN)) {
-		struct rte_vlan_hdr *vlan_hdr = (
-			struct rte_vlan_hdr *)(eth_hdr + 1);
-
+	while (info->ethertype == _htons(RTE_ETHER_TYPE_VLAN) ||
+	       info->ethertype == _htons(RTE_ETHER_TYPE_QINQ)) {
+		vlan_hdr = (struct rte_vlan_hdr *)
+			((char *)eth_hdr + info->l2_len);
 		info->l2_len  += sizeof(struct rte_vlan_hdr);
 		info->ethertype = vlan_hdr->eth_proto;
 	}

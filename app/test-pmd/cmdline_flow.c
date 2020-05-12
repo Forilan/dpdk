@@ -41,6 +41,7 @@ enum index {
 	BOOLEAN,
 	STRING,
 	HEX,
+	FILE_PATH,
 	MAC_ADDR,
 	IPV4_ADDR,
 	IPV6_ADDR,
@@ -63,8 +64,10 @@ enum index {
 	CREATE,
 	DESTROY,
 	FLUSH,
+	DUMP,
 	QUERY,
 	LIST,
+	AGED,
 	ISOLATE,
 
 	/* Destroy arguments. */
@@ -75,6 +78,9 @@ enum index {
 
 	/* List arguments. */
 	LIST_GROUP,
+
+	/* Destroy aged flow arguments. */
+	AGED_DESTROY,
 
 	/* Validate/create arguments. */
 	GROUP,
@@ -168,6 +174,8 @@ enum index {
 	ITEM_FUZZY,
 	ITEM_FUZZY_THRESH,
 	ITEM_GTP,
+	ITEM_GTP_FLAGS,
+	ITEM_GTP_MSG_TYPE,
 	ITEM_GTP_TEID,
 	ITEM_GTPC,
 	ITEM_GTPU,
@@ -210,6 +218,18 @@ enum index {
 	ITEM_HIGIG2,
 	ITEM_HIGIG2_CLASSIFICATION,
 	ITEM_HIGIG2_VID,
+	ITEM_TAG,
+	ITEM_TAG_DATA,
+	ITEM_TAG_INDEX,
+	ITEM_L2TPV3OIP,
+	ITEM_L2TPV3OIP_SESSION_ID,
+	ITEM_ESP,
+	ITEM_ESP_SPI,
+	ITEM_AH,
+	ITEM_AH_SPI,
+	ITEM_PFCP,
+	ITEM_PFCP_S_FIELD,
+	ITEM_PFCP_SEID,
 
 	/* Validate/create actions. */
 	ACTIONS,
@@ -316,6 +336,19 @@ enum index {
 	ACTION_RAW_ENCAP_INDEX_VALUE,
 	ACTION_RAW_DECAP_INDEX,
 	ACTION_RAW_DECAP_INDEX_VALUE,
+	ACTION_SET_TAG,
+	ACTION_SET_TAG_DATA,
+	ACTION_SET_TAG_INDEX,
+	ACTION_SET_TAG_MASK,
+	ACTION_SET_META,
+	ACTION_SET_META_DATA,
+	ACTION_SET_META_MASK,
+	ACTION_SET_IPV4_DSCP,
+	ACTION_SET_IPV4_DSCP_VALUE,
+	ACTION_SET_IPV6_DSCP,
+	ACTION_SET_IPV6_DSCP_VALUE,
+	ACTION_AGE,
+	ACTION_AGE_TIMEOUT,
 };
 
 /** Maximum size for pattern in struct rte_flow_item_raw. */
@@ -622,6 +655,9 @@ struct buffer {
 			uint32_t rule_n;
 		} destroy; /**< Destroy arguments. */
 		struct {
+			char file[128];
+		} dump; /**< Dump arguments. */
+		struct {
 			uint32_t rule;
 			struct rte_flow_action action;
 		} query; /**< Query arguments. */
@@ -632,6 +668,9 @@ struct buffer {
 		struct {
 			int set;
 		} isolate; /**< Isolated mode arguments. */
+		struct {
+			int destroy;
+		} aged; /**< Aged arguments. */
 	} args; /**< Command arguments. */
 };
 
@@ -675,8 +714,20 @@ static const enum index next_destroy_attr[] = {
 	ZERO,
 };
 
+static const enum index next_dump_attr[] = {
+	FILE_PATH,
+	END,
+	ZERO,
+};
+
 static const enum index next_list_attr[] = {
 	LIST_GROUP,
+	END,
+	ZERO,
+};
+
+static const enum index next_aged_attr[] = {
+	AGED_DESTROY,
 	END,
 	ZERO,
 };
@@ -735,6 +786,11 @@ static const enum index next_item[] = {
 	ITEM_PPPOED,
 	ITEM_PPPOE_PROTO_ID,
 	ITEM_HIGIG2,
+	ITEM_TAG,
+	ITEM_L2TPV3OIP,
+	ITEM_ESP,
+	ITEM_AH,
+	ITEM_PFCP,
 	END_SET,
 	ZERO,
 };
@@ -898,6 +954,8 @@ static const enum index item_gre_key[] = {
 };
 
 static const enum index item_gtp[] = {
+	ITEM_GTP_FLAGS,
+	ITEM_GTP_MSG_TYPE,
 	ITEM_GTP_TEID,
 	ITEM_NEXT,
 	ZERO,
@@ -994,7 +1052,6 @@ static const enum index item_pppoes[] = {
 };
 
 static const enum index item_pppoe_proto_id[] = {
-	ITEM_PPPOE_PROTO_ID,
 	ITEM_NEXT,
 	ZERO,
 };
@@ -1006,9 +1063,41 @@ static const enum index item_higig2[] = {
 	ZERO,
 };
 
+static const enum index item_esp[] = {
+	ITEM_ESP_SPI,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_ah[] = {
+	ITEM_AH_SPI,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_pfcp[] = {
+	ITEM_PFCP_S_FIELD,
+	ITEM_PFCP_SEID,
+	ITEM_NEXT,
+	ZERO,
+};
+
 static const enum index next_set_raw[] = {
 	SET_RAW_INDEX,
 	ITEM_ETH,
+	ZERO,
+};
+
+static const enum index item_tag[] = {
+	ITEM_TAG_DATA,
+	ITEM_TAG_INDEX,
+	ITEM_NEXT,
+	ZERO,
+};
+
+static const enum index item_l2tpv3oip[] = {
+	ITEM_L2TPV3OIP_SESSION_ID,
+	ITEM_NEXT,
 	ZERO,
 };
 
@@ -1067,6 +1156,11 @@ static const enum index next_action[] = {
 	ACTION_DEC_TCP_ACK,
 	ACTION_RAW_ENCAP,
 	ACTION_RAW_DECAP,
+	ACTION_SET_TAG,
+	ACTION_SET_META,
+	ACTION_SET_IPV4_DSCP,
+	ACTION_SET_IPV6_DSCP,
+	ACTION_AGE,
 	ZERO,
 };
 
@@ -1265,6 +1359,40 @@ static const enum index action_raw_decap[] = {
 	ZERO,
 };
 
+static const enum index action_set_tag[] = {
+	ACTION_SET_TAG_DATA,
+	ACTION_SET_TAG_INDEX,
+	ACTION_SET_TAG_MASK,
+	ACTION_NEXT,
+	ZERO,
+};
+
+static const enum index action_set_meta[] = {
+	ACTION_SET_META_DATA,
+	ACTION_SET_META_MASK,
+	ACTION_NEXT,
+	ZERO,
+};
+
+static const enum index action_set_ipv4_dscp[] = {
+	ACTION_SET_IPV4_DSCP_VALUE,
+	ACTION_NEXT,
+	ZERO,
+};
+
+static const enum index action_set_ipv6_dscp[] = {
+	ACTION_SET_IPV6_DSCP_VALUE,
+	ACTION_NEXT,
+	ZERO,
+};
+
+static const enum index action_age[] = {
+	ACTION_AGE,
+	ACTION_AGE_TIMEOUT,
+	ACTION_NEXT,
+	ZERO,
+};
+
 static int parse_set_raw_encap_decap(struct context *, const struct token *,
 				     const char *, unsigned int,
 				     void *, unsigned int);
@@ -1329,12 +1457,19 @@ static int parse_vc_action_raw_encap_index(struct context *,
 static int parse_vc_action_raw_decap_index(struct context *,
 					   const struct token *, const char *,
 					   unsigned int, void *, unsigned int);
+static int parse_vc_action_set_meta(struct context *ctx,
+				    const struct token *token, const char *str,
+				    unsigned int len, void *buf,
+				    unsigned int size);
 static int parse_destroy(struct context *, const struct token *,
 			 const char *, unsigned int,
 			 void *, unsigned int);
 static int parse_flush(struct context *, const struct token *,
 		       const char *, unsigned int,
 		       void *, unsigned int);
+static int parse_dump(struct context *, const struct token *,
+		      const char *, unsigned int,
+		      void *, unsigned int);
 static int parse_query(struct context *, const struct token *,
 		       const char *, unsigned int,
 		       void *, unsigned int);
@@ -1342,6 +1477,9 @@ static int parse_action(struct context *, const struct token *,
 			const char *, unsigned int,
 			void *, unsigned int);
 static int parse_list(struct context *, const struct token *,
+		      const char *, unsigned int,
+		      void *, unsigned int);
+static int parse_aged(struct context *, const struct token *,
 		      const char *, unsigned int,
 		      void *, unsigned int);
 static int parse_isolate(struct context *, const struct token *,
@@ -1362,6 +1500,9 @@ static int parse_string(struct context *, const struct token *,
 static int parse_hex(struct context *ctx, const struct token *token,
 			const char *str, unsigned int len,
 			void *buf, unsigned int size);
+static int parse_string0(struct context *, const struct token *,
+			const char *, unsigned int,
+			void *, unsigned int);
 static int parse_mac_addr(struct context *, const struct token *,
 			  const char *, unsigned int,
 			  void *, unsigned int);
@@ -1455,6 +1596,12 @@ static const struct token token_list[] = {
 		.type = "HEX",
 		.help = "fixed string",
 		.call = parse_hex,
+	},
+	[FILE_PATH] = {
+		.name = "{file path}",
+		.type = "STRING",
+		.help = "file path",
+		.call = parse_string0,
 		.comp = comp_none,
 	},
 	[MAC_ADDR] = {
@@ -1516,7 +1663,9 @@ static const struct token token_list[] = {
 			      CREATE,
 			      DESTROY,
 			      FLUSH,
+			      DUMP,
 			      LIST,
+			      AGED,
 			      QUERY,
 			      ISOLATE)),
 		.call = parse_init,
@@ -1550,6 +1699,14 @@ static const struct token token_list[] = {
 		.args = ARGS(ARGS_ENTRY(struct buffer, port)),
 		.call = parse_flush,
 	},
+	[DUMP] = {
+		.name = "dump",
+		.help = "dump all flow rules to file",
+		.next = NEXT(next_dump_attr, NEXT_ENTRY(PORT_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, args.dump.file),
+			     ARGS_ENTRY(struct buffer, port)),
+		.call = parse_dump,
+	},
 	[QUERY] = {
 		.name = "query",
 		.help = "query an existing flow rule",
@@ -1567,6 +1724,13 @@ static const struct token token_list[] = {
 		.next = NEXT(next_list_attr, NEXT_ENTRY(PORT_ID)),
 		.args = ARGS(ARGS_ENTRY(struct buffer, port)),
 		.call = parse_list,
+	},
+	[AGED] = {
+		.name = "aged",
+		.help = "list and destroy aged flows",
+		.next = NEXT(next_aged_attr, NEXT_ENTRY(PORT_ID)),
+		.args = ARGS(ARGS_ENTRY(struct buffer, port)),
+		.call = parse_aged,
 	},
 	[ISOLATE] = {
 		.name = "isolate",
@@ -1600,6 +1764,12 @@ static const struct token token_list[] = {
 		.next = NEXT(next_list_attr, NEXT_ENTRY(GROUP_ID)),
 		.args = ARGS(ARGS_ENTRY_PTR(struct buffer, args.list.group)),
 		.call = parse_list,
+	},
+	[AGED_DESTROY] = {
+		.name = "destroy",
+		.help = "specify aged flows need be destroyed",
+		.call = parse_aged,
+		.comp = comp_none,
 	},
 	/* Validate/create attributes. */
 	[GROUP] = {
@@ -2218,6 +2388,19 @@ static const struct token token_list[] = {
 		.next = NEXT(item_gtp),
 		.call = parse_vc,
 	},
+	[ITEM_GTP_FLAGS] = {
+		.name = "v_pt_rsv_flags",
+		.help = "GTP flags",
+		.next = NEXT(item_gtp, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_gtp,
+					v_pt_rsv_flags)),
+	},
+	[ITEM_GTP_MSG_TYPE] = {
+		.name = "msg_type",
+		.help = "GTP message type",
+		.next = NEXT(item_gtp, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_gtp, msg_type)),
+	},
 	[ITEM_GTP_TEID] = {
 		.name = "teid",
 		.help = "tunnel endpoint identifier",
@@ -2445,8 +2628,8 @@ static const struct token token_list[] = {
 		.name = "data",
 		.help = "metadata value",
 		.next = NEXT(item_meta, NEXT_ENTRY(UNSIGNED), item_param),
-		.args = ARGS(ARGS_ENTRY_MASK_HTON(struct rte_flow_item_meta,
-						  data, "\xff\xff\xff\xff")),
+		.args = ARGS(ARGS_ENTRY_MASK(struct rte_flow_item_meta,
+					     data, "\xff\xff\xff\xff")),
 	},
 	[ITEM_GRE_KEY] = {
 		.name = "gre_key",
@@ -2505,11 +2688,14 @@ static const struct token token_list[] = {
 					session_id)),
 	},
 	[ITEM_PPPOE_PROTO_ID] = {
-		.name = "proto_id",
+		.name = "pppoe_proto_id",
 		.help = "match PPPoE session protocol identifier",
 		.priv = PRIV_ITEM(PPPOE_PROTO_ID,
 				sizeof(struct rte_flow_item_pppoe_proto_id)),
-		.next = NEXT(item_pppoe_proto_id),
+		.next = NEXT(item_pppoe_proto_id, NEXT_ENTRY(UNSIGNED),
+			     item_param),
+		.args = ARGS(ARGS_ENTRY_HTON
+			     (struct rte_flow_item_pppoe_proto_id, proto_id)),
 		.call = parse_vc,
 	},
 	[ITEM_HIGIG2] = {
@@ -2533,6 +2719,88 @@ static const struct token token_list[] = {
 		.next = NEXT(item_higig2, NEXT_ENTRY(UNSIGNED), item_param),
 		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_higig2_hdr,
 					hdr.ppt1.vid)),
+	},
+	[ITEM_TAG] = {
+		.name = "tag",
+		.help = "match tag value",
+		.priv = PRIV_ITEM(TAG, sizeof(struct rte_flow_item_tag)),
+		.next = NEXT(item_tag),
+		.call = parse_vc,
+	},
+	[ITEM_TAG_DATA] = {
+		.name = "data",
+		.help = "tag value to match",
+		.next = NEXT(item_tag, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_tag, data)),
+	},
+	[ITEM_TAG_INDEX] = {
+		.name = "index",
+		.help = "index of tag array to match",
+		.next = NEXT(item_tag, NEXT_ENTRY(UNSIGNED),
+			     NEXT_ENTRY(ITEM_PARAM_IS)),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_item_tag, index)),
+	},
+	[ITEM_L2TPV3OIP] = {
+		.name = "l2tpv3oip",
+		.help = "match L2TPv3 over IP header",
+		.priv = PRIV_ITEM(L2TPV3OIP,
+				  sizeof(struct rte_flow_item_l2tpv3oip)),
+		.next = NEXT(item_l2tpv3oip),
+		.call = parse_vc,
+	},
+	[ITEM_L2TPV3OIP_SESSION_ID] = {
+		.name = "session_id",
+		.help = "session identifier",
+		.next = NEXT(item_l2tpv3oip, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_l2tpv3oip,
+					     session_id)),
+	},
+	[ITEM_ESP] = {
+		.name = "esp",
+		.help = "match ESP header",
+		.priv = PRIV_ITEM(ESP, sizeof(struct rte_flow_item_esp)),
+		.next = NEXT(item_esp),
+		.call = parse_vc,
+	},
+	[ITEM_ESP_SPI] = {
+		.name = "spi",
+		.help = "security policy index",
+		.next = NEXT(item_esp, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_esp,
+				hdr.spi)),
+	},
+	[ITEM_AH] = {
+		.name = "ah",
+		.help = "match AH header",
+		.priv = PRIV_ITEM(AH, sizeof(struct rte_flow_item_ah)),
+		.next = NEXT(item_ah),
+		.call = parse_vc,
+	},
+	[ITEM_AH_SPI] = {
+		.name = "spi",
+		.help = "security parameters index",
+		.next = NEXT(item_ah, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_ah, spi)),
+	},
+	[ITEM_PFCP] = {
+		.name = "pfcp",
+		.help = "match pfcp header",
+		.priv = PRIV_ITEM(PFCP, sizeof(struct rte_flow_item_pfcp)),
+		.next = NEXT(item_pfcp),
+		.call = parse_vc,
+	},
+	[ITEM_PFCP_S_FIELD] = {
+		.name = "s_field",
+		.help = "S field",
+		.next = NEXT(item_pfcp, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_pfcp,
+				s_field)),
+	},
+	[ITEM_PFCP_SEID] = {
+		.name = "seid",
+		.help = "session endpoint identifier",
+		.next = NEXT(item_pfcp, NEXT_ENTRY(UNSIGNED), item_param),
+		.args = ARGS(ARGS_ENTRY_HTON(struct rte_flow_item_pfcp, seid)),
 	},
 	/* Validate/create actions. */
 	[ACTIONS] = {
@@ -3378,7 +3646,110 @@ static const struct token token_list[] = {
 		.help = "index of raw_encap/raw_decap data",
 		.next = NEXT(next_item),
 		.call = parse_port,
-	}
+	},
+	[ACTION_SET_TAG] = {
+		.name = "set_tag",
+		.help = "set tag",
+		.priv = PRIV_ACTION(SET_TAG,
+			sizeof(struct rte_flow_action_set_tag)),
+		.next = NEXT(action_set_tag),
+		.call = parse_vc,
+	},
+	[ACTION_SET_TAG_INDEX] = {
+		.name = "index",
+		.help = "index of tag array",
+		.next = NEXT(action_set_tag, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY(struct rte_flow_action_set_tag, index)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_SET_TAG_DATA] = {
+		.name = "data",
+		.help = "tag value",
+		.next = NEXT(action_set_tag, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY
+			     (struct rte_flow_action_set_tag, data)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_SET_TAG_MASK] = {
+		.name = "mask",
+		.help = "mask for tag value",
+		.next = NEXT(action_set_tag, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY
+			     (struct rte_flow_action_set_tag, mask)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_SET_META] = {
+		.name = "set_meta",
+		.help = "set metadata",
+		.priv = PRIV_ACTION(SET_META,
+			sizeof(struct rte_flow_action_set_meta)),
+		.next = NEXT(action_set_meta),
+		.call = parse_vc_action_set_meta,
+	},
+	[ACTION_SET_META_DATA] = {
+		.name = "data",
+		.help = "metadata value",
+		.next = NEXT(action_set_meta, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY
+			     (struct rte_flow_action_set_meta, data)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_SET_META_MASK] = {
+		.name = "mask",
+		.help = "mask for metadata value",
+		.next = NEXT(action_set_meta, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY
+			     (struct rte_flow_action_set_meta, mask)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_SET_IPV4_DSCP] = {
+		.name = "set_ipv4_dscp",
+		.help = "set DSCP value",
+		.priv = PRIV_ACTION(SET_IPV4_DSCP,
+			sizeof(struct rte_flow_action_set_dscp)),
+		.next = NEXT(action_set_ipv4_dscp),
+		.call = parse_vc,
+	},
+	[ACTION_SET_IPV4_DSCP_VALUE] = {
+		.name = "dscp_value",
+		.help = "new IPv4 DSCP value to set",
+		.next = NEXT(action_set_ipv4_dscp, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY
+			     (struct rte_flow_action_set_dscp, dscp)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_SET_IPV6_DSCP] = {
+		.name = "set_ipv6_dscp",
+		.help = "set DSCP value",
+		.priv = PRIV_ACTION(SET_IPV6_DSCP,
+			sizeof(struct rte_flow_action_set_dscp)),
+		.next = NEXT(action_set_ipv6_dscp),
+		.call = parse_vc,
+	},
+	[ACTION_SET_IPV6_DSCP_VALUE] = {
+		.name = "dscp_value",
+		.help = "new IPv6 DSCP value to set",
+		.next = NEXT(action_set_ipv6_dscp, NEXT_ENTRY(UNSIGNED)),
+		.args = ARGS(ARGS_ENTRY
+			     (struct rte_flow_action_set_dscp, dscp)),
+		.call = parse_vc_conf,
+	},
+	[ACTION_AGE] = {
+		.name = "age",
+		.help = "set a specific metadata header",
+		.next = NEXT(action_age),
+		.priv = PRIV_ACTION(AGE,
+			sizeof(struct rte_flow_action_age)),
+		.call = parse_vc,
+	},
+	[ACTION_AGE_TIMEOUT] = {
+		.name = "timeout",
+		.help = "flow age timeout value",
+		.args = ARGS(ARGS_ENTRY_BF(struct rte_flow_action_age,
+					   timeout, 24)),
+		.next = NEXT(action_age, NEXT_ENTRY(UNSIGNED)),
+		.call = parse_vc_conf,
+	},
 };
 
 /** Remove and return last entry from argument stack. */
@@ -4324,7 +4695,9 @@ parse_vc_action_mplsogre_encap(struct context *ctx, const struct token *token,
 	struct rte_flow_item_gre gre = {
 		.protocol = rte_cpu_to_be_16(ETHER_TYPE_MPLS_UNICAST),
 	};
-	struct rte_flow_item_mpls mpls;
+	struct rte_flow_item_mpls mpls = {
+		.ttl = 0,
+	};
 	uint8_t *header;
 	int ret;
 
@@ -4818,6 +5191,22 @@ parse_vc_action_raw_decap(struct context *ctx, const struct token *token,
 	return ret;
 }
 
+static int
+parse_vc_action_set_meta(struct context *ctx, const struct token *token,
+			 const char *str, unsigned int len, void *buf,
+			 unsigned int size)
+{
+	int ret;
+
+	ret = parse_vc(ctx, token, str, len, buf, size);
+	if (ret < 0)
+		return ret;
+	ret = rte_flow_dynf_metadata_register();
+	if (ret < 0)
+		return -1;
+	return len;
+}
+
 /** Parse tokens for destroy command. */
 static int
 parse_destroy(struct context *ctx, const struct token *token,
@@ -4871,6 +5260,33 @@ parse_flush(struct context *ctx, const struct token *token,
 		return len;
 	if (!out->command) {
 		if (ctx->curr != FLUSH)
+			return -1;
+		if (sizeof(*out) > size)
+			return -1;
+		out->command = ctx->curr;
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+	}
+	return len;
+}
+
+/** Parse tokens for dump command. */
+static int
+parse_dump(struct context *ctx, const struct token *token,
+	    const char *str, unsigned int len,
+	    void *buf, unsigned int size)
+{
+	struct buffer *out = buf;
+
+	/* Token name must match. */
+	if (parse_default(ctx, token, str, len, NULL, 0) < 0)
+		return -1;
+	/* Nothing else to do if there is no buffer. */
+	if (!out)
+		return len;
+	if (!out->command) {
+		if (ctx->curr != DUMP)
 			return -1;
 		if (sizeof(*out) > size)
 			return -1;
@@ -4978,6 +5394,35 @@ parse_list(struct context *ctx, const struct token *token,
 	ctx->objdata = 0;
 	ctx->object = out->args.list.group + out->args.list.group_n++;
 	ctx->objmask = NULL;
+	return len;
+}
+
+/** Parse tokens for list all aged flows command. */
+static int
+parse_aged(struct context *ctx, const struct token *token,
+	   const char *str, unsigned int len,
+	   void *buf, unsigned int size)
+{
+	struct buffer *out = buf;
+
+	/* Token name must match. */
+	if (parse_default(ctx, token, str, len, NULL, 0) < 0)
+		return -1;
+	/* Nothing else to do if there is no buffer. */
+	if (!out)
+		return len;
+	if (!out->command) {
+		if (ctx->curr != AGED)
+			return -1;
+		if (sizeof(*out) > size)
+			return -1;
+		out->command = ctx->curr;
+		ctx->objdata = 0;
+		ctx->object = out;
+		ctx->objmask = NULL;
+	}
+	if (ctx->curr == AGED_DESTROY)
+		out->args.aged.destroy = 1;
 	return len;
 }
 
@@ -5277,6 +5722,35 @@ error:
 	push_args(ctx, arg_data);
 	return -1;
 
+}
+
+/**
+ * Parse a zero-ended string.
+ */
+static int
+parse_string0(struct context *ctx, const struct token *token __rte_unused,
+	     const char *str, unsigned int len,
+	     void *buf, unsigned int size)
+{
+	const struct arg *arg_data = pop_args(ctx);
+
+	/* Arguments are expected. */
+	if (!arg_data)
+		return -1;
+	size = arg_data->size;
+	/* Bit-mask fill is not supported. */
+	if (arg_data->mask || size < len + 1)
+		goto error;
+	if (!ctx->object)
+		return len;
+	buf = (uint8_t *)ctx->object + arg_data->offset;
+	strncpy(buf, str, len);
+	if (ctx->objmask)
+		memset((uint8_t *)ctx->objmask + arg_data->offset, 0xff, len);
+	return len;
+error:
+	push_args(ctx, arg_data);
+	return -1;
 }
 
 /**
@@ -5938,6 +6412,9 @@ cmd_flow_parsed(const struct buffer *in)
 	case FLUSH:
 		port_flow_flush(in->port);
 		break;
+	case DUMP:
+		port_flow_dump(in->port, in->args.dump.file);
+		break;
 	case QUERY:
 		port_flow_query(in->port, in->args.query.rule,
 				&in->args.query.action);
@@ -5948,6 +6425,9 @@ cmd_flow_parsed(const struct buffer *in)
 		break;
 	case ISOLATE:
 		port_flow_isolate(in->port, in->args.isolate.set);
+		break;
+	case AGED:
+		port_flow_aged(in->port, in->args.aged.destroy);
 		break;
 	default:
 		break;
@@ -5996,11 +6476,13 @@ update_fields(uint8_t *buf, struct rte_flow_item *item, uint16_t next_proto)
 	case RTE_FLOW_ITEM_TYPE_IPV4:
 		ipv4 = (struct rte_flow_item_ipv4 *)buf;
 		ipv4->hdr.version_ihl = 0x45;
-		ipv4->hdr.next_proto_id = (uint8_t)next_proto;
+		if (next_proto && ipv4->hdr.next_proto_id == 0)
+			ipv4->hdr.next_proto_id = (uint8_t)next_proto;
 		break;
 	case RTE_FLOW_ITEM_TYPE_IPV6:
 		ipv6 = (struct rte_flow_item_ipv6 *)buf;
-		ipv6->hdr.proto = (uint8_t)next_proto;
+		if (next_proto && ipv6->hdr.proto == 0)
+			ipv6->hdr.proto = (uint8_t)next_proto;
 		ipv6_vtc_flow = rte_be_to_cpu_32(ipv6->hdr.vtc_flow);
 		ipv6_vtc_flow &= 0x0FFFFFFF; /*< reset version bits. */
 		ipv6_vtc_flow |= 0x60000000; /*< set ipv6 version. */
@@ -6098,14 +6580,27 @@ flow_item_default_mask(const struct rte_flow_item *item)
 	case RTE_FLOW_ITEM_TYPE_GTP:
 		mask = &rte_flow_item_gtp_mask;
 		break;
-	case RTE_FLOW_ITEM_TYPE_ESP:
-		mask = &rte_flow_item_esp_mask;
-		break;
 	case RTE_FLOW_ITEM_TYPE_GTP_PSC:
 		mask = &rte_flow_item_gtp_psc_mask;
 		break;
+	case RTE_FLOW_ITEM_TYPE_GENEVE:
+		mask = &rte_flow_item_geneve_mask;
+		break;
 	case RTE_FLOW_ITEM_TYPE_PPPOE_PROTO_ID:
 		mask = &rte_flow_item_pppoe_proto_id_mask;
+		break;
+	case RTE_FLOW_ITEM_TYPE_L2TPV3OIP:
+		mask = &rte_flow_item_l2tpv3oip_mask;
+		break;
+	case RTE_FLOW_ITEM_TYPE_ESP:
+		mask = &rte_flow_item_esp_mask;
+		break;
+	case RTE_FLOW_ITEM_TYPE_AH:
+		mask = &rte_flow_item_ah_mask;
+		break;
+	case RTE_FLOW_ITEM_TYPE_PFCP:
+		mask = &rte_flow_item_pfcp_mask;
+		break;
 	default:
 		break;
 	}
@@ -6182,9 +6677,11 @@ cmd_set_raw_parsed(const struct buffer *in)
 			break;
 		case RTE_FLOW_ITEM_TYPE_GRE_KEY:
 			size = sizeof(rte_be32_t);
+			proto = 0x0;
 			break;
 		case RTE_FLOW_ITEM_TYPE_MPLS:
 			size = sizeof(struct rte_flow_item_mpls);
+			proto = 0x0;
 			break;
 		case RTE_FLOW_ITEM_TYPE_NVGRE:
 			size = sizeof(struct rte_flow_item_nvgre);
@@ -6192,6 +6689,24 @@ cmd_set_raw_parsed(const struct buffer *in)
 			break;
 		case RTE_FLOW_ITEM_TYPE_GENEVE:
 			size = sizeof(struct rte_flow_item_geneve);
+			break;
+		case RTE_FLOW_ITEM_TYPE_L2TPV3OIP:
+			size = sizeof(struct rte_flow_item_l2tpv3oip);
+			proto = 0x73;
+			break;
+		case RTE_FLOW_ITEM_TYPE_ESP:
+			size = sizeof(struct rte_flow_item_esp);
+			proto = 0x32;
+			break;
+		case RTE_FLOW_ITEM_TYPE_AH:
+			size = sizeof(struct rte_flow_item_ah);
+			proto = 0x33;
+			break;
+		case RTE_FLOW_ITEM_TYPE_GTP:
+			size = sizeof(struct rte_flow_item_gtp);
+			break;
+		case RTE_FLOW_ITEM_TYPE_PFCP:
+			size = sizeof(struct rte_flow_item_pfcp);
 			break;
 		default:
 			printf("Error - Not supported item\n");

@@ -9,7 +9,6 @@ include $(RTE_SDK)/mk/rte.vars.mk
 #
 LIB = librte_bus_fslmc.a
 
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 
@@ -24,9 +23,6 @@ LDLIBS += -lrte_common_dpaax
 
 # versioning export map
 EXPORT_MAP := rte_bus_fslmc_version.map
-
-# library version
-LIBABIVER := 2
 
 SRCS-$(CONFIG_RTE_LIBRTE_FSLMC_BUS) += \
         qbman/qbman_portal.c \

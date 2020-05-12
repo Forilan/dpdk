@@ -31,8 +31,10 @@
 #include <rte_string_fns.h>
 #include <rte_spinlock.h>
 #include <rte_tailq.h>
+#include <rte_function_versioning.h>
 
 #include "rte_mempool.h"
+#include "rte_mempool_trace.h"
 
 TAILQ_HEAD(rte_mempool_list, rte_tailq_entry);
 
@@ -45,6 +47,7 @@ EAL_REGISTER_TAILQ(rte_mempool_tailq)
 #define CALC_CACHE_FLUSHTHRESH(c)	\
 	((typeof(c))((c) * CACHE_FLUSHTHRESH_MULTIPLIER))
 
+#if defined(RTE_ARCH_X86)
 /*
  * return the greatest common divisor between a and b (fast algorithm)
  *
@@ -74,12 +77,13 @@ static unsigned get_gcd(unsigned a, unsigned b)
 }
 
 /*
- * Depending on memory configuration, objects addresses are spread
+ * Depending on memory configuration on x86 arch, objects addresses are spread
  * between channels and ranks in RAM: the pool allocator will add
  * padding between objects. This function return the new size of the
  * object.
  */
-static unsigned optimize_object_size(unsigned obj_size)
+static unsigned int
+arch_mem_object_align(unsigned int obj_size)
 {
 	unsigned nrank, nchan;
 	unsigned new_obj_size;
@@ -99,6 +103,13 @@ static unsigned optimize_object_size(unsigned obj_size)
 		new_obj_size++;
 	return new_obj_size * RTE_MEMPOOL_ALIGN;
 }
+#else
+static unsigned int
+arch_mem_object_align(unsigned int obj_size)
+{
+	return obj_size;
+}
+#endif
 
 struct pagesz_walk_arg {
 	int socket_id;
@@ -234,8 +245,8 @@ rte_mempool_calc_obj_size(uint32_t elt_size, uint32_t flags,
 	 */
 	if ((flags & MEMPOOL_F_NO_SPREAD) == 0) {
 		unsigned new_size;
-		new_size = optimize_object_size(sz->header_size + sz->elt_size +
-			sz->trailer_size);
+		new_size = arch_mem_object_align
+			    (sz->header_size + sz->elt_size + sz->trailer_size);
 		sz->trailer_size = new_size - sz->header_size - sz->elt_size;
 	}
 
@@ -293,12 +304,17 @@ mempool_ops_alloc_once(struct rte_mempool *mp)
 	return 0;
 }
 
+__vsym int
+rte_mempool_populate_iova_v21(struct rte_mempool *mp, char *vaddr,
+	rte_iova_t iova, size_t len, rte_mempool_memchunk_free_cb_t *free_cb,
+	void *opaque);
+
 /* Add objects in the pool, using a physically contiguous memory
  * zone. Return the number of objects added, or a negative value
  * on error.
  */
-int
-rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
+__vsym int
+rte_mempool_populate_iova_v21(struct rte_mempool *mp, char *vaddr,
 	rte_iova_t iova, size_t len, rte_mempool_memchunk_free_cb_t *free_cb,
 	void *opaque)
 {
@@ -332,7 +348,7 @@ rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
 		off = RTE_PTR_ALIGN_CEIL(vaddr, RTE_MEMPOOL_ALIGN) - vaddr;
 
 	if (off > len) {
-		ret = -EINVAL;
+		ret = 0;
 		goto fail;
 	}
 
@@ -343,12 +359,14 @@ rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
 
 	/* not enough room to store one object */
 	if (i == 0) {
-		ret = -EINVAL;
+		ret = 0;
 		goto fail;
 	}
 
 	STAILQ_INSERT_TAIL(&mp->mem_list, memhdr, next);
 	mp->nb_mem_chunks++;
+
+	rte_mempool_trace_populate_iova(mp, vaddr, iova, len, free_cb, opaque);
 	return i;
 
 fail:
@@ -356,11 +374,58 @@ fail:
 	return ret;
 }
 
+BIND_DEFAULT_SYMBOL(rte_mempool_populate_iova, _v21, 21);
+MAP_STATIC_SYMBOL(
+	int rte_mempool_populate_iova(struct rte_mempool *mp, char *vaddr,
+				rte_iova_t iova, size_t len,
+				rte_mempool_memchunk_free_cb_t *free_cb,
+				void *opaque),
+	rte_mempool_populate_iova_v21);
+
+__vsym int
+rte_mempool_populate_iova_v20(struct rte_mempool *mp, char *vaddr,
+	rte_iova_t iova, size_t len, rte_mempool_memchunk_free_cb_t *free_cb,
+	void *opaque);
+
+__vsym int
+rte_mempool_populate_iova_v20(struct rte_mempool *mp, char *vaddr,
+	rte_iova_t iova, size_t len, rte_mempool_memchunk_free_cb_t *free_cb,
+	void *opaque)
+{
+	int ret;
+
+	ret = rte_mempool_populate_iova_v21(mp, vaddr, iova, len, free_cb,
+					opaque);
+	if (ret == 0)
+		ret = -EINVAL;
+
+	return ret;
+}
+VERSION_SYMBOL(rte_mempool_populate_iova, _v20, 20.0);
+
+static rte_iova_t
+get_iova(void *addr)
+{
+	struct rte_memseg *ms;
+
+	/* try registered memory first */
+	ms = rte_mem_virt2memseg(addr, NULL);
+	if (ms == NULL || ms->iova == RTE_BAD_IOVA)
+		/* fall back to actual physical address */
+		return rte_mem_virt2iova(addr);
+	return ms->iova + RTE_PTR_DIFF(addr, ms->addr);
+}
+
+__vsym int
+rte_mempool_populate_virt_v21(struct rte_mempool *mp, char *addr,
+	size_t len, size_t pg_sz, rte_mempool_memchunk_free_cb_t *free_cb,
+	void *opaque);
+
 /* Populate the mempool with a virtual area. Return the number of
  * objects added, or a negative value on error.
  */
-int
-rte_mempool_populate_virt(struct rte_mempool *mp, char *addr,
+__vsym int
+rte_mempool_populate_virt_v21(struct rte_mempool *mp, char *addr,
 	size_t len, size_t pg_sz, rte_mempool_memchunk_free_cb_t *free_cb,
 	void *opaque)
 {
@@ -375,12 +440,7 @@ rte_mempool_populate_virt(struct rte_mempool *mp, char *addr,
 	for (off = 0; off < len &&
 		     mp->populated_size < mp->size; off += phys_len) {
 
-		iova = rte_mem_virt2iova(addr + off);
-
-		if (iova == RTE_BAD_IOVA && rte_eal_has_hugepages()) {
-			ret = -EINVAL;
-			goto fail;
-		}
+		iova = get_iova(addr + off);
 
 		/* populate with the largest group of contiguous pages */
 		for (phys_len = RTE_MIN(
@@ -391,15 +451,17 @@ rte_mempool_populate_virt(struct rte_mempool *mp, char *addr,
 		     phys_len = RTE_MIN(phys_len + pg_sz, len - off)) {
 			rte_iova_t iova_tmp;
 
-			iova_tmp = rte_mem_virt2iova(addr + off + phys_len);
+			iova_tmp = get_iova(addr + off + phys_len);
 
 			if (iova_tmp == RTE_BAD_IOVA ||
 					iova_tmp != iova + phys_len)
 				break;
 		}
 
-		ret = rte_mempool_populate_iova(mp, addr + off, iova,
+		ret = rte_mempool_populate_iova_v21(mp, addr + off, iova,
 			phys_len, free_cb, opaque);
+		if (ret == 0)
+			continue;
 		if (ret < 0)
 			goto fail;
 		/* no need to call the free callback for next chunks */
@@ -407,12 +469,42 @@ rte_mempool_populate_virt(struct rte_mempool *mp, char *addr,
 		cnt += ret;
 	}
 
+	rte_mempool_trace_populate_virt(mp, addr, len, pg_sz, free_cb, opaque);
 	return cnt;
 
  fail:
 	rte_mempool_free_memchunks(mp);
 	return ret;
 }
+BIND_DEFAULT_SYMBOL(rte_mempool_populate_virt, _v21, 21);
+MAP_STATIC_SYMBOL(
+	int rte_mempool_populate_virt(struct rte_mempool *mp,
+				char *addr, size_t len, size_t pg_sz,
+				rte_mempool_memchunk_free_cb_t *free_cb,
+				void *opaque),
+	rte_mempool_populate_virt_v21);
+
+__vsym int
+rte_mempool_populate_virt_v20(struct rte_mempool *mp, char *addr,
+	size_t len, size_t pg_sz, rte_mempool_memchunk_free_cb_t *free_cb,
+	void *opaque);
+
+__vsym int
+rte_mempool_populate_virt_v20(struct rte_mempool *mp, char *addr,
+	size_t len, size_t pg_sz, rte_mempool_memchunk_free_cb_t *free_cb,
+	void *opaque)
+{
+	int ret;
+
+	ret = rte_mempool_populate_virt_v21(mp, addr, len, pg_sz,
+						free_cb, opaque);
+
+	if (ret == 0)
+		ret = -EINVAL;
+
+	return ret;
+}
+VERSION_SYMBOL(rte_mempool_populate_virt, _v20, 20.0);
 
 /* Get the minimal page size used in a mempool before populating it. */
 int
@@ -436,6 +528,7 @@ rte_mempool_get_page_size(struct rte_mempool *mp, size_t *pg_sz)
 	else
 		*pg_sz = getpagesize();
 
+	rte_mempool_trace_get_page_size(mp, *pg_sz);
 	return 0;
 }
 
@@ -455,6 +548,7 @@ rte_mempool_populate_default(struct rte_mempool *mp)
 	unsigned mz_id, n;
 	int ret;
 	bool need_iova_contig_obj;
+	size_t max_alloc_size = SIZE_MAX;
 
 	ret = mempool_ops_alloc_once(mp);
 	if (ret != 0)
@@ -534,27 +628,21 @@ rte_mempool_populate_default(struct rte_mempool *mp)
 		if (min_chunk_size == (size_t)mem_size)
 			mz_flags |= RTE_MEMZONE_IOVA_CONTIG;
 
-		mz = rte_memzone_reserve_aligned(mz_name, mem_size,
+		/* Allocate a memzone, retrying with a smaller area on ENOMEM */
+		do {
+			mz = rte_memzone_reserve_aligned(mz_name,
+				RTE_MIN((size_t)mem_size, max_alloc_size),
 				mp->socket_id, mz_flags, align);
 
-		/* don't try reserving with 0 size if we were asked to reserve
-		 * IOVA-contiguous memory.
-		 */
-		if (min_chunk_size < (size_t)mem_size && mz == NULL) {
-			/* not enough memory, retry with the biggest zone we
-			 * have
-			 */
-			mz = rte_memzone_reserve_aligned(mz_name, 0,
-					mp->socket_id, mz_flags, align);
-		}
+			if (mz == NULL && rte_errno != ENOMEM)
+				break;
+
+			max_alloc_size = RTE_MIN(max_alloc_size,
+						(size_t)mem_size) / 2;
+		} while (mz == NULL && max_alloc_size >= min_chunk_size);
+
 		if (mz == NULL) {
 			ret = -rte_errno;
-			goto fail;
-		}
-
-		if (mz->len < min_chunk_size) {
-			rte_memzone_free(mz);
-			ret = -ENOMEM;
 			goto fail;
 		}
 
@@ -573,12 +661,15 @@ rte_mempool_populate_default(struct rte_mempool *mp)
 				mz->len, pg_sz,
 				rte_mempool_memchunk_mz_free,
 				(void *)(uintptr_t)mz);
+		if (ret == 0) /* should not happen */
+			ret = -ENOBUFS;
 		if (ret < 0) {
 			rte_memzone_free(mz);
 			goto fail;
 		}
 	}
 
+	rte_mempool_trace_populate_default(mp);
 	return mp->size;
 
  fail:
@@ -637,8 +728,10 @@ rte_mempool_populate_anon(struct rte_mempool *mp)
 	}
 
 	ret = mempool_ops_alloc_once(mp);
-	if (ret != 0)
-		return ret;
+	if (ret < 0) {
+		rte_errno = -ret;
+		return 0;
+	}
 
 	size = get_anon_size(mp);
 	if (size < 0) {
@@ -662,9 +755,14 @@ rte_mempool_populate_anon(struct rte_mempool *mp)
 
 	ret = rte_mempool_populate_virt(mp, addr, size, getpagesize(),
 		rte_mempool_memchunk_anon_free, addr);
-	if (ret == 0)
+	if (ret == 0) /* should not happen */
+		ret = -ENOBUFS;
+	if (ret < 0) {
+		rte_errno = -ret;
 		goto fail;
+	}
 
+	rte_mempool_trace_populate_anon(mp);
 	return mp->populated_size;
 
  fail:
@@ -696,6 +794,7 @@ rte_mempool_free(struct rte_mempool *mp)
 	}
 	rte_mcfg_tailq_write_unlock();
 
+	rte_mempool_trace_free(mp);
 	rte_mempool_free_memchunks(mp);
 	rte_mempool_ops_free(mp);
 	rte_memzone_free(mp->mz);
@@ -734,6 +833,7 @@ rte_mempool_cache_create(uint32_t size, int socket_id)
 
 	mempool_cache_init(cache, size);
 
+	rte_mempool_trace_cache_create(size, socket_id, cache);
 	return cache;
 }
 
@@ -745,6 +845,7 @@ rte_mempool_cache_create(uint32_t size, int socket_id)
 void
 rte_mempool_cache_free(struct rte_mempool_cache *cache)
 {
+	rte_mempool_trace_cache_free(cache);
 	rte_free(cache);
 }
 
@@ -875,6 +976,8 @@ rte_mempool_create_empty(const char *name, unsigned n, unsigned elt_size,
 	rte_mcfg_tailq_write_unlock();
 	rte_mcfg_mempool_write_unlock();
 
+	rte_mempool_trace_create_empty(name, n, elt_size, cache_size,
+		private_data_size, flags, mp);
 	return mp;
 
 exit_unlock:
@@ -927,6 +1030,9 @@ rte_mempool_create(const char *name, unsigned n, unsigned elt_size,
 	if (obj_init)
 		rte_mempool_obj_iter(mp, obj_init, obj_init_arg);
 
+	rte_mempool_trace_create(name, n, elt_size, cache_size,
+		private_data_size, mp_init, mp_init_arg, obj_init,
+		obj_init_arg, flags, mp);
 	return mp;
 
  fail:

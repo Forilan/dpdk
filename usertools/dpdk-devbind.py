@@ -45,6 +45,8 @@ intel_ioat_bdw = {'Class': '08', 'Vendor': '8086', 'Device': '6f20,6f21,6f22,6f2
               'SVendor': None, 'SDevice': None}
 intel_ioat_skx = {'Class': '08', 'Vendor': '8086', 'Device': '2021',
               'SVendor': None, 'SDevice': None}
+intel_ioat_icx = {'Class': '08', 'Vendor': '8086', 'Device': '0b00',
+              'SVendor': None, 'SDevice': None}
 intel_ntb_skx = {'Class': '06', 'Vendor': '8086', 'Device': '201c',
               'SVendor': None, 'SDevice': None}
 
@@ -54,7 +56,7 @@ crypto_devices = [encryption_class, intel_processor_class]
 eventdev_devices = [cavium_sso, cavium_tim, octeontx2_sso]
 mempool_devices = [cavium_fpa, octeontx2_npa]
 compress_devices = [cavium_zip]
-misc_devices = [intel_ioat_bdw, intel_ioat_skx, intel_ntb_skx, octeontx2_dma]
+misc_devices = [intel_ioat_bdw, intel_ioat_skx, intel_ioat_icx, intel_ntb_skx, octeontx2_dma]
 
 # global dict ethernet devices present. Dictionary indexed by PCI address.
 # Each device within this is itself a dictionary of device properties
@@ -152,6 +154,9 @@ def check_output(args, stderr=None):
 # check if a specific kernel module is loaded
 def module_is_loaded(module):
     global loaded_modules
+
+    if module == 'vfio_pci':
+        module = 'vfio-pci'
 
     if loaded_modules:
         return module in loaded_modules
@@ -520,7 +525,7 @@ def bind_all(dev_list, driver, force=False):
         pass
 
     # check if we're attempting to bind to a driver that isn't loaded
-    if not module_is_loaded(driver):
+    if not module_is_loaded(driver.replace('-','_')):
         sys.exit("Error: Driver '%s' is not loaded." % driver)
 
     try:

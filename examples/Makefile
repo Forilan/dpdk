@@ -51,6 +51,9 @@ DIRS-$(CONFIG_RTE_LIBRTE_ACL) += l3fwd-acl
 ifeq ($(CONFIG_RTE_LIBRTE_LPM)$(CONFIG_RTE_LIBRTE_HASH),yy)
 DIRS-$(CONFIG_RTE_LIBRTE_POWER) += l3fwd-power
 endif
+ifeq ($(CONFIG_RTE_LIBRTE_GRAPH),y)
+DIRS-y += l3fwd-graph
+endif
 DIRS-y += link_status_interrupt
 DIRS-y += multi_process
 DIRS-y += ntb
@@ -68,7 +71,7 @@ ifeq ($(CONFIG_RTE_LIBRTE_HASH),y)
 DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += tep_termination
 endif
 DIRS-$(CONFIG_RTE_LIBRTE_TIMER) += timer
-DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += vhost vdpa
+DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += vhost vdpa vhost_blk
 ifeq ($(CONFIG_RTE_LIBRTE_CRYPTODEV),y)
 DIRS-$(CONFIG_RTE_LIBRTE_VHOST) += vhost_crypto
 endif

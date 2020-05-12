@@ -24,6 +24,8 @@
 #define MAX_TX_QUEUES		16
 #define MAX_DPNI		8
 
+#define DPAA2_RX_DEFAULT_NBDESC 512
+
 /*default tc to be used for ,congestion, distribution etc configuration. */
 #define DPAA2_DEF_TC		0
 
@@ -198,7 +200,7 @@ uint16_t dpaa2_dev_tx_ordered(void *queue, struct rte_mbuf **bufs,
 uint16_t dummy_dev_tx(void *queue, struct rte_mbuf **bufs, uint16_t nb_pkts);
 void dpaa2_dev_free_eqresp_buf(uint16_t eqresp_ci);
 void dpaa2_flow_clean(struct rte_eth_dev *dev);
-uint16_t dpaa2_dev_tx_conf(void *queue)  __attribute__((unused));
+uint16_t dpaa2_dev_tx_conf(void *queue)  __rte_unused;
 
 #if defined(RTE_LIBRTE_IEEE1588)
 int dpaa2_timesync_enable(struct rte_eth_dev *dev);

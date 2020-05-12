@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  * Copyright 2017,2019 NXP
- * Copyright(c) 2017 Intel Corporation.
+ * Copyright(c) 2017-2020 Intel Corporation.
  */
 
 #ifndef _RTE_SECURITY_H_
@@ -212,6 +212,10 @@ struct rte_security_ipsec_xform {
 	/**< Tunnel parameters, NULL for transport mode */
 	uint64_t esn_soft_limit;
 	/**< ESN for which the overflow event need to be raised */
+	uint32_t replay_win_sz;
+	/**< Anti replay window size to enable sequence replay attack handling.
+	 * replay checking is disabled if the window size is 0.
+	 */
 };
 
 /**
@@ -303,9 +307,13 @@ enum rte_security_session_action_type {
 	/**< All security protocol processing is performed inline during
 	 * transmission
 	 */
-	RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL
+	RTE_SECURITY_ACTION_TYPE_LOOKASIDE_PROTOCOL,
 	/**< All security protocol processing including crypto is performed
 	 * on a lookaside accelerator
+	 */
+	RTE_SECURITY_ACTION_TYPE_CPU_CRYPTO
+	/**< Similar to ACTION_TYPE_NONE but crypto processing for security
+	 * protocol is processed synchronously by a CPU.
 	 */
 };
 
@@ -370,7 +378,7 @@ rte_security_session_create(struct rte_security_ctx *instance,
  * @param   conf	update configuration parameters
  * @return
  *  - On success returns 0
- *  - On failure return errno
+ *  - On failure returns a negative errno value.
  */
 __rte_experimental
 int
@@ -395,12 +403,14 @@ rte_security_session_get_size(struct rte_security_ctx *instance);
  * return it to its original mempool.
  *
  * @param   instance	security instance
- * @param   sess	security session to freed
+ * @param   sess	security session to be freed
  *
  * @return
  *  - 0 if successful.
- *  - -EINVAL if session is NULL.
+ *  - -EINVAL if session or context instance is NULL.
  *  - -EBUSY if not all device private data has been freed.
+ *  - -ENOTSUP if destroying private data is not supported.
+ *  - other negative values in case of freeing private data errors.
  */
 int
 rte_security_session_destroy(struct rte_security_ctx *instance,
@@ -563,6 +573,10 @@ struct rte_security_capability {
 			/**< IPsec SA direction */
 			struct rte_security_ipsec_sa_options options;
 			/**< IPsec SA supported options */
+			uint32_t replay_win_sz_max;
+			/**< IPsec Anti Replay Window Size. A '0' value
+			 * indicates that Anti Replay is not supported.
+			 */
 		} ipsec;
 		/**< IPsec capability */
 		struct {

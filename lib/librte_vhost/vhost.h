@@ -350,7 +350,7 @@ struct virtio_net {
 	uint32_t		flags;
 	uint16_t		vhost_hlen;
 	/* to tell if we need broadcast rarp packet */
-	rte_atomic16_t		broadcast_rarp;
+	int16_t			broadcast_rarp;
 	uint32_t		nr_vring;
 	int			dequeue_zero_copy;
 	int			extbuf;
@@ -462,14 +462,23 @@ static __rte_always_inline void
 vhost_log_cache_used_vring(struct virtio_net *dev, struct vhost_virtqueue *vq,
 			uint64_t offset, uint64_t len)
 {
-	vhost_log_cache_write(dev, vq, vq->log_guest_addr + offset, len);
+	if (unlikely(dev->features & (1ULL << VHOST_F_LOG_ALL))) {
+		if (unlikely(vq->log_guest_addr == 0))
+			return;
+		__vhost_log_cache_write(dev, vq, vq->log_guest_addr + offset,
+					len);
+	}
 }
 
 static __rte_always_inline void
 vhost_log_used_vring(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		     uint64_t offset, uint64_t len)
 {
-	vhost_log_write(dev, vq->log_guest_addr + offset, len);
+	if (unlikely(dev->features & (1ULL << VHOST_F_LOG_ALL))) {
+		if (unlikely(vq->log_guest_addr == 0))
+			return;
+		__vhost_log_write(dev, vq->log_guest_addr + offset, len);
+	}
 }
 
 static __rte_always_inline void
@@ -498,14 +507,21 @@ vhost_log_write_iova(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		__vhost_log_write(dev, iova, len);
 }
 
-/* Macros for printing using RTE_LOG */
-#define RTE_LOGTYPE_VHOST_CONFIG RTE_LOGTYPE_USER1
-#define RTE_LOGTYPE_VHOST_DATA   RTE_LOGTYPE_USER1
+extern int vhost_config_log_level;
+extern int vhost_data_log_level;
+
+#define VHOST_LOG_CONFIG(level, fmt, args...)			\
+	rte_log(RTE_LOG_ ## level, vhost_config_log_level,	\
+		"VHOST_CONFIG: " fmt, ##args)
+
+#define VHOST_LOG_DATA(level, fmt, args...) \
+	(void)((RTE_LOG_ ## level <= RTE_LOG_DP_LEVEL) ?	\
+	 rte_log(RTE_LOG_ ## level,  vhost_data_log_level,	\
+		"VHOST_DATA : " fmt, ##args) :			\
+	 0)
 
 #ifdef RTE_LIBRTE_VHOST_DEBUG
 #define VHOST_MAX_PRINT_BUFF 6072
-#define VHOST_LOG_DEBUG(log_type, fmt, args...) \
-	RTE_LOG(DEBUG, log_type, fmt, ##args)
 #define PRINT_PACKET(device, addr, size, header) do { \
 	char *pkt_addr = (char *)(addr); \
 	unsigned int index; \
@@ -521,16 +537,30 @@ vhost_log_write_iova(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	} \
 	snprintf(packet + strnlen(packet, VHOST_MAX_PRINT_BUFF), VHOST_MAX_PRINT_BUFF - strnlen(packet, VHOST_MAX_PRINT_BUFF), "\n"); \
 	\
-	VHOST_LOG_DEBUG(VHOST_DATA, "%s", packet); \
+	VHOST_LOG_DATA(DEBUG, "%s", packet); \
 } while (0)
 #else
-#define VHOST_LOG_DEBUG(log_type, fmt, args...) do {} while (0)
 #define PRINT_PACKET(device, addr, size, header) do {} while (0)
 #endif
 
-extern uint64_t VHOST_FEATURES;
 #define MAX_VHOST_DEVICE	1024
 extern struct virtio_net *vhost_devices[MAX_VHOST_DEVICE];
+
+#define VHOST_BINARY_SEARCH_THRESH 256
+
+static __rte_always_inline int guest_page_addrcmp(const void *p1,
+						const void *p2)
+{
+	const struct guest_page *page1 = (const struct guest_page *)p1;
+	const struct guest_page *page2 = (const struct guest_page *)p2;
+
+	if (page1->guest_phys_addr > page2->guest_phys_addr)
+		return 1;
+	if (page1->guest_phys_addr < page2->guest_phys_addr)
+		return -1;
+
+	return 0;
+}
 
 /* Convert guest physical address to host physical address */
 static __rte_always_inline rte_iova_t
@@ -538,14 +568,26 @@ gpa_to_hpa(struct virtio_net *dev, uint64_t gpa, uint64_t size)
 {
 	uint32_t i;
 	struct guest_page *page;
+	struct guest_page key;
 
-	for (i = 0; i < dev->nr_guest_pages; i++) {
-		page = &dev->guest_pages[i];
+	if (dev->nr_guest_pages >= VHOST_BINARY_SEARCH_THRESH) {
+		key.guest_phys_addr = gpa;
+		page = bsearch(&key, dev->guest_pages, dev->nr_guest_pages,
+			       sizeof(struct guest_page), guest_page_addrcmp);
+		if (page) {
+			if (gpa + size < page->guest_phys_addr + page->size)
+				return gpa - page->guest_phys_addr +
+					page->host_phys_addr;
+		}
+	} else {
+		for (i = 0; i < dev->nr_guest_pages; i++) {
+			page = &dev->guest_pages[i];
 
-		if (gpa >= page->guest_phys_addr &&
-		    gpa + size < page->guest_phys_addr + page->size) {
-			return gpa - page->guest_phys_addr +
-			       page->host_phys_addr;
+			if (gpa >= page->guest_phys_addr &&
+			    gpa + size < page->guest_phys_addr +
+			    page->size)
+				return gpa - page->guest_phys_addr +
+				       page->host_phys_addr;
 		}
 	}
 
@@ -578,7 +620,7 @@ get_device(int vid)
 	struct virtio_net *dev = vhost_devices[vid];
 
 	if (unlikely(!dev)) {
-		RTE_LOG(ERR, VHOST_CONFIG,
+		VHOST_LOG_CONFIG(ERR,
 			"(%d) device not found.\n", vid);
 	}
 
@@ -620,6 +662,8 @@ void *vhost_alloc_copy_ind_table(struct virtio_net *dev,
 			struct vhost_virtqueue *vq,
 			uint64_t desc_addr, uint64_t desc_len);
 int vring_translate(struct virtio_net *dev, struct vhost_virtqueue *vq);
+uint64_t translate_log_addr(struct virtio_net *dev, struct vhost_virtqueue *vq,
+		uint64_t log_addr);
 void vring_invalidate(struct virtio_net *dev, struct vhost_virtqueue *vq);
 
 static __rte_always_inline uint64_t
@@ -664,7 +708,7 @@ vhost_vring_call_split(struct virtio_net *dev, struct vhost_virtqueue *vq)
 		vq->signalled_used = new;
 		vq->signalled_used_valid = true;
 
-		VHOST_LOG_DEBUG(VHOST_DATA, "%s: used_event_idx=%d, old=%d, new=%d\n",
+		VHOST_LOG_DATA(DEBUG, "%s: used_event_idx=%d, old=%d, new=%d\n",
 			__func__,
 			vhost_used_event(vq),
 			old, new);

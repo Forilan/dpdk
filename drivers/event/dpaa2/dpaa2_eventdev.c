@@ -74,7 +74,9 @@ dpaa2_eventdev_enqueue_burst(void *port, const struct rte_event ev[],
 		/* Affine current thread context to a qman portal */
 		ret = dpaa2_affine_qbman_swp();
 		if (ret < 0) {
-			DPAA2_EVENTDEV_ERR("Failure in affining portal");
+			DPAA2_EVENTDEV_ERR(
+				"Failed to allocate IO portal, tid: %d\n",
+				rte_gettid());
 			return 0;
 		}
 	}
@@ -273,7 +275,9 @@ dpaa2_eventdev_dequeue_burst(void *port, struct rte_event ev[],
 		/* Affine current thread context to a qman portal */
 		ret = dpaa2_affine_qbman_swp();
 		if (ret < 0) {
-			DPAA2_EVENTDEV_ERR("Failure in affining portal");
+			DPAA2_EVENTDEV_ERR(
+				"Failed to allocate IO portal, tid: %d\n",
+				rte_gettid());
 			return 0;
 		}
 	}
@@ -391,7 +395,7 @@ dpaa2_eventdev_info_get(struct rte_eventdev *dev,
 	dev_info->max_event_priority_levels =
 		DPAA2_EVENT_MAX_EVENT_PRIORITY_LEVELS;
 	dev_info->max_event_ports = rte_fslmc_get_device_count(DPAA2_IO);
-	/* we only support dpio upto number of cores*/
+	/* we only support dpio up to number of cores */
 	if (dev_info->max_event_ports > rte_lcore_count())
 		dev_info->max_event_ports = rte_lcore_count();
 	dev_info->max_event_port_dequeue_depth =
@@ -477,9 +481,10 @@ dpaa2_eventdev_queue_def_conf(struct rte_eventdev *dev, uint8_t queue_id,
 
 	RTE_SET_USED(dev);
 	RTE_SET_USED(queue_id);
-	RTE_SET_USED(queue_conf);
 
 	queue_conf->nb_atomic_flows = DPAA2_EVENT_QUEUE_ATOMIC_FLOWS;
+	queue_conf->nb_atomic_order_sequences =
+				DPAA2_EVENT_QUEUE_ORDER_SEQUENCES;
 	queue_conf->schedule_type = RTE_SCHED_TYPE_PARALLEL;
 	queue_conf->priority = RTE_EVENT_DEV_PRIORITY_NORMAL;
 }
@@ -496,8 +501,9 @@ dpaa2_eventdev_queue_setup(struct rte_eventdev *dev, uint8_t queue_id,
 	switch (queue_conf->schedule_type) {
 	case RTE_SCHED_TYPE_PARALLEL:
 	case RTE_SCHED_TYPE_ATOMIC:
-		break;
 	case RTE_SCHED_TYPE_ORDERED:
+		break;
+	default:
 		DPAA2_EVENTDEV_ERR("Schedule type is not supported.");
 		return -1;
 	}

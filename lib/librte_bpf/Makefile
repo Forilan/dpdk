@@ -8,7 +8,6 @@ LIB = librte_bpf.a
 
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS) -I$(SRCDIR)
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 LDLIBS += -lrte_net -lrte_eal
 LDLIBS += -lrte_mempool -lrte_ring
 LDLIBS += -lrte_mbuf -lrte_ethdev
@@ -17,8 +16,6 @@ LDLIBS += -lelf
 endif
 
 EXPORT_MAP := rte_bpf_version.map
-
-LIBABIVER := 1
 
 # all source are stored in SRCS-y
 SRCS-$(CONFIG_RTE_LIBRTE_BPF) += bpf.c

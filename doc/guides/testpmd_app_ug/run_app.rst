@@ -77,6 +77,13 @@ The command line options are:
 
     Set the hexadecimal bitmask of the ports used by the packet forwarding test.
 
+*   ``--portlist=X``
+
+      Set the forwarding ports based on the user input used by the packet forwarding test.
+      '-' denotes a range of ports to set including the two specified port IDs
+      ',' separates multiple port values.
+      Possible examples like --portlist=0,1 or --portlist=0-2 or --portlist=0,1-2 etc
+
 *   ``--numa``
 
     Enable NUMA-aware allocation of RX/TX rings and of RX memory buffers
@@ -112,6 +119,10 @@ The command line options are:
 
     Set the maximum packet size to N bytes, where N >= 64. The default value is 1518.
 
+*   ``--max-lro-pkt-size=N``
+
+    Set the maximum LRO aggregated packet size to N bytes, where N >= 64.
+
 *   ``--eth-peers-configfile=name``
 
     Use a configuration file containing the Ethernet addresses of the peer ports.
@@ -129,9 +140,9 @@ The command line options are:
 *   ``--tx-ip=SRC,DST``
 
     Set the source and destination IP address used when doing transmit only test.
-    The defaults address values are source 192.18.0.1 and
-    destination 192.18.0.2. These are special purpose addresses
-    reserved for benchmarking (RFC 2544).
+    The defaults address values are source 198.18.0.1 and
+    destination 198.18.0.2. These are special purpose addresses
+    reserved for benchmarking (RFC 5735).
 
 *   ``--tx-udp=SRC[,DST]``
 
@@ -266,6 +277,17 @@ The command line options are:
     Set the number of descriptors in the TX rings to N, where N > 0.
     The default value is 512.
 
+*   ``--hairpinq=N``
+
+    Set the number of hairpin queues per port to N, where 1 <= N <= 65535.
+    The default value is 0. The number of hairpin queues are added to the
+    number of TX queues and to the number of RX queues. then the first
+    RX hairpin is binded to the first TX hairpin, the second RX hairpin is
+    binded to the second TX hairpin and so on. The index of the first
+    RX hairpin queue is the number of RX queues as configured using --rxq.
+    The index of the first TX hairpin queue is the number of TX queues
+    as configured using --txq.
+
 *   ``--burst=N``
 
     Set the number of packets per burst to N, where 1 <= N <= 512.
@@ -366,12 +388,12 @@ The command line options are:
 
     Set the logical core N to perform bitrate calculation.
 
-*   ``--print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|all>``
+*   ``--print-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|flow_aged|all>``
 
     Enable printing the occurrence of the designated event. Using all will
     enable all of them.
 
-*   ``--mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|all>``
+*   ``--mask-event <unknown|intr_lsc|queue_state|intr_reset|vf_mbox|macsec|intr_rmv|dev_probed|dev_released|flow_aged|all>``
 
     Disable printing the occurrence of the designated event. Using all will
     disable all of them.
@@ -459,3 +481,10 @@ The command line options are:
 
     Enable to create mempool which is not IOVA contiguous. Valid only with --mp-alloc=anon.
     The default value is 0.
+
+*   ``--rx-mq-mode``
+
+    Set the hexadecimal bitmask of RX multi queue mode which can be enabled.
+    The default value is 0x7::
+
+       ETH_MQ_RX_RSS_FLAG | ETH_MQ_RX_DCB_FLAG | ETH_MQ_RX_VMDQ_FLAG

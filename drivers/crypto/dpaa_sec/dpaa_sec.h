@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: BSD-3-Clause
  *
- *   Copyright 2016 NXP
+ *   Copyright 2016-2020 NXP
  *
  */
 
@@ -117,6 +117,9 @@ struct sec_pdcp_ctxt {
 };
 #endif
 typedef struct dpaa_sec_session_entry {
+	struct sec_cdb cdb;	/**< cmd block associated with qp */
+	struct dpaa_sec_qp *qp[MAX_DPAA_CORES];
+	struct qman_fq *inq[MAX_DPAA_CORES];
 	uint8_t dir;         /*!< Operation Direction */
 	uint8_t ctxt;	/*!< Session Context Type */
 	enum rte_crypto_cipher_algorithm cipher_alg; /*!< Cipher Algorithm*/
@@ -169,9 +172,6 @@ typedef struct dpaa_sec_session_entry {
 		struct sec_pdcp_ctxt pdcp;
 #endif
 	};
-	struct dpaa_sec_qp *qp[MAX_DPAA_CORES];
-	struct qman_fq *inq[MAX_DPAA_CORES];
-	struct sec_cdb cdb;	/**< cmd block associated with qp */
 } dpaa_sec_session;
 
 struct dpaa_sec_qp {
@@ -218,6 +218,27 @@ struct dpaa_sec_op_ctx {
 };
 
 static const struct rte_cryptodev_capabilities dpaa_sec_capabilities[] = {
+	{	/* NULL (AUTH) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_AUTH,
+			{.auth = {
+				.algo = RTE_CRYPTO_AUTH_NULL,
+				.block_size = 1,
+				.key_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				},
+				.digest_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				},
+				.iv_size = { 0 }
+			}, },
+		}, },
+	},
 	{	/* MD5 HMAC */
 		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
 		{.sym = {
@@ -372,6 +393,26 @@ static const struct rte_cryptodev_capabilities dpaa_sec_capabilities[] = {
 					.increment = 0
 				},
 			}, }
+		}, }
+	},
+	{	/* NULL (CIPHER) */
+		.op = RTE_CRYPTO_OP_TYPE_SYMMETRIC,
+		{.sym = {
+			.xform_type = RTE_CRYPTO_SYM_XFORM_CIPHER,
+			{.cipher = {
+				.algo = RTE_CRYPTO_CIPHER_NULL,
+				.block_size = 1,
+				.key_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				},
+				.iv_size = {
+					.min = 0,
+					.max = 0,
+					.increment = 0
+				}
+			}, },
 		}, }
 	},
 	{	/* AES CBC */
@@ -692,7 +733,8 @@ static const struct rte_security_capability dpaa_sec_security_cap[] = {
 			.proto = RTE_SECURITY_IPSEC_SA_PROTO_ESP,
 			.mode = RTE_SECURITY_IPSEC_SA_MODE_TUNNEL,
 			.direction = RTE_SECURITY_IPSEC_SA_DIR_EGRESS,
-			.options = { 0 }
+			.options = { 0 },
+			.replay_win_sz_max = 128
 		},
 		.crypto_capabilities = dpaa_sec_capabilities
 	},
@@ -703,7 +745,8 @@ static const struct rte_security_capability dpaa_sec_security_cap[] = {
 			.proto = RTE_SECURITY_IPSEC_SA_PROTO_ESP,
 			.mode = RTE_SECURITY_IPSEC_SA_MODE_TUNNEL,
 			.direction = RTE_SECURITY_IPSEC_SA_DIR_INGRESS,
-			.options = { 0 }
+			.options = { 0 },
+			.replay_win_sz_max = 128
 		},
 		.crypto_capabilities = dpaa_sec_capabilities
 	},
@@ -712,6 +755,7 @@ static const struct rte_security_capability dpaa_sec_security_cap[] = {
 		.protocol = RTE_SECURITY_PROTOCOL_PDCP,
 		.pdcp = {
 			.domain = RTE_SECURITY_PDCP_MODE_DATA,
+			.capa_flags = 0
 		},
 		.crypto_capabilities = dpaa_pdcp_capabilities
 	},
@@ -720,6 +764,7 @@ static const struct rte_security_capability dpaa_sec_security_cap[] = {
 		.protocol = RTE_SECURITY_PROTOCOL_PDCP,
 		.pdcp = {
 			.domain = RTE_SECURITY_PDCP_MODE_CONTROL,
+			.capa_flags = 0
 		},
 		.crypto_capabilities = dpaa_pdcp_capabilities
 	},

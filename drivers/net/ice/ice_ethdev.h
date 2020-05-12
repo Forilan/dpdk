@@ -42,6 +42,13 @@
 
 #define ICE_MAX_PKT_TYPE  1024
 
+/* DDP package search path */
+#define ICE_PKG_FILE_DEFAULT "/lib/firmware/intel/ice/ddp/ice.pkg"
+#define ICE_PKG_FILE_UPDATES "/lib/firmware/updates/intel/ice/ddp/ice.pkg"
+#define ICE_PKG_FILE_SEARCH_PATH_DEFAULT "/lib/firmware/intel/ice/ddp/"
+#define ICE_PKG_FILE_SEARCH_PATH_UPDATES "/lib/firmware/updates/intel/ice/ddp/"
+#define ICE_MAX_PKG_FILENAME_SIZE   256
+
 /**
  * vlan_id is a 12 bit number.
  * The VFTA array is actually a 4096 bit array, 128 of 32bit elements.
@@ -241,10 +248,20 @@ struct ice_vsi {
 	bool offset_loaded;
 };
 
+enum proto_xtr_type {
+	PROTO_XTR_NONE,
+	PROTO_XTR_VLAN,
+	PROTO_XTR_IPV4,
+	PROTO_XTR_IPV6,
+	PROTO_XTR_IPV6_FLOW,
+	PROTO_XTR_TCP,
+};
+
 enum ice_fdir_tunnel_type {
 	ICE_FDIR_TUNNEL_TYPE_NONE = 0,
 	ICE_FDIR_TUNNEL_TYPE_VXLAN,
 	ICE_FDIR_TUNNEL_TYPE_GTPU,
+	ICE_FDIR_TUNNEL_TYPE_GTPU_EH,
 };
 
 struct rte_flow;
@@ -325,6 +342,7 @@ struct ice_fdir_info {
 	struct ice_rx_queue *rxq;
 	void *prg_pkt;                 /* memory for fdir program packet */
 	uint64_t dma_addr;             /* physic address of packet memory*/
+	const struct rte_memzone *mz;
 	struct ice_fdir_filter_conf conf;
 
 	struct ice_fdir_filter_conf **hash_map;
@@ -366,9 +384,11 @@ struct ice_pf {
 	bool offset_loaded;
 	bool adapter_stopped;
 	struct ice_flow_list flow_list;
+	rte_spinlock_t flow_ops_lock;
 	struct ice_parser_list rss_parser_list;
 	struct ice_parser_list perm_parser_list;
 	struct ice_parser_list dist_parser_list;
+	bool init_link_up;
 };
 
 #define ICE_MAX_QUEUE_NUM  2048
@@ -380,6 +400,7 @@ struct ice_devargs {
 	int safe_mode_support;
 	uint8_t proto_xtr_dflt;
 	int pipe_mode_support;
+	int flow_mark_support;
 	uint8_t proto_xtr[ICE_MAX_QUEUE_NUM];
 };
 
@@ -444,10 +465,14 @@ struct ice_vsi_vlan_pvid_info {
 #define ICE_PF_TO_ETH_DEV(pf) \
 	(((struct ice_pf *)pf)->adapter->eth_dev)
 
+enum ice_pkg_type ice_load_pkg_type(struct ice_hw *hw);
 struct ice_vsi *
 ice_setup_vsi(struct ice_pf *pf, enum ice_vsi_type type);
 int
 ice_release_vsi(struct ice_vsi *vsi);
+void ice_vsi_enable_queues_intr(struct ice_vsi *vsi);
+void ice_vsi_disable_queues_intr(struct ice_vsi *vsi);
+void ice_vsi_queues_bind_intr(struct ice_vsi *vsi);
 
 static inline int
 ice_align_floor(int n)

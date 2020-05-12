@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: BSD-3-Clause
- * Copyright(c) 2001-2019
+ * Copyright(c) 2001-2020
  */
 
 #ifndef _ICE_PROTOCOL_TYPE_H_
@@ -46,6 +46,11 @@ enum ice_protocol_type {
 	ICE_NVGRE,
 	ICE_GTP,
 	ICE_PPPOE,
+	ICE_PFCP,
+	ICE_L2TPV3,
+	ICE_ESP,
+	ICE_AH,
+	ICE_NAT_T,
 	ICE_PROTOCOL_LAST
 };
 
@@ -61,6 +66,22 @@ enum ice_sw_tunnel_type {
 			 */
 	ICE_SW_TUN_GTP,
 	ICE_SW_TUN_PPPOE,
+	ICE_SW_TUN_IPV4_ESP,
+	ICE_SW_TUN_IPV6_ESP,
+	ICE_SW_TUN_IPV4_AH,
+	ICE_SW_TUN_IPV6_AH,
+	ICE_SW_TUN_IPV4_NAT_T,
+	ICE_SW_TUN_IPV6_NAT_T,
+	ICE_SW_TUN_IPV4_L2TPV3,
+	ICE_SW_TUN_IPV6_L2TPV3,
+	ICE_SW_TUN_PROFID_IPV6_ESP,
+	ICE_SW_TUN_PROFID_IPV6_AH,
+	ICE_SW_TUN_PROFID_MAC_IPV6_L2TPV3,
+	ICE_SW_TUN_PROFID_IPV6_NAT_T,
+	ICE_SW_TUN_PROFID_IPV4_PFCP_NODE,
+	ICE_SW_TUN_PROFID_IPV4_PFCP_SESSION,
+	ICE_SW_TUN_PROFID_IPV6_PFCP_NODE,
+	ICE_SW_TUN_PROFID_IPV6_PFCP_SESSION,
 	ICE_ALL_TUNNELS /* All tunnel types including NVGRE */
 };
 
@@ -104,6 +125,7 @@ enum ice_prot_id {
 	ICE_PROT_VRRP_F		= 101,
 	ICE_PROT_OSPF		= 102,
 	ICE_PROT_PPPOE		= 103,
+	ICE_PROT_L2TPV3		= 104,
 	ICE_PROT_ATAOE_OF	= 114,
 	ICE_PROT_CTRL_OF	= 116,
 	ICE_PROT_LLDP_OF	= 117,
@@ -125,8 +147,11 @@ enum ice_prot_id {
 #define ICE_IPV6_IL_HW		41
 #define ICE_TCP_IL_HW		49
 #define ICE_UDP_ILOS_HW		53
+#define ICE_ESP_HW			88
+#define ICE_AH_HW			89
 #define ICE_SCTP_IL_HW		96
 #define ICE_PPPOE_HW		103
+#define ICE_L2TPV3_HW		104
 
 /* ICE_UDP_OF is used to identify all 3 tunnel types
  * VXLAN, GENEVE and VXLAN_GPE. To differentiate further
@@ -155,38 +180,47 @@ struct ice_ether_hdr {
 };
 
 struct ice_ethtype_hdr {
-	u16 ethtype_id;
+	__be16 ethtype_id;
 };
 
 struct ice_ether_vlan_hdr {
 	u8 dst_addr[ETH_ALEN];
 	u8 src_addr[ETH_ALEN];
-	u32 vlan_id;
+	__be32 vlan_id;
 };
 
 struct ice_vlan_hdr {
-	u16 vlan;
-	u16 type;
+	__be16 vlan;
+	__be16 type;
 };
 
 struct ice_ipv4_hdr {
 	u8 version;
 	u8 tos;
-	u16 total_length;
-	u16 id;
-	u16 frag_off;
+	__be16 total_length;
+	__be16 id;
+	__be16 frag_off;
 	u8 time_to_live;
 	u8 protocol;
-	u16 check;
-	u32 src_addr;
-	u32 dst_addr;
+	__be16 check;
+	__be32 src_addr;
+	__be32 dst_addr;
+};
+
+struct ice_le_ver_tc_flow {
+	union {
+		struct {
+			u32 flow_label : 20;
+			u32 tc : 8;
+			u32 version : 4;
+		} fld;
+		u32 val;
+	} u;
 };
 
 struct ice_ipv6_hdr {
-	u32 version:4;
-	u32 tc:8;
-	u32 flow_label:20;
-	u16 payload_len;
+	__be32 be_ver_tc_flow;
+	__be16 payload_len;
 	u8 next_hdr;
 	u8 hop_limit;
 	u8 src_addr[ICE_IPV6_ADDR_LENGTH];
@@ -194,32 +228,31 @@ struct ice_ipv6_hdr {
 };
 
 struct ice_sctp_hdr {
-	u16 src_port;
-	u16 dst_port;
-	u32 verification_tag;
-	u32 check;
+	__be16 src_port;
+	__be16 dst_port;
+	__be32 verification_tag;
+	__be32 check;
 };
 
 struct ice_l4_hdr {
-	u16 src_port;
-	u16 dst_port;
-	u16 len;
-	u16 check;
+	__be16 src_port;
+	__be16 dst_port;
+	__be16 len;
+	__be16 check;
 };
 
 struct ice_udp_tnl_hdr {
-	u16 field;
-	u16 proto_type;
-	u32 vni;	/* only use lower 24-bits */
+	__be16 field;
+	__be16 proto_type;
+	__be32 vni;	/* only use lower 24-bits */
 };
 
-#pragma pack(1)
 struct ice_udp_gtp_hdr {
 	u8 flags;
 	u8 msg_type;
-	u16 rsrvd_len;
-	u32 teid;
-	u16 rsrvd_seq_nbr;
+	__be16 rsrvd_len;
+	__be32 teid;
+	__be16 rsrvd_seq_nbr;
 	u8 rsrvd_n_pdu_nbr;
 	u8 rsrvd_next_ext;
 	u8 rsvrd_ext_len;
@@ -230,17 +263,47 @@ struct ice_udp_gtp_hdr {
 
 struct ice_pppoe_hdr {
 	u8 rsrvd_ver_type;
-	u8 rsrved_code;
-	u16 session_id;
-	u16 length;
-	u16 ppp_prot_id; /* control and data only */
+	u8 rsrvd_code;
+	__be16 session_id;
+	__be16 length;
+	__be16 ppp_prot_id; /* control and data only */
 };
-#pragma pack()
+
+struct ice_pfcp_hdr {
+	u8 flags;
+	u8 msg_type;
+	__be16 length;
+	__be64 seid;
+	__be32 seq;
+	u8 spare;
+};
+
+struct ice_l2tpv3_sess_hdr {
+	__be32 session_id;
+	__be64 cookie;
+};
+
+struct ice_esp_hdr {
+	__be32 spi;
+	__be32 seq;
+};
+
+struct ice_ah_hdr {
+	u8 next_hdr;
+	u8 paylen;
+	__be16 rsrvd;
+	__be32 spi;
+	__be32 seq;
+};
+
+struct ice_nat_t_hdr {
+	struct ice_esp_hdr esp;
+};
 
 struct ice_nvgre {
-	u16 flags;
-	u16 protocol;
-	u32 tni_flow;
+	__be16 flags;
+	__be16 protocol;
+	__be32 tni_flow;
 };
 
 union ice_prot_hdr {
@@ -255,6 +318,11 @@ union ice_prot_hdr {
 	struct ice_nvgre nvgre_hdr;
 	struct ice_udp_gtp_hdr gtp_hdr;
 	struct ice_pppoe_hdr pppoe_hdr;
+	struct ice_pfcp_hdr pfcp_hdr;
+	struct ice_l2tpv3_sess_hdr l2tpv3_sess_hdr;
+	struct ice_esp_hdr esp_hdr;
+	struct ice_ah_hdr ah_hdr;
+	struct ice_nat_t_hdr nat_t_hdr;
 };
 
 /* This is mapping table entry that maps every word within a given protocol

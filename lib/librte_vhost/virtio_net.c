@@ -43,6 +43,36 @@ is_valid_virt_queue_idx(uint32_t idx, int is_tx, uint32_t nr_vring)
 	return (is_tx ^ (idx & 1)) == 0 && idx < nr_vring;
 }
 
+static inline void
+do_data_copy_enqueue(struct virtio_net *dev, struct vhost_virtqueue *vq)
+{
+	struct batch_copy_elem *elem = vq->batch_copy_elems;
+	uint16_t count = vq->batch_copy_nb_elems;
+	int i;
+
+	for (i = 0; i < count; i++) {
+		rte_memcpy(elem[i].dst, elem[i].src, elem[i].len);
+		vhost_log_cache_write_iova(dev, vq, elem[i].log_addr,
+					   elem[i].len);
+		PRINT_PACKET(dev, (uintptr_t)elem[i].dst, elem[i].len, 0);
+	}
+
+	vq->batch_copy_nb_elems = 0;
+}
+
+static inline void
+do_data_copy_dequeue(struct vhost_virtqueue *vq)
+{
+	struct batch_copy_elem *elem = vq->batch_copy_elems;
+	uint16_t count = vq->batch_copy_nb_elems;
+	int i;
+
+	for (i = 0; i < count; i++)
+		rte_memcpy(elem[i].dst, elem[i].src, elem[i].len);
+
+	vq->batch_copy_nb_elems = 0;
+}
+
 static __rte_always_inline void
 do_flush_shadow_used_ring_split(struct virtio_net *dev,
 			struct vhost_virtqueue *vq,
@@ -77,11 +107,10 @@ flush_shadow_used_ring_split(struct virtio_net *dev, struct vhost_virtqueue *vq)
 	}
 	vq->last_used_idx += vq->shadow_used_idx;
 
-	rte_smp_wmb();
-
 	vhost_log_cache_sync(dev, vq);
 
-	*(volatile uint16_t *)&vq->used->idx += vq->shadow_used_idx;
+	__atomic_add_fetch(&vq->used->idx, vq->shadow_used_idx,
+			   __ATOMIC_RELEASE);
 	vq->shadow_used_idx = 0;
 	vhost_log_used_vring(dev, vq, offsetof(struct vring_used, idx),
 		sizeof(vq->used->idx));
@@ -185,6 +214,11 @@ vhost_flush_enqueue_batch_packed(struct virtio_net *dev,
 {
 	uint16_t i;
 	uint16_t flags;
+
+	if (vq->shadow_used_idx) {
+		do_data_copy_enqueue(dev, vq);
+		vhost_flush_enqueue_shadow_packed(dev, vq);
+	}
 
 	flags = PACKED_DESC_ENQUEUE_USED_FLAG(vq->used_wrap_counter);
 
@@ -325,36 +359,6 @@ vhost_shadow_dequeue_single_packed_inorder(struct vhost_virtqueue *vq,
 	vq_inc_last_used_packed(vq, count);
 }
 
-static inline void
-do_data_copy_enqueue(struct virtio_net *dev, struct vhost_virtqueue *vq)
-{
-	struct batch_copy_elem *elem = vq->batch_copy_elems;
-	uint16_t count = vq->batch_copy_nb_elems;
-	int i;
-
-	for (i = 0; i < count; i++) {
-		rte_memcpy(elem[i].dst, elem[i].src, elem[i].len);
-		vhost_log_cache_write_iova(dev, vq, elem[i].log_addr,
-					   elem[i].len);
-		PRINT_PACKET(dev, (uintptr_t)elem[i].dst, elem[i].len, 0);
-	}
-
-	vq->batch_copy_nb_elems = 0;
-}
-
-static inline void
-do_data_copy_dequeue(struct vhost_virtqueue *vq)
-{
-	struct batch_copy_elem *elem = vq->batch_copy_elems;
-	uint16_t count = vq->batch_copy_nb_elems;
-	int i;
-
-	for (i = 0; i < count; i++)
-		rte_memcpy(elem[i].dst, elem[i].src, elem[i].len);
-
-	vq->batch_copy_nb_elems = 0;
-}
-
 static __rte_always_inline void
 vhost_shadow_enqueue_single_packed(struct virtio_net *dev,
 				   struct vhost_virtqueue *vq,
@@ -379,25 +383,6 @@ vhost_shadow_enqueue_single_packed(struct virtio_net *dev,
 	if (vq->shadow_aligned_idx >= PACKED_BATCH_SIZE) {
 		do_data_copy_enqueue(dev, vq);
 		vhost_flush_enqueue_shadow_packed(dev, vq);
-	}
-}
-
-static __rte_always_inline void
-vhost_flush_dequeue_packed(struct virtio_net *dev,
-			   struct vhost_virtqueue *vq)
-{
-	int shadow_count;
-	if (!vq->shadow_used_idx)
-		return;
-
-	shadow_count = vq->last_used_idx - vq->shadow_last_used_idx;
-	if (shadow_count <= 0)
-		shadow_count += vq->size;
-
-	if ((uint32_t)shadow_count >= (vq->size - MAX_PKT_BURST)) {
-		do_data_copy_dequeue(vq);
-		vhost_flush_dequeue_shadow_packed(dev, vq);
-		vhost_vring_call_packed(dev, vq);
 	}
 }
 
@@ -825,7 +810,7 @@ copy_mbuf_to_desc(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	else
 		hdr = (struct virtio_net_hdr_mrg_rxbuf *)(uintptr_t)hdr_addr;
 
-	VHOST_LOG_DEBUG(VHOST_DATA, "(%d) RX: num merge buffers %d\n",
+	VHOST_LOG_DATA(DEBUG, "(%d) RX: num merge buffers %d\n",
 		dev->vid, num_buffers);
 
 	if (unlikely(buf_len < dev->vhost_hlen)) {
@@ -992,13 +977,11 @@ virtio_dev_rx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 	struct buf_vector buf_vec[BUF_VECTOR_MAX];
 	uint16_t avail_head;
 
-	avail_head = *((volatile uint16_t *)&vq->avail->idx);
-
 	/*
 	 * The ordering between avail index and
 	 * desc reads needs to be enforced.
 	 */
-	rte_smp_rmb();
+	avail_head = __atomic_load_n(&vq->avail->idx, __ATOMIC_ACQUIRE);
 
 	rte_prefetch0(&vq->avail->ring[vq->last_avail_idx & (vq->size - 1)]);
 
@@ -1009,14 +992,14 @@ virtio_dev_rx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		if (unlikely(reserve_avail_buf_split(dev, vq,
 						pkt_len, buf_vec, &num_buffers,
 						avail_head, &nr_vec) < 0)) {
-			VHOST_LOG_DEBUG(VHOST_DATA,
+			VHOST_LOG_DATA(DEBUG,
 				"(%d) failed to get enough desc from vring\n",
 				dev->vid);
 			vq->shadow_used_idx -= num_buffers;
 			break;
 		}
 
-		VHOST_LOG_DEBUG(VHOST_DATA, "(%d) current index %d | end index %d\n",
+		VHOST_LOG_DATA(DEBUG, "(%d) current index %d | end index %d\n",
 			dev->vid, vq->last_avail_idx,
 			vq->last_avail_idx + num_buffers);
 
@@ -1109,6 +1092,10 @@ virtio_dev_rx_batch_packed(struct virtio_net *dev,
 	}
 
 	vhost_for_each_try_unroll(i, 0, PACKED_BATCH_SIZE)
+		vhost_log_cache_write_iova(dev, vq, descs[avail_idx + i].addr,
+					   lens[i]);
+
+	vhost_for_each_try_unroll(i, 0, PACKED_BATCH_SIZE)
 		ids[i] = descs[avail_idx + i].id;
 
 	vhost_flush_enqueue_batch_packed(dev, vq, lens, ids);
@@ -1127,13 +1114,13 @@ virtio_dev_rx_single_packed(struct virtio_net *dev,
 	rte_smp_rmb();
 	if (unlikely(vhost_enqueue_single_packed(dev, vq, pkt, buf_vec,
 						 &nr_descs) < 0)) {
-		VHOST_LOG_DEBUG(VHOST_DATA,
+		VHOST_LOG_DATA(DEBUG,
 				"(%d) failed to get enough desc from vring\n",
 				dev->vid);
 		return -1;
 	}
 
-	VHOST_LOG_DEBUG(VHOST_DATA, "(%d) current index %d | end index %d\n",
+	VHOST_LOG_DATA(DEBUG, "(%d) current index %d | end index %d\n",
 			dev->vid, vq->last_avail_idx,
 			vq->last_avail_idx + nr_descs);
 
@@ -1155,7 +1142,8 @@ virtio_dev_rx_packed(struct virtio_net *dev,
 		rte_prefetch0(&vq->desc_packed[vq->last_avail_idx]);
 
 		if (remained >= PACKED_BATCH_SIZE) {
-			if (!virtio_dev_rx_batch_packed(dev, vq, pkts)) {
+			if (!virtio_dev_rx_batch_packed(dev, vq,
+							&pkts[pkt_idx])) {
 				pkt_idx += PACKED_BATCH_SIZE;
 				remained -= PACKED_BATCH_SIZE;
 				continue;
@@ -1187,9 +1175,9 @@ virtio_dev_rx(struct virtio_net *dev, uint16_t queue_id,
 	struct vhost_virtqueue *vq;
 	uint32_t nb_tx = 0;
 
-	VHOST_LOG_DEBUG(VHOST_DATA, "(%d) %s\n", dev->vid, __func__);
+	VHOST_LOG_DATA(DEBUG, "(%d) %s\n", dev->vid, __func__);
 	if (unlikely(!is_valid_virt_queue_idx(queue_id, 0, dev->nr_vring))) {
-		RTE_LOG(ERR, VHOST_DATA, "(%d) %s: invalid virtqueue idx %d.\n",
+		VHOST_LOG_DATA(ERR, "(%d) %s: invalid virtqueue idx %d.\n",
 			dev->vid, __func__, queue_id);
 		return 0;
 	}
@@ -1237,7 +1225,7 @@ rte_vhost_enqueue_burst(int vid, uint16_t queue_id,
 		return 0;
 
 	if (unlikely(!(dev->flags & VIRTIO_DEV_BUILTIN_VIRTIO_NET))) {
-		RTE_LOG(ERR, VHOST_DATA,
+		VHOST_LOG_DATA(ERR,
 			"(%d) %s: built-in vhost net backend is disabled.\n",
 			dev->vid, __func__);
 		return 0;
@@ -1354,7 +1342,7 @@ vhost_dequeue_offload(struct virtio_net_hdr *hdr, struct rte_mbuf *m)
 			m->l4_len = sizeof(struct rte_udp_hdr);
 			break;
 		default:
-			RTE_LOG(WARNING, VHOST_DATA,
+			VHOST_LOG_DATA(WARNING,
 				"unsupported gso type %u.\n", hdr->gso_type);
 			break;
 		}
@@ -1526,7 +1514,7 @@ copy_desc_to_mbuf(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		if (mbuf_avail == 0) {
 			cur = rte_pktmbuf_alloc(mbuf_pool);
 			if (unlikely(cur == NULL)) {
-				RTE_LOG(ERR, VHOST_DATA, "Failed to "
+				VHOST_LOG_DATA(ERR, "Failed to "
 					"allocate memory for mbuf.\n");
 				error = -1;
 				goto out;
@@ -1631,7 +1619,7 @@ virtio_dev_extbuf_alloc(struct rte_mbuf *pkt, uint32_t size)
 					      virtio_dev_extbuf_free, buf);
 		if (unlikely(shinfo == NULL)) {
 			rte_free(buf);
-			RTE_LOG(ERR, VHOST_DATA, "Failed to init shinfo\n");
+			VHOST_LOG_DATA(ERR, "Failed to init shinfo\n");
 			return -1;
 		}
 	}
@@ -1653,7 +1641,7 @@ virtio_dev_pktmbuf_alloc(struct virtio_net *dev, struct rte_mempool *mp,
 	struct rte_mbuf *pkt = rte_pktmbuf_alloc(mp);
 
 	if (unlikely(pkt == NULL)) {
-		RTE_LOG(ERR, VHOST_DATA,
+		VHOST_LOG_DATA(ERR,
 			"Failed to allocate memory for mbuf.\n");
 		return NULL;
 	}
@@ -1708,24 +1696,22 @@ virtio_dev_tx_split(struct virtio_net *dev, struct vhost_virtqueue *vq,
 		}
 	}
 
-	free_entries = *((volatile uint16_t *)&vq->avail->idx) -
-			vq->last_avail_idx;
-	if (free_entries == 0)
-		return 0;
-
 	/*
 	 * The ordering between avail index and
 	 * desc reads needs to be enforced.
 	 */
-	rte_smp_rmb();
+	free_entries = __atomic_load_n(&vq->avail->idx, __ATOMIC_ACQUIRE) -
+			vq->last_avail_idx;
+	if (free_entries == 0)
+		return 0;
 
 	rte_prefetch0(&vq->avail->ring[vq->last_avail_idx & (vq->size - 1)]);
 
-	VHOST_LOG_DEBUG(VHOST_DATA, "(%d) %s\n", dev->vid, __func__);
+	VHOST_LOG_DATA(DEBUG, "(%d) %s\n", dev->vid, __func__);
 
 	count = RTE_MIN(count, MAX_PKT_BURST);
 	count = RTE_MIN(count, free_entries);
-	VHOST_LOG_DEBUG(VHOST_DATA, "(%d) about to dequeue %u buffers\n",
+	VHOST_LOG_DATA(DEBUG, "(%d) about to dequeue %u buffers\n",
 			dev->vid, count);
 
 	for (i = 0; i < count; i++) {
@@ -1933,7 +1919,7 @@ vhost_dequeue_single_packed(struct virtio_net *dev,
 
 	*pkts = virtio_dev_pktmbuf_alloc(dev, mbuf_pool, buf_len);
 	if (unlikely(*pkts == NULL)) {
-		RTE_LOG(ERR, VHOST_DATA,
+		VHOST_LOG_DATA(ERR,
 			"Failed to allocate memory for mbuf.\n");
 		return -1;
 	}
@@ -1999,7 +1985,7 @@ virtio_dev_tx_batch_packed_zmbuf(struct virtio_net *dev,
 
 	vhost_for_each_try_unroll(i, 0, PACKED_BATCH_SIZE) {
 		zmbufs[i]->mbuf = pkts[i];
-		zmbufs[i]->desc_idx = avail_idx + i;
+		zmbufs[i]->desc_idx = ids[i];
 		zmbufs[i]->desc_count = 1;
 	}
 
@@ -2040,7 +2026,7 @@ virtio_dev_tx_single_packed_zmbuf(struct virtio_net *dev,
 		return -1;
 	}
 	zmbuf->mbuf = *pkts;
-	zmbuf->desc_idx = vq->last_avail_idx;
+	zmbuf->desc_idx = buf_id;
 	zmbuf->desc_count = desc_count;
 
 	rte_mbuf_refcnt_update(*pkts, 1);
@@ -2144,7 +2130,6 @@ virtio_dev_tx_packed(struct virtio_net *dev,
 		if (remained >= PACKED_BATCH_SIZE) {
 			if (!virtio_dev_tx_batch_packed(dev, vq, mbuf_pool,
 							&pkts[pkt_idx])) {
-				vhost_flush_dequeue_packed(dev, vq);
 				pkt_idx += PACKED_BATCH_SIZE;
 				remained -= PACKED_BATCH_SIZE;
 				continue;
@@ -2154,14 +2139,17 @@ virtio_dev_tx_packed(struct virtio_net *dev,
 		if (virtio_dev_tx_single_packed(dev, vq, mbuf_pool,
 						&pkts[pkt_idx]))
 			break;
-		vhost_flush_dequeue_packed(dev, vq);
 		pkt_idx++;
 		remained--;
 
 	} while (remained);
 
-	if (vq->shadow_used_idx)
+	if (vq->shadow_used_idx) {
 		do_data_copy_dequeue(vq);
+
+		vhost_flush_dequeue_shadow_packed(dev, vq);
+		vhost_vring_call_packed(dev, vq);
+	}
 
 	return pkt_idx;
 }
@@ -2173,20 +2161,22 @@ rte_vhost_dequeue_burst(int vid, uint16_t queue_id,
 	struct virtio_net *dev;
 	struct rte_mbuf *rarp_mbuf = NULL;
 	struct vhost_virtqueue *vq;
+	int16_t success = 1;
 
 	dev = get_device(vid);
 	if (!dev)
 		return 0;
 
 	if (unlikely(!(dev->flags & VIRTIO_DEV_BUILTIN_VIRTIO_NET))) {
-		RTE_LOG(ERR, VHOST_DATA,
+		VHOST_LOG_DATA(ERR,
 			"(%d) %s: built-in vhost net backend is disabled.\n",
 			dev->vid, __func__);
 		return 0;
 	}
 
 	if (unlikely(!is_valid_virt_queue_idx(queue_id, 1, dev->nr_vring))) {
-		RTE_LOG(ERR, VHOST_DATA, "(%d) %s: invalid virtqueue idx %d.\n",
+		VHOST_LOG_DATA(ERR,
+			"(%d) %s: invalid virtqueue idx %d.\n",
 			dev->vid, __func__, queue_id);
 		return 0;
 	}
@@ -2218,21 +2208,21 @@ rte_vhost_dequeue_burst(int vid, uint16_t queue_id,
 	 *
 	 * broadcast_rarp shares a cacheline in the virtio_net structure
 	 * with some fields that are accessed during enqueue and
-	 * rte_atomic16_cmpset() causes a write if using cmpxchg. This could
-	 * result in false sharing between enqueue and dequeue.
+	 * __atomic_compare_exchange_n causes a write if performed compare
+	 * and exchange. This could result in false sharing between enqueue
+	 * and dequeue.
 	 *
 	 * Prevent unnecessary false sharing by reading broadcast_rarp first
-	 * and only performing cmpset if the read indicates it is likely to
-	 * be set.
+	 * and only performing compare and exchange if the read indicates it
+	 * is likely to be set.
 	 */
-	if (unlikely(rte_atomic16_read(&dev->broadcast_rarp) &&
-			rte_atomic16_cmpset((volatile uint16_t *)
-				&dev->broadcast_rarp.cnt, 1, 0))) {
+	if (unlikely(__atomic_load_n(&dev->broadcast_rarp, __ATOMIC_ACQUIRE) &&
+			__atomic_compare_exchange_n(&dev->broadcast_rarp,
+			&success, 0, 0, __ATOMIC_RELEASE, __ATOMIC_RELAXED))) {
 
 		rarp_mbuf = rte_net_make_rarp_packet(mbuf_pool, &dev->mac);
 		if (rarp_mbuf == NULL) {
-			RTE_LOG(ERR, VHOST_DATA,
-				"Failed to make RARP packet.\n");
+			VHOST_LOG_DATA(ERR, "Failed to make RARP packet.\n");
 			count = 0;
 			goto out;
 		}

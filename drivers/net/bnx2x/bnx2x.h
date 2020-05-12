@@ -360,6 +360,9 @@ struct bnx2x_fastpath {
 	/* pointer back to parent structure */
 	struct bnx2x_softc *sc;
 
+	/* Used to synchronize fastpath Rx access */
+	rte_spinlock_t rx_mtx;
+
 	/* status block */
 	struct bnx2x_dma                 sb_dma;
 	union bnx2x_host_hc_status_block status_block;
@@ -1373,6 +1376,10 @@ struct bnx2x_softc {
 	uint8_t prio_to_cos[BNX2X_MAX_PRIORITY];
 
 	int panic;
+	/* Array of Multicast addrs */
+	struct rte_ether_addr mc_addrs[VF_MAX_MULTICAST_PER_VF];
+	/* Multicast mac addresses number */
+	uint16_t mc_addrs_num;
 }; /* struct bnx2x_softc */
 
 /* IOCTL sub-commands for edebug and firmware upgrade */

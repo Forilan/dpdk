@@ -10,13 +10,19 @@ include $(RTE_SDK)/mk/rte.vars.mk
 LIB = librte_pmd_dpaa2_sec.a
 
 # build flags
-CFLAGS += -DALLOW_EXPERIMENTAL_API
 CFLAGS += -O3
 CFLAGS += $(WERROR_FLAGS)
 
 ifeq ($(CONFIG_RTE_TOOLCHAIN_GCC),y)
 ifeq ($(shell test $(GCC_VERSION) -gt 70 && echo 1), 1)
 CFLAGS += -Wno-implicit-fallthrough
+endif
+endif
+
+# FIXME: temporary solution for Bugzilla 469
+ifeq ($(CONFIG_RTE_TOOLCHAIN_GCC),y)
+ifeq ($(shell test $(GCC_VERSION) -ge 100 && echo 1), 1)
+CFLAGS += -fcommon
 endif
 endif
 
@@ -32,9 +38,6 @@ CFLAGS += -I$(RTE_SDK)/drivers/mempool/dpaa2/
 
 # versioning export map
 EXPORT_MAP := rte_pmd_dpaa2_sec_version.map
-
-# library version
-LIBABIVER := 2
 
 # library source files
 SRCS-$(CONFIG_RTE_LIBRTE_PMD_DPAA2_SEC) += dpaa2_sec_dpseci.c

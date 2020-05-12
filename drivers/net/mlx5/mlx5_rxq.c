@@ -4,7 +4,6 @@
  */
 
 #include <stddef.h>
-#include <assert.h>
 #include <errno.h>
 #include <string.h>
 #include <stdint.h>
@@ -30,12 +29,16 @@
 #include <rte_debug.h>
 #include <rte_io.h>
 
+#include <mlx5_glue.h>
+#include <mlx5_devx_cmds.h>
+
+#include "mlx5_defs.h"
 #include "mlx5.h"
 #include "mlx5_rxtx.h"
 #include "mlx5_utils.h"
 #include "mlx5_autoconf.h"
-#include "mlx5_defs.h"
-#include "mlx5_glue.h"
+#include "mlx5_flow.h"
+
 
 /* Default RSS hash key also used for ConnectX-3. */
 uint8_t rss_hash_default_key[] = {
@@ -106,21 +109,25 @@ mlx5_mprq_enabled(struct rte_eth_dev *dev)
 	struct mlx5_priv *priv = dev->data->dev_private;
 	uint16_t i;
 	uint16_t n = 0;
+	uint16_t n_ibv = 0;
 
 	if (mlx5_check_mprq_support(dev) < 0)
 		return 0;
 	/* All the configured queues should be enabled. */
 	for (i = 0; i < priv->rxqs_n; ++i) {
 		struct mlx5_rxq_data *rxq = (*priv->rxqs)[i];
+		struct mlx5_rxq_ctrl *rxq_ctrl = container_of
+			(rxq, struct mlx5_rxq_ctrl, rxq);
 
-		if (!rxq)
+		if (rxq == NULL || rxq_ctrl->type != MLX5_RXQ_TYPE_STANDARD)
 			continue;
+		n_ibv++;
 		if (mlx5_rxq_mprq_enabled(rxq))
 			++n;
 	}
 	/* Multi-Packet RQ can't be partially configured. */
-	assert(n == 0 || n == priv->rxqs_n);
-	return n == priv->rxqs_n;
+	MLX5_ASSERT(n == 0 || n == n_ibv);
+	return n == n_ibv;
 }
 
 /**
@@ -202,11 +209,11 @@ rxq_alloc_elts_sprq(struct mlx5_rxq_ctrl *rxq_ctrl)
 			goto error;
 		}
 		/* Headroom is reserved by rte_pktmbuf_alloc(). */
-		assert(DATA_OFF(buf) == RTE_PKTMBUF_HEADROOM);
+		MLX5_ASSERT(DATA_OFF(buf) == RTE_PKTMBUF_HEADROOM);
 		/* Buffer is supposed to be empty. */
-		assert(rte_pktmbuf_data_len(buf) == 0);
-		assert(rte_pktmbuf_pkt_len(buf) == 0);
-		assert(!buf->next);
+		MLX5_ASSERT(rte_pktmbuf_data_len(buf) == 0);
+		MLX5_ASSERT(rte_pktmbuf_pkt_len(buf) == 0);
+		MLX5_ASSERT(!buf->next);
 		/* Only the first segment keeps headroom. */
 		if (i % sges_n)
 			SET_DATA_OFF(buf, 0);
@@ -220,6 +227,9 @@ rxq_alloc_elts_sprq(struct mlx5_rxq_ctrl *rxq_ctrl)
 	if (mlx5_rxq_check_vec_support(&rxq_ctrl->rxq) > 0) {
 		struct mlx5_rxq_data *rxq = &rxq_ctrl->rxq;
 		struct rte_mbuf *mbuf_init = &rxq->fake_mbuf;
+		struct rte_pktmbuf_pool_private *priv =
+			(struct rte_pktmbuf_pool_private *)
+				rte_mempool_get_priv(rxq_ctrl->rxq.mp);
 		int j;
 
 		/* Initialize default rearm_data for vPMD. */
@@ -227,13 +237,15 @@ rxq_alloc_elts_sprq(struct mlx5_rxq_ctrl *rxq_ctrl)
 		rte_mbuf_refcnt_set(mbuf_init, 1);
 		mbuf_init->nb_segs = 1;
 		mbuf_init->port = rxq->port_id;
+		if (priv->flags & RTE_PKTMBUF_POOL_F_PINNED_EXT_BUF)
+			mbuf_init->ol_flags = EXT_ATTACHED_MBUF;
 		/*
 		 * prevent compiler reordering:
 		 * rearm_data covers previous fields.
 		 */
 		rte_compiler_barrier();
 		rxq->mbuf_initializer =
-			*(uint64_t *)&mbuf_init->rearm_data;
+			*(rte_xmm_t *)&mbuf_init->rearm_data;
 		/* Padding with a fake mbuf for vectorized Rx. */
 		for (j = 0; j < MLX5_VPMD_DESCS_PER_LOOP; ++j)
 			(*rxq->elts)[elts_n + j] = &rxq->fake_mbuf;
@@ -290,7 +302,7 @@ rxq_free_elts_mprq(struct mlx5_rxq_ctrl *rxq_ctrl)
 		rxq->port_id, rxq->idx);
 	if (rxq->mprq_bufs == NULL)
 		return;
-	assert(mlx5_rxq_check_vec_support(rxq) < 0);
+	MLX5_ASSERT(mlx5_rxq_check_vec_support(rxq) < 0);
 	for (i = 0; (i != (1u << rxq->elts_n)); ++i) {
 		if ((*rxq->mprq_bufs)[i] != NULL)
 			mlx5_mprq_buf_free((*rxq->mprq_bufs)[i]);
@@ -368,7 +380,8 @@ mlx5_get_rx_queue_offloads(struct rte_eth_dev *dev)
 	struct mlx5_dev_config *config = &priv->config;
 	uint64_t offloads = (DEV_RX_OFFLOAD_SCATTER |
 			     DEV_RX_OFFLOAD_TIMESTAMP |
-			     DEV_RX_OFFLOAD_JUMBO_FRAME);
+			     DEV_RX_OFFLOAD_JUMBO_FRAME |
+			     DEV_RX_OFFLOAD_RSS_HASH);
 
 	if (config->hw_fcs_strip)
 		offloads |= DEV_RX_OFFLOAD_KEEP_CRC;
@@ -427,6 +440,49 @@ mlx5_rxq_releasable(struct rte_eth_dev *dev, uint16_t idx)
 }
 
 /**
+ * Rx queue presetup checks.
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param idx
+ *   RX queue index.
+ * @param desc
+ *   Number of descriptors to configure in queue.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+static int
+mlx5_rx_queue_pre_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+
+	if (!rte_is_power_of_2(desc)) {
+		desc = 1 << log2above(desc);
+		DRV_LOG(WARNING,
+			"port %u increased number of descriptors in Rx queue %u"
+			" to the next power of two (%d)",
+			dev->data->port_id, idx, desc);
+	}
+	DRV_LOG(DEBUG, "port %u configuring Rx queue %u for %u descriptors",
+		dev->data->port_id, idx, desc);
+	if (idx >= priv->rxqs_n) {
+		DRV_LOG(ERR, "port %u Rx queue index out of range (%u >= %u)",
+			dev->data->port_id, idx, priv->rxqs_n);
+		rte_errno = EOVERFLOW;
+		return -rte_errno;
+	}
+	if (!mlx5_rxq_releasable(dev, idx)) {
+		DRV_LOG(ERR, "port %u unable to release queue index %u",
+			dev->data->port_id, idx);
+		rte_errno = EBUSY;
+		return -rte_errno;
+	}
+	mlx5_rxq_release(dev, idx);
+	return 0;
+}
+
+/**
  *
  * @param dev
  *   Pointer to Ethernet device structure.
@@ -453,30 +509,62 @@ mlx5_rx_queue_setup(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	struct mlx5_rxq_data *rxq = (*priv->rxqs)[idx];
 	struct mlx5_rxq_ctrl *rxq_ctrl =
 		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
+	int res;
 
-	if (!rte_is_power_of_2(desc)) {
-		desc = 1 << log2above(desc);
-		DRV_LOG(WARNING,
-			"port %u increased number of descriptors in Rx queue %u"
-			" to the next power of two (%d)",
-			dev->data->port_id, idx, desc);
-	}
-	DRV_LOG(DEBUG, "port %u configuring Rx queue %u for %u descriptors",
-		dev->data->port_id, idx, desc);
-	if (idx >= priv->rxqs_n) {
-		DRV_LOG(ERR, "port %u Rx queue index out of range (%u >= %u)",
-			dev->data->port_id, idx, priv->rxqs_n);
-		rte_errno = EOVERFLOW;
-		return -rte_errno;
-	}
-	if (!mlx5_rxq_releasable(dev, idx)) {
-		DRV_LOG(ERR, "port %u unable to release queue index %u",
-			dev->data->port_id, idx);
-		rte_errno = EBUSY;
-		return -rte_errno;
-	}
-	mlx5_rxq_release(dev, idx);
+	res = mlx5_rx_queue_pre_setup(dev, idx, desc);
+	if (res)
+		return res;
 	rxq_ctrl = mlx5_rxq_new(dev, idx, desc, socket, conf, mp);
+	if (!rxq_ctrl) {
+		DRV_LOG(ERR, "port %u unable to allocate queue index %u",
+			dev->data->port_id, idx);
+		rte_errno = ENOMEM;
+		return -rte_errno;
+	}
+	DRV_LOG(DEBUG, "port %u adding Rx queue %u to list",
+		dev->data->port_id, idx);
+	(*priv->rxqs)[idx] = &rxq_ctrl->rxq;
+	return 0;
+}
+
+/**
+ *
+ * @param dev
+ *   Pointer to Ethernet device structure.
+ * @param idx
+ *   RX queue index.
+ * @param desc
+ *   Number of descriptors to configure in queue.
+ * @param hairpin_conf
+ *   Hairpin configuration parameters.
+ *
+ * @return
+ *   0 on success, a negative errno value otherwise and rte_errno is set.
+ */
+int
+mlx5_rx_hairpin_queue_setup(struct rte_eth_dev *dev, uint16_t idx,
+			    uint16_t desc,
+			    const struct rte_eth_hairpin_conf *hairpin_conf)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_rxq_data *rxq = (*priv->rxqs)[idx];
+	struct mlx5_rxq_ctrl *rxq_ctrl =
+		container_of(rxq, struct mlx5_rxq_ctrl, rxq);
+	int res;
+
+	res = mlx5_rx_queue_pre_setup(dev, idx, desc);
+	if (res)
+		return res;
+	if (hairpin_conf->peer_count != 1 ||
+	    hairpin_conf->peers[0].port != dev->data->port_id ||
+	    hairpin_conf->peers[0].queue >= priv->txqs_n) {
+		DRV_LOG(ERR, "port %u unable to setup hairpin queue index %u "
+			" invalid hairpind configuration", dev->data->port_id,
+			idx);
+		rte_errno = EINVAL;
+		return -rte_errno;
+	}
+	rxq_ctrl = mlx5_rxq_hairpin_new(dev, idx, desc, hairpin_conf);
 	if (!rxq_ctrl) {
 		DRV_LOG(ERR, "port %u unable to allocate queue index %u",
 			dev->data->port_id, idx);
@@ -561,6 +649,24 @@ rxq_release_rq_resources(struct mlx5_rxq_ctrl *rxq_ctrl)
 }
 
 /**
+ * Release an Rx hairpin related resources.
+ *
+ * @param rxq_obj
+ *   Hairpin Rx queue object.
+ */
+static void
+rxq_obj_hairpin_release(struct mlx5_rxq_obj *rxq_obj)
+{
+	struct mlx5_devx_modify_rq_attr rq_attr = { 0 };
+
+	MLX5_ASSERT(rxq_obj);
+	rq_attr.state = MLX5_RQC_STATE_RST;
+	rq_attr.rq_state = MLX5_RQC_STATE_RDY;
+	mlx5_devx_cmd_modify_rq(rxq_obj->rq, &rq_attr);
+	claim_zero(mlx5_devx_cmd_destroy(rxq_obj->rq));
+}
+
+/**
  * Release an Rx verbs/DevX queue object.
  *
  * @param rxq_obj
@@ -572,19 +678,29 @@ rxq_release_rq_resources(struct mlx5_rxq_ctrl *rxq_ctrl)
 static int
 mlx5_rxq_obj_release(struct mlx5_rxq_obj *rxq_obj)
 {
-	assert(rxq_obj);
-	if (rxq_obj->type == MLX5_RXQ_OBJ_TYPE_IBV)
-		assert(rxq_obj->wq);
-	assert(rxq_obj->cq);
+	MLX5_ASSERT(rxq_obj);
 	if (rte_atomic32_dec_and_test(&rxq_obj->refcnt)) {
-		rxq_free_elts(rxq_obj->rxq_ctrl);
-		if (rxq_obj->type == MLX5_RXQ_OBJ_TYPE_IBV) {
+		switch (rxq_obj->type) {
+		case MLX5_RXQ_OBJ_TYPE_IBV:
+			MLX5_ASSERT(rxq_obj->wq);
+			MLX5_ASSERT(rxq_obj->cq);
+			rxq_free_elts(rxq_obj->rxq_ctrl);
 			claim_zero(mlx5_glue->destroy_wq(rxq_obj->wq));
-		} else if (rxq_obj->type == MLX5_RXQ_OBJ_TYPE_DEVX_RQ) {
+			claim_zero(mlx5_glue->destroy_cq(rxq_obj->cq));
+			break;
+		case MLX5_RXQ_OBJ_TYPE_DEVX_RQ:
+			MLX5_ASSERT(rxq_obj->cq);
+			MLX5_ASSERT(rxq_obj->rq);
+			rxq_free_elts(rxq_obj->rxq_ctrl);
 			claim_zero(mlx5_devx_cmd_destroy(rxq_obj->rq));
 			rxq_release_rq_resources(rxq_obj->rxq_ctrl);
+			claim_zero(mlx5_glue->destroy_cq(rxq_obj->cq));
+			break;
+		case MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN:
+			MLX5_ASSERT(rxq_obj->rq);
+			rxq_obj_hairpin_release(rxq_obj);
+			break;
 		}
-		claim_zero(mlx5_glue->destroy_cq(rxq_obj->cq));
 		if (rxq_obj->channel)
 			claim_zero(mlx5_glue->destroy_comp_channel
 				   (rxq_obj->channel));
@@ -1132,6 +1248,86 @@ mlx5_devx_rq_new(struct rte_eth_dev *dev, uint16_t idx, uint32_t cqn)
 }
 
 /**
+ * Create the Rx hairpin queue object.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param idx
+ *   Queue index in DPDK Rx queue array
+ *
+ * @return
+ *   The hairpin DevX object initialised, NULL otherwise and rte_errno is set.
+ */
+static struct mlx5_rxq_obj *
+mlx5_rxq_obj_hairpin_new(struct rte_eth_dev *dev, uint16_t idx)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_rxq_data *rxq_data = (*priv->rxqs)[idx];
+	struct mlx5_rxq_ctrl *rxq_ctrl =
+		container_of(rxq_data, struct mlx5_rxq_ctrl, rxq);
+	struct mlx5_devx_create_rq_attr attr = { 0 };
+	struct mlx5_rxq_obj *tmpl = NULL;
+	int ret = 0;
+	uint32_t max_wq_data;
+
+	MLX5_ASSERT(rxq_data);
+	MLX5_ASSERT(!rxq_ctrl->obj);
+	tmpl = rte_calloc_socket(__func__, 1, sizeof(*tmpl), 0,
+				 rxq_ctrl->socket);
+	if (!tmpl) {
+		DRV_LOG(ERR,
+			"port %u Rx queue %u cannot allocate verbs resources",
+			dev->data->port_id, rxq_data->idx);
+		rte_errno = ENOMEM;
+		goto error;
+	}
+	tmpl->type = MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN;
+	tmpl->rxq_ctrl = rxq_ctrl;
+	attr.hairpin = 1;
+	max_wq_data = priv->config.hca_attr.log_max_hairpin_wq_data_sz;
+	/* Jumbo frames > 9KB should be supported, and more packets. */
+	if (priv->config.log_hp_size != (uint32_t)MLX5_ARG_UNSET) {
+		if (priv->config.log_hp_size > max_wq_data) {
+			DRV_LOG(ERR, "total data size %u power of 2 is "
+				"too large for hairpin",
+				priv->config.log_hp_size);
+			rte_errno = ERANGE;
+			return NULL;
+		}
+		attr.wq_attr.log_hairpin_data_sz = priv->config.log_hp_size;
+	} else {
+		attr.wq_attr.log_hairpin_data_sz =
+				(max_wq_data < MLX5_HAIRPIN_JUMBO_LOG_SIZE) ?
+				 max_wq_data : MLX5_HAIRPIN_JUMBO_LOG_SIZE;
+	}
+	/* Set the packets number to the maximum value for performance. */
+	attr.wq_attr.log_hairpin_num_packets =
+			attr.wq_attr.log_hairpin_data_sz -
+			MLX5_HAIRPIN_QUEUE_STRIDE;
+	tmpl->rq = mlx5_devx_cmd_create_rq(priv->sh->ctx, &attr,
+					   rxq_ctrl->socket);
+	if (!tmpl->rq) {
+		DRV_LOG(ERR,
+			"port %u Rx hairpin queue %u can't create rq object",
+			dev->data->port_id, idx);
+		rte_errno = errno;
+		goto error;
+	}
+	DRV_LOG(DEBUG, "port %u rxq %u updated with %p", dev->data->port_id,
+		idx, (void *)&tmpl);
+	rte_atomic32_inc(&tmpl->refcnt);
+	LIST_INSERT_HEAD(&priv->rxqsobj, tmpl, next);
+	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_NONE;
+	return tmpl;
+error:
+	ret = rte_errno; /* Save rte_errno before cleanup. */
+	if (tmpl->rq)
+		mlx5_devx_cmd_destroy(tmpl->rq);
+	rte_errno = ret; /* Restore rte_errno. */
+	return NULL;
+}
+
+/**
  * Create the Rx queue Verbs/DevX object.
  *
  * @param dev
@@ -1161,8 +1357,10 @@ mlx5_rxq_obj_new(struct rte_eth_dev *dev, uint16_t idx,
 	int ret = 0;
 	struct mlx5dv_obj obj;
 
-	assert(rxq_data);
-	assert(!rxq_ctrl->obj);
+	MLX5_ASSERT(rxq_data);
+	MLX5_ASSERT(!rxq_ctrl->obj);
+	if (type == MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN)
+		return mlx5_rxq_obj_hairpin_new(dev, idx);
 	priv->verbs_alloc_ctx.type = MLX5_VERBS_ALLOC_TYPE_RX_QUEUE;
 	priv->verbs_alloc_ctx.obj = rxq_ctrl;
 	tmpl = rte_calloc_socket(__func__, 1, sizeof(*tmpl), 0,
@@ -1433,15 +1631,19 @@ mlx5_mprq_alloc_mp(struct rte_eth_dev *dev)
 	unsigned int strd_num_n = 0;
 	unsigned int strd_sz_n = 0;
 	unsigned int i;
+	unsigned int n_ibv = 0;
 
 	if (!mlx5_mprq_enabled(dev))
 		return 0;
 	/* Count the total number of descriptors configured. */
 	for (i = 0; i != priv->rxqs_n; ++i) {
 		struct mlx5_rxq_data *rxq = (*priv->rxqs)[i];
+		struct mlx5_rxq_ctrl *rxq_ctrl = container_of
+			(rxq, struct mlx5_rxq_ctrl, rxq);
 
-		if (rxq == NULL)
+		if (rxq == NULL || rxq_ctrl->type != MLX5_RXQ_TYPE_STANDARD)
 			continue;
+		n_ibv++;
 		desc += 1 << rxq->elts_n;
 		/* Get the max number of strides. */
 		if (strd_num_n < rxq->strd_num_n)
@@ -1450,7 +1652,7 @@ mlx5_mprq_alloc_mp(struct rte_eth_dev *dev)
 		if (strd_sz_n < rxq->strd_sz_n)
 			strd_sz_n = rxq->strd_sz_n;
 	}
-	assert(strd_num_n && strd_sz_n);
+	MLX5_ASSERT(strd_num_n && strd_sz_n);
 	buf_len = (1 << strd_num_n) * (1 << strd_sz_n);
 	obj_size = sizeof(struct mlx5_mprq_buf) + buf_len + (1 << strd_num_n) *
 		sizeof(struct rte_mbuf_ext_shared_info) + RTE_PKTMBUF_HEADROOM;
@@ -1466,7 +1668,7 @@ mlx5_mprq_alloc_mp(struct rte_eth_dev *dev)
 	 * this Mempool gets available again.
 	 */
 	desc *= 4;
-	obj_num = desc + MLX5_MPRQ_MP_CACHE_SZ * priv->rxqs_n;
+	obj_num = desc + MLX5_MPRQ_MP_CACHE_SZ * n_ibv;
 	/*
 	 * rte_mempool_create_empty() has sanity check to refuse large cache
 	 * size compared to the number of elements.
@@ -1514,8 +1716,10 @@ exit:
 	/* Set mempool for each Rx queue. */
 	for (i = 0; i != priv->rxqs_n; ++i) {
 		struct mlx5_rxq_data *rxq = (*priv->rxqs)[i];
+		struct mlx5_rxq_ctrl *rxq_ctrl = container_of
+			(rxq, struct mlx5_rxq_ctrl, rxq);
 
-		if (rxq == NULL)
+		if (rxq == NULL || rxq_ctrl->type != MLX5_RXQ_TYPE_STANDARD)
 			continue;
 		rxq->mprq_mp = mp;
 	}
@@ -1524,7 +1728,6 @@ exit:
 	return 0;
 }
 
-#define MLX5_MAX_LRO_SIZE (UINT8_MAX * 256u)
 #define MLX5_MAX_TCP_HDR_OFFSET ((unsigned int)(sizeof(struct rte_ether_hdr) + \
 					sizeof(struct rte_vlan_hdr) * 2 + \
 					sizeof(struct rte_ipv6_hdr)))
@@ -1538,11 +1741,14 @@ exit:
  *
  * @param dev
  *   Pointer to Ethernet device.
+ * @param idx
+ *   RX queue index.
  * @param max_lro_size
  *   The maximum size for LRO packet.
  */
 static void
-mlx5_max_lro_msg_size_adjust(struct rte_eth_dev *dev, uint32_t max_lro_size)
+mlx5_max_lro_msg_size_adjust(struct rte_eth_dev *dev, uint16_t idx,
+			     uint32_t max_lro_size)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 
@@ -1551,13 +1757,17 @@ mlx5_max_lro_msg_size_adjust(struct rte_eth_dev *dev, uint32_t max_lro_size)
 	    MLX5_MAX_TCP_HDR_OFFSET)
 		max_lro_size -= MLX5_MAX_TCP_HDR_OFFSET;
 	max_lro_size = RTE_MIN(max_lro_size, MLX5_MAX_LRO_SIZE);
-	assert(max_lro_size >= 256u);
-	max_lro_size /= 256u;
+	MLX5_ASSERT(max_lro_size >= MLX5_LRO_SEG_CHUNK_SIZE);
+	max_lro_size /= MLX5_LRO_SEG_CHUNK_SIZE;
 	if (priv->max_lro_msg_size)
 		priv->max_lro_msg_size =
 			RTE_MIN((uint32_t)priv->max_lro_msg_size, max_lro_size);
 	else
 		priv->max_lro_msg_size = max_lro_size;
+	DRV_LOG(DEBUG,
+		"port %u Rx Queue %u max LRO message size adjusted to %u bytes",
+		dev->data->port_id, idx,
+		priv->max_lro_msg_size * MLX5_LRO_SEG_CHUNK_SIZE);
 }
 
 /**
@@ -1583,9 +1793,10 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_rxq_ctrl *tmpl;
 	unsigned int mb_len = rte_pktmbuf_data_room_size(mp);
+	unsigned int mprq_stride_nums;
 	unsigned int mprq_stride_size;
+	unsigned int mprq_stride_cap;
 	struct mlx5_dev_config *config = &priv->config;
-	unsigned int strd_headroom_en;
 	/*
 	 * Always allocate extra slots, even if eventually
 	 * the vector Rx will not be used.
@@ -1596,7 +1807,9 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 			   dev->data->dev_conf.rxmode.offloads;
 	unsigned int lro_on_queue = !!(offloads & DEV_RX_OFFLOAD_TCP_LRO);
 	const int mprq_en = mlx5_check_mprq_support(dev) > 0;
-	unsigned int max_rx_pkt_len = dev->data->dev_conf.rxmode.max_rx_pkt_len;
+	unsigned int max_rx_pkt_len = lro_on_queue ?
+			dev->data->dev_conf.rxmode.max_lro_pkt_size :
+			dev->data->dev_conf.rxmode.max_rx_pkt_len;
 	unsigned int non_scatter_min_mbuf_size = max_rx_pkt_len +
 							RTE_PKTMBUF_HEADROOM;
 	unsigned int max_lro_size = 0;
@@ -1620,6 +1833,7 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		rte_errno = ENOMEM;
 		return NULL;
 	}
+	tmpl->type = MLX5_RXQ_TYPE_STANDARD;
 	if (mlx5_mr_btree_init(&tmpl->rxq.mr_ctrl.cache_bh,
 			       MLX5_MR_BTREE_CACHE_N, socket)) {
 		/* rte_errno is already set. */
@@ -1628,42 +1842,42 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 	tmpl->socket = socket;
 	if (dev->data->dev_conf.intr_conf.rxq)
 		tmpl->irq = 1;
-	/*
-	 * LRO packet may consume all the stride memory, hence we cannot
-	 * guaranty head-room near the packet memory in the stride.
-	 * In this case scatter is, for sure, enabled and an empty mbuf may be
-	 * added in the start for the head-room.
-	 */
-	if (lro_on_queue && RTE_PKTMBUF_HEADROOM > 0 &&
-	    non_scatter_min_mbuf_size > mb_len) {
-		strd_headroom_en = 0;
-		mprq_stride_size = RTE_MIN(max_rx_pkt_len,
-					1u << config->mprq.max_stride_size_n);
-	} else {
-		strd_headroom_en = 1;
-		mprq_stride_size = non_scatter_min_mbuf_size;
-	}
+	mprq_stride_nums = config->mprq.stride_num_n ?
+		config->mprq.stride_num_n : MLX5_MPRQ_STRIDE_NUM_N;
+	mprq_stride_size = non_scatter_min_mbuf_size <=
+		(1U << config->mprq.max_stride_size_n) ?
+		log2above(non_scatter_min_mbuf_size) : MLX5_MPRQ_STRIDE_SIZE_N;
+	mprq_stride_cap = (config->mprq.stride_num_n ?
+		(1U << config->mprq.stride_num_n) : (1U << mprq_stride_nums)) *
+			(config->mprq.stride_size_n ?
+		(1U << config->mprq.stride_size_n) : (1U << mprq_stride_size));
 	/*
 	 * This Rx queue can be configured as a Multi-Packet RQ if all of the
 	 * following conditions are met:
 	 *  - MPRQ is enabled.
 	 *  - The number of descs is more than the number of strides.
-	 *  - max_rx_pkt_len plus overhead is less than the max size of a
-	 *    stride.
+	 *  - max_rx_pkt_len plus overhead is less than the max size
+	 *    of a stride or mprq_stride_size is specified by a user.
+	 *    Need to nake sure that there are enough stides to encap
+	 *    the maximum packet size in case mprq_stride_size is set.
 	 *  Otherwise, enable Rx scatter if necessary.
 	 */
-	if (mprq_en &&
-	    desc > (1U << config->mprq.stride_num_n) &&
-	    mprq_stride_size <= (1U << config->mprq.max_stride_size_n)) {
+	if (mprq_en && desc > (1U << mprq_stride_nums) &&
+	    (non_scatter_min_mbuf_size <=
+	     (1U << config->mprq.max_stride_size_n) ||
+	     (config->mprq.stride_size_n &&
+	      non_scatter_min_mbuf_size <= mprq_stride_cap))) {
 		/* TODO: Rx scatter isn't supported yet. */
 		tmpl->rxq.sges_n = 0;
 		/* Trim the number of descs needed. */
-		desc >>= config->mprq.stride_num_n;
-		tmpl->rxq.strd_num_n = config->mprq.stride_num_n;
-		tmpl->rxq.strd_sz_n = RTE_MAX(log2above(mprq_stride_size),
-					      config->mprq.min_stride_size_n);
+		desc >>= mprq_stride_nums;
+		tmpl->rxq.strd_num_n = config->mprq.stride_num_n ?
+			config->mprq.stride_num_n : mprq_stride_nums;
+		tmpl->rxq.strd_sz_n = config->mprq.stride_size_n ?
+			config->mprq.stride_size_n : mprq_stride_size;
 		tmpl->rxq.strd_shift_en = MLX5_MPRQ_TWO_BYTE_SHIFT;
-		tmpl->rxq.strd_headroom_en = strd_headroom_en;
+		tmpl->rxq.strd_scatter_en =
+				!!(offloads & DEV_RX_OFFLOAD_SCATTER);
 		tmpl->rxq.mprq_max_memcpy_len = RTE_MIN(first_mb_free_size,
 				config->mprq.max_memcpy_len);
 		max_lro_size = RTE_MIN(max_rx_pkt_len,
@@ -1707,14 +1921,24 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		tmpl->rxq.sges_n = sges_n;
 		max_lro_size = max_rx_pkt_len;
 	}
-	if (mprq_en && !mlx5_rxq_mprq_enabled(&tmpl->rxq))
+	if (config->mprq.enabled && !mlx5_rxq_mprq_enabled(&tmpl->rxq))
 		DRV_LOG(WARNING,
-			"port %u MPRQ is requested but cannot be enabled"
-			" (requested: desc = %u, stride_sz = %u,"
-			" supported: min_stride_num = %u, max_stride_sz = %u).",
-			dev->data->port_id, desc, mprq_stride_size,
-			(1 << config->mprq.stride_num_n),
-			(1 << config->mprq.max_stride_size_n));
+			"port %u MPRQ is requested but cannot be enabled\n"
+			" (requested: pkt_sz = %u, desc_num = %u,"
+			" rxq_num = %u, stride_sz = %u, stride_num = %u\n"
+			"  supported: min_rxqs_num = %u,"
+			" min_stride_sz = %u, max_stride_sz = %u).",
+			dev->data->port_id, non_scatter_min_mbuf_size,
+			desc, priv->rxqs_n,
+			config->mprq.stride_size_n ?
+				(1U << config->mprq.stride_size_n) :
+				(1U << mprq_stride_size),
+			config->mprq.stride_num_n ?
+				(1U << config->mprq.stride_num_n) :
+				(1U << mprq_stride_nums),
+			config->mprq.min_rxqs_num,
+			(1U << config->mprq.min_stride_size_n),
+			(1U << config->mprq.max_stride_size_n));
 	DRV_LOG(DEBUG, "port %u maximum number of segments per packet: %u",
 		dev->data->port_id, 1 << tmpl->rxq.sges_n);
 	if (desc % (1 << tmpl->rxq.sges_n)) {
@@ -1727,7 +1951,7 @@ mlx5_rxq_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
 		rte_errno = EINVAL;
 		goto error;
 	}
-	mlx5_max_lro_msg_size_adjust(dev, max_lro_size);
+	mlx5_max_lro_msg_size_adjust(dev, idx, max_lro_size);
 	/* Toggle RX checksum offload if hardware supports it. */
 	tmpl->rxq.csum = !!(offloads & DEV_RX_OFFLOAD_CHECKSUM);
 	tmpl->rxq.hw_timestamp = !!(offloads & DEV_RX_OFFLOAD_TIMESTAMP);
@@ -1788,6 +2012,49 @@ error:
 }
 
 /**
+ * Create a DPDK Rx hairpin queue.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param idx
+ *   RX queue index.
+ * @param desc
+ *   Number of descriptors to configure in queue.
+ * @param hairpin_conf
+ *   The hairpin binding configuration.
+ *
+ * @return
+ *   A DPDK queue object on success, NULL otherwise and rte_errno is set.
+ */
+struct mlx5_rxq_ctrl *
+mlx5_rxq_hairpin_new(struct rte_eth_dev *dev, uint16_t idx, uint16_t desc,
+		     const struct rte_eth_hairpin_conf *hairpin_conf)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_rxq_ctrl *tmpl;
+
+	tmpl = rte_calloc_socket("RXQ", 1, sizeof(*tmpl), 0, SOCKET_ID_ANY);
+	if (!tmpl) {
+		rte_errno = ENOMEM;
+		return NULL;
+	}
+	tmpl->type = MLX5_RXQ_TYPE_HAIRPIN;
+	tmpl->socket = SOCKET_ID_ANY;
+	tmpl->rxq.rss_hash = 0;
+	tmpl->rxq.port_id = dev->data->port_id;
+	tmpl->priv = priv;
+	tmpl->rxq.mp = NULL;
+	tmpl->rxq.elts_n = log2above(desc);
+	tmpl->rxq.elts = NULL;
+	tmpl->rxq.mr_ctrl.cache_bh = (struct mlx5_mr_btree) { 0 };
+	tmpl->hairpin_conf = *hairpin_conf;
+	tmpl->rxq.idx = idx;
+	rte_atomic32_inc(&tmpl->refcnt);
+	LIST_INSERT_HEAD(&priv->rxqsctrl, tmpl, next);
+	return tmpl;
+}
+
+/**
  * Get a Rx queue.
  *
  * @param dev
@@ -1834,14 +2101,15 @@ mlx5_rxq_release(struct rte_eth_dev *dev, uint16_t idx)
 	if (!(*priv->rxqs)[idx])
 		return 0;
 	rxq_ctrl = container_of((*priv->rxqs)[idx], struct mlx5_rxq_ctrl, rxq);
-	assert(rxq_ctrl->priv);
+	MLX5_ASSERT(rxq_ctrl->priv);
 	if (rxq_ctrl->obj && !mlx5_rxq_obj_release(rxq_ctrl->obj))
 		rxq_ctrl->obj = NULL;
 	if (rte_atomic32_dec_and_test(&rxq_ctrl->refcnt)) {
 		if (rxq_ctrl->dbr_umem_id_valid)
 			claim_zero(mlx5_release_dbr(dev, rxq_ctrl->dbr_umem_id,
 						    rxq_ctrl->dbr_offset));
-		mlx5_mr_btree_free(&rxq_ctrl->rxq.mr_ctrl.cache_bh);
+		if (rxq_ctrl->type == MLX5_RXQ_TYPE_STANDARD)
+			mlx5_mr_btree_free(&rxq_ctrl->rxq.mr_ctrl.cache_bh);
 		LIST_REMOVE(rxq_ctrl, next);
 		rte_free(rxq_ctrl);
 		(*priv->rxqs)[idx] = NULL;
@@ -1872,6 +2140,32 @@ mlx5_rxq_verify(struct rte_eth_dev *dev)
 		++ret;
 	}
 	return ret;
+}
+
+/**
+ * Get a Rx queue type.
+ *
+ * @param dev
+ *   Pointer to Ethernet device.
+ * @param idx
+ *   Rx queue index.
+ *
+ * @return
+ *   The Rx queue type.
+ */
+enum mlx5_rxq_type
+mlx5_rxq_get_type(struct rte_eth_dev *dev, uint16_t idx)
+{
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_rxq_ctrl *rxq_ctrl = NULL;
+
+	if (idx < priv->rxqs_n && (*priv->rxqs)[idx]) {
+		rxq_ctrl = container_of((*priv->rxqs)[idx],
+					struct mlx5_rxq_ctrl,
+					rxq);
+		return rxq_ctrl->type;
+	}
+	return MLX5_RXQ_TYPE_UNDEFINED;
 }
 
 /**
@@ -1934,9 +2228,13 @@ mlx5_ind_table_obj_new(struct rte_eth_dev *dev, const uint16_t *queues,
 		}
 	} else { /* ind_tbl->type == MLX5_IND_TBL_TYPE_DEVX */
 		struct mlx5_devx_rqt_attr *rqt_attr = NULL;
+		const unsigned int rqt_n =
+			1 << (rte_is_power_of_2(queues_n) ?
+			      log2above(queues_n) :
+			      log2above(priv->config.ind_table_max_size));
 
 		rqt_attr = rte_calloc(__func__, 1, sizeof(*rqt_attr) +
-				      queues_n * sizeof(uint32_t), 0);
+				      rqt_n * sizeof(uint32_t), 0);
 		if (!rqt_attr) {
 			DRV_LOG(ERR, "port %u cannot allocate RQT resources",
 				dev->data->port_id);
@@ -1944,7 +2242,7 @@ mlx5_ind_table_obj_new(struct rte_eth_dev *dev, const uint16_t *queues,
 			goto error;
 		}
 		rqt_attr->rqt_max_size = priv->config.ind_table_max_size;
-		rqt_attr->rqt_actual_size = queues_n;
+		rqt_attr->rqt_actual_size = rqt_n;
 		for (i = 0; i != queues_n; ++i) {
 			struct mlx5_rxq_ctrl *rxq = mlx5_rxq_get(dev,
 								 queues[i]);
@@ -1953,6 +2251,9 @@ mlx5_ind_table_obj_new(struct rte_eth_dev *dev, const uint16_t *queues,
 			rqt_attr->rq_list[i] = rxq->obj->rq->id;
 			ind_tbl->queues[i] = queues[i];
 		}
+		k = i; /* Retain value of i for use in error case. */
+		for (j = 0; k != rqt_n; ++k, ++j)
+			rqt_attr->rq_list[k] = rqt_attr->rq_list[j];
 		ind_tbl->rqt = mlx5_devx_cmd_create_rqt(priv->sh->ctx,
 							rqt_attr);
 		rte_free(rqt_attr);
@@ -2091,9 +2392,9 @@ mlx5_ind_table_obj_verify(struct rte_eth_dev *dev)
  *   Tunnel type.
  *
  * @return
- *   The Verbs/DevX object initialised, NULL otherwise and rte_errno is set.
+ *   The Verbs/DevX object initialised index, 0 otherwise and rte_errno is set.
  */
-struct mlx5_hrxq *
+uint32_t
 mlx5_hrxq_new(struct rte_eth_dev *dev,
 	      const uint8_t *rss_key, uint32_t rss_key_len,
 	      uint64_t hash_fields,
@@ -2102,17 +2403,18 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_hrxq *hrxq;
+	uint32_t hrxq_idx = 0;
 	struct ibv_qp *qp = NULL;
 	struct mlx5_ind_table_obj *ind_tbl;
 	int err;
 	struct mlx5_devx_obj *tir = NULL;
+	struct mlx5_rxq_data *rxq_data = (*priv->rxqs)[queues[0]];
+	struct mlx5_rxq_ctrl *rxq_ctrl =
+		container_of(rxq_data, struct mlx5_rxq_ctrl, rxq);
 
 	queues_n = hash_fields ? queues_n : 1;
 	ind_tbl = mlx5_ind_table_obj_get(dev, queues, queues_n);
 	if (!ind_tbl) {
-		struct mlx5_rxq_data *rxq_data = (*priv->rxqs)[queues[0]];
-		struct mlx5_rxq_ctrl *rxq_ctrl =
-			container_of(rxq_data, struct mlx5_rxq_ctrl, rxq);
 		enum mlx5_ind_tbl_type type;
 
 		type = rxq_ctrl->obj->type == MLX5_RXQ_OBJ_TYPE_IBV ?
@@ -2121,7 +2423,7 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 	}
 	if (!ind_tbl) {
 		rte_errno = ENOMEM;
-		return NULL;
+		return 0;
 	}
 	if (ind_tbl->type == MLX5_IND_TBL_TYPE_IBV) {
 #ifdef HAVE_IBV_DEVICE_TUNNEL_SUPPORT
@@ -2206,10 +2508,42 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 		memset(&tir_attr, 0, sizeof(tir_attr));
 		tir_attr.disp_type = MLX5_TIRC_DISP_TYPE_INDIRECT;
 		tir_attr.rx_hash_fn = MLX5_RX_HASH_FN_TOEPLITZ;
-		memcpy(&tir_attr.rx_hash_field_selector_outer, &hash_fields,
-		       sizeof(uint64_t));
-		tir_attr.transport_domain = priv->sh->tdn;
-		memcpy(tir_attr.rx_hash_toeplitz_key, rss_key, rss_key_len);
+		tir_attr.tunneled_offload_en = !!tunnel;
+		/* If needed, translate hash_fields bitmap to PRM format. */
+		if (hash_fields) {
+#ifdef HAVE_IBV_DEVICE_TUNNEL_SUPPORT
+			struct mlx5_rx_hash_field_select *rx_hash_field_select =
+					hash_fields & IBV_RX_HASH_INNER ?
+					&tir_attr.rx_hash_field_selector_inner :
+					&tir_attr.rx_hash_field_selector_outer;
+#else
+			struct mlx5_rx_hash_field_select *rx_hash_field_select =
+					&tir_attr.rx_hash_field_selector_outer;
+#endif
+
+			/* 1 bit: 0: IPv4, 1: IPv6. */
+			rx_hash_field_select->l3_prot_type =
+				!!(hash_fields & MLX5_IPV6_IBV_RX_HASH);
+			/* 1 bit: 0: TCP, 1: UDP. */
+			rx_hash_field_select->l4_prot_type =
+				!!(hash_fields & MLX5_UDP_IBV_RX_HASH);
+			/* Bitmask which sets which fields to use in RX Hash. */
+			rx_hash_field_select->selected_fields =
+			((!!(hash_fields & MLX5_L3_SRC_IBV_RX_HASH)) <<
+			 MLX5_RX_HASH_FIELD_SELECT_SELECTED_FIELDS_SRC_IP) |
+			(!!(hash_fields & MLX5_L3_DST_IBV_RX_HASH)) <<
+			 MLX5_RX_HASH_FIELD_SELECT_SELECTED_FIELDS_DST_IP |
+			(!!(hash_fields & MLX5_L4_SRC_IBV_RX_HASH)) <<
+			 MLX5_RX_HASH_FIELD_SELECT_SELECTED_FIELDS_L4_SPORT |
+			(!!(hash_fields & MLX5_L4_DST_IBV_RX_HASH)) <<
+			 MLX5_RX_HASH_FIELD_SELECT_SELECTED_FIELDS_L4_DPORT;
+		}
+		if (rxq_ctrl->obj->type == MLX5_RXQ_OBJ_TYPE_DEVX_HAIRPIN)
+			tir_attr.transport_domain = priv->sh->td->id;
+		else
+			tir_attr.transport_domain = priv->sh->tdn;
+		memcpy(tir_attr.rx_hash_toeplitz_key, rss_key,
+		       MLX5_RSS_HASH_KEY_LEN);
 		tir_attr.indirect_table = ind_tbl->rqt->id;
 		if (dev->data->dev_conf.lpbk_mode)
 			tir_attr.self_lb_block =
@@ -2230,7 +2564,7 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 			goto error;
 		}
 	}
-	hrxq = rte_calloc(__func__, 1, sizeof(*hrxq) + rss_key_len, 0);
+	hrxq = mlx5_ipool_zmalloc(priv->sh->ipool[MLX5_IPOOL_HRXQ], &hrxq_idx);
 	if (!hrxq)
 		goto error;
 	hrxq->ind_table = ind_tbl;
@@ -2259,8 +2593,9 @@ mlx5_hrxq_new(struct rte_eth_dev *dev,
 	hrxq->hash_fields = hash_fields;
 	memcpy(hrxq->rss_key, rss_key, rss_key_len);
 	rte_atomic32_inc(&hrxq->refcnt);
-	LIST_INSERT_HEAD(&priv->hrxqs, hrxq, next);
-	return hrxq;
+	ILIST_INSERT(priv->sh->ipool[MLX5_IPOOL_HRXQ], &priv->hrxqs, hrxq_idx,
+		     hrxq, next);
+	return hrxq_idx;
 error:
 	err = rte_errno; /* Save rte_errno before cleanup. */
 	mlx5_ind_table_obj_release(dev, ind_tbl);
@@ -2269,7 +2604,7 @@ error:
 	else if (tir)
 		claim_zero(mlx5_devx_cmd_destroy(tir));
 	rte_errno = err; /* Restore rte_errno. */
-	return NULL;
+	return 0;
 }
 
 /**
@@ -2286,9 +2621,9 @@ error:
  *   Number of queues.
  *
  * @return
- *   An hash Rx queue on success.
+ *   An hash Rx queue index on success.
  */
-struct mlx5_hrxq *
+uint32_t
 mlx5_hrxq_get(struct rte_eth_dev *dev,
 	      const uint8_t *rss_key, uint32_t rss_key_len,
 	      uint64_t hash_fields,
@@ -2296,9 +2631,11 @@ mlx5_hrxq_get(struct rte_eth_dev *dev,
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_hrxq *hrxq;
+	uint32_t idx;
 
 	queues_n = hash_fields ? queues_n : 1;
-	LIST_FOREACH(hrxq, &priv->hrxqs, next) {
+	ILIST_FOREACH(priv->sh->ipool[MLX5_IPOOL_HRXQ], priv->hrxqs, idx,
+		      hrxq, next) {
 		struct mlx5_ind_table_obj *ind_tbl;
 
 		if (hrxq->rss_key_len != rss_key_len)
@@ -2315,9 +2652,9 @@ mlx5_hrxq_get(struct rte_eth_dev *dev,
 			continue;
 		}
 		rte_atomic32_inc(&hrxq->refcnt);
-		return hrxq;
+		return idx;
 	}
-	return NULL;
+	return 0;
 }
 
 /**
@@ -2326,14 +2663,20 @@ mlx5_hrxq_get(struct rte_eth_dev *dev,
  * @param dev
  *   Pointer to Ethernet device.
  * @param hrxq
- *   Pointer to Hash Rx queue to release.
+ *   Index to Hash Rx queue to release.
  *
  * @return
  *   1 while a reference on it exists, 0 when freed.
  */
 int
-mlx5_hrxq_release(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq)
+mlx5_hrxq_release(struct rte_eth_dev *dev, uint32_t hrxq_idx)
 {
+	struct mlx5_priv *priv = dev->data->dev_private;
+	struct mlx5_hrxq *hrxq;
+
+	hrxq = mlx5_ipool_get(priv->sh->ipool[MLX5_IPOOL_HRXQ], hrxq_idx);
+	if (!hrxq)
+		return 0;
 	if (rte_atomic32_dec_and_test(&hrxq->refcnt)) {
 #ifdef HAVE_IBV_FLOW_DV_SUPPORT
 		mlx5_glue->destroy_flow_action(hrxq->action);
@@ -2343,8 +2686,9 @@ mlx5_hrxq_release(struct rte_eth_dev *dev, struct mlx5_hrxq *hrxq)
 		else /* hrxq->ind_table->type == MLX5_IND_TBL_TYPE_DEVX */
 			claim_zero(mlx5_devx_cmd_destroy(hrxq->tir));
 		mlx5_ind_table_obj_release(dev, hrxq->ind_table);
-		LIST_REMOVE(hrxq, next);
-		rte_free(hrxq);
+		ILIST_REMOVE(priv->sh->ipool[MLX5_IPOOL_HRXQ], &priv->hrxqs,
+			     hrxq_idx, hrxq, next);
+		mlx5_ipool_free(priv->sh->ipool[MLX5_IPOOL_HRXQ], hrxq_idx);
 		return 0;
 	}
 	claim_nonzero(mlx5_ind_table_obj_release(dev, hrxq->ind_table));
@@ -2365,9 +2709,11 @@ mlx5_hrxq_verify(struct rte_eth_dev *dev)
 {
 	struct mlx5_priv *priv = dev->data->dev_private;
 	struct mlx5_hrxq *hrxq;
+	uint32_t idx;
 	int ret = 0;
 
-	LIST_FOREACH(hrxq, &priv->hrxqs, next) {
+	ILIST_FOREACH(priv->sh->ipool[MLX5_IPOOL_HRXQ], priv->hrxqs, idx,
+		      hrxq, next) {
 		DRV_LOG(DEBUG,
 			"port %u hash Rx queue %p still referenced",
 			dev->data->port_id, (void *)hrxq);
